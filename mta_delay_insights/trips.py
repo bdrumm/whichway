@@ -424,6 +424,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
         "accessSec": o.get("accessSec"), "walkSpeedMPerMin": o.get("walkSpeedMPerMin"), "startDistanceM": o.get("startDistanceM"),
         "nDeparts": len(departs), "nAlights": len(alights), "legs": [],
         "withdrawnDepartures": o.get("withdrawnDepartures") or [],
+        "origin": legs_in[0].get("from") if legs_in and isinstance(legs_in[0], dict) else None,
     }
     truth = next((n["lines"] for n in notes or [] if n.get("lines")), None)
     truth_xfer = next((n["transfers"] for n in notes or [] if n.get("transfers")), None)
@@ -572,6 +573,7 @@ def summarize(reviews: list[dict]) -> dict:
         "legsMatched": sum(1 for l in legs if l.get("train")), "legs": len(legs),
         "ridesAssumed": sum(1 for r in reviews if r.get("rideAssumed")),
         "falseStarts": sum(1 for r in reviews if r.get("falseStart")),
+        "restarts": sum(1 for r in reviews if r.get("restart")),
         "withdrawn": sum(len(r.get("withdrawnDepartures") or []) for r in reviews),
         "departsFelt": sum(r.get("nDeparts", 0) for r in reviews), "alightsFelt": sum(r.get("nAlights", 0) for r in reviews),
     }
@@ -623,7 +625,9 @@ def findings(s: dict, reviews: list[dict]) -> list[str]:
     if d.get("withdrawn"):
         out.append(f"{d['withdrawn']} felt pull-away(s) were withdrawn by the phone because no train left the platform then.")
     if d.get("falseStarts"):
-        out.append(f"{d['falseStarts']} false start(s) (ended by hand or changed within five minutes) are listed but not scored.")
+        out.append(f"{d['falseStarts']} false start(s) (ended by hand or changed within five minutes) are listed but not scored"
+                   + (f", {d['restarts']} of them a route the phone restarted by GPS within two minutes of the last ending at the same origin, "
+                      "a ride already under way" if d.get("restarts") else "") + ".")
     if d.get("stopsCompared"):
         out.append(f"Stops felt matched the train's stops exactly on {d['stopsExact']} of {d['stopsCompared']} legs.")
     if d.get("ridesAssumed"):
@@ -692,7 +696,7 @@ def render_markdown(reviews: list[dict], s: dict, generated: datetime, legs: lis
         legs_txt = " → ".join(f"{(l.get('train') or {}).get('route') or _split_line(l.get('plan') or '')[0]}"
                               + (f" ({l['boardedVerdict']})" if l.get("boardedVerdict") and l["boardedVerdict"] != "onPlan" else "") for l in r.get("legs", [])) or "–"
         rows.append([f"{r['day']} {_hm(r['createdTs'])}", r.get("routeLabel") or "–",
-                     f"{r.get('startedBy') or '?'} / {r.get('endedBy') or 'open'}" + (" (false start)" if r.get("falseStart") else "")
+                     f"{r.get('startedBy') or '?'} / {r.get('endedBy') or 'open'}" + ((" (restart)" if r.get("restart") else " (false start)") if r.get("falseStart") else "")
                      + (f" · {int(r['startDistanceM'])} m out" if r.get("startDistanceM") is not None else ""),
                      _hm(r.get("predictedArriveTs")), _hm(r.get("actualArriveTs")), _signed(r.get("forecastErrSec")), legs_txt,
                      f"{r.get('nDeparts', 0)}/{r.get('nAlights', 0)}"])
@@ -816,6 +820,17 @@ def review_all(store, static, out_dir: Path, feval: pd.DataFrame | None = None, 
     notes = load_notes(out_dir)
     by_trip = attach_notes(obs, notes)
     reviews = [review_trip(o, static, matcher, feval, by_trip.get(o["id"])) for o in obs]
+    # a route the phone started by GPS within two minutes of the previous one ending at the same origin is a restart
+    # (Oct 10 at 7 Av: a phantom ride closed the first route as the F pulled in, a fix 150 m out started a second, and
+    # that one forecast the next train for a ride already under way): kept and listed, not scored
+    prev = None
+    for r in reviews:
+        if prev and prev.get("endedTs") and r.get("startedBy") == "gps" and r.get("origin") and r.get("origin") == prev.get("origin") \
+                and 0 <= float(r["createdTs"]) - float(prev["endedTs"]) <= 120:
+            r["restart"] = True
+            r["falseStart"] = True
+            r.pop("forecastErrSec", None)
+        prev = r
     traces = {**load_traces(out_dir / "device"), **load_traces(out_dir / "github")}
     for r in reviews:
         tr = next((traces[k] for k in traces if abs(k - (r.get("createdTs") or 0)) <= 5), None)

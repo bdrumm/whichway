@@ -41,6 +41,9 @@ struct TrainPosition {
 
     var text: String {
         if derived { return status == "STOPPED_AT" ? "at \(stopName) · not yet departed" : "→ \(stopName) · no position report" }
+        // at its first stop for a while: waiting to leave the terminal (a hold is never called there), as the G at
+        // Church Av on Oct 10, four minutes past its time
+        if status == "STOPPED_AT", stopIdx == 0, sinceSec >= 60 { return "at \(stopName) · \(Int(sinceSec / 60)) min, yet to depart" }
         let verb = status == "STOPPED_AT" ? "at" : (status == "INCOMING_AT" ? "arriving" : "→")
         var s = "\(verb) \(stopName)"
         if sinceSec >= 60 { s += " · \(Int(sinceSec / 60)) min" }

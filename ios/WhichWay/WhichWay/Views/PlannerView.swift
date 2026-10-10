@@ -31,6 +31,8 @@ struct PlannerView: View {
     @State private var outlook: HoldOutlook? = nil
     /// Ended by hand: GPS does not start it again for this trip.
     @State private var routeEndedByHand = false
+    @State private var lastEndTs = 0.0                 // when the last route ended on its own, and at which origin: a fix near
+    @State private var lastEndOrigin = ""              // that station in the minutes after is the rider still there, not a new trip
     /// Checks the route in progress against the clock every 15 s.
     @State private var tripTimer: Task<Void, Never>? = nil
     /// Why the last route ended on its own, shown until the next one.
@@ -1201,7 +1203,7 @@ struct PlannerView: View {
     /// Before a route starts: a walk closing on the origin station at a walking pace, over the last minute or so,
     /// starts the route on the way (the sensors then see the walk, the platform and the pull-away in order).
     private func checkApproach() {
-        guard trip.phase == nil, !routeEndedByHand, !destId.isEmpty, let l = loc.fix(maxAgeSec: 30, maxAccuracyM: 65), let d = tripDistanceM(to: originId) else { return }
+        guard trip.phase == nil, !routeEndedByHand, !justEndedHere, !destId.isEmpty, let l = loc.fix(maxAgeSec: 30, maxAccuracyM: 65), let d = tripDistanceM(to: originId) else { return }
         let ts = l.timestamp.timeIntervalSince1970
         if let last = approachFixes.last, ts <= last.ts { return }
         approachFixes.append((ts, d))
@@ -1304,7 +1306,12 @@ struct PlannerView: View {
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
         extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]; forecastTrainId = nil; frozenLegs = []
         trip.stopCoordinate = { [weak data] key, idx in data?.geometry?.lines[key]?.coord(idx) }
-        withAnimation { trip.begin(tl, distanceToOriginM: d, observation: obs, legs: plans, now: data.now) }
+        // the scheduled run from the boarding stop to the next, the shortest over the first leg's lines: steps sooner
+        // than most of it after a felt pull-away are the stairs, not a ride
+        let firstRun: Double? = plans.first.flatMap { plan in
+            plan.idx.compactMap { k, r in data.schedule?.lines[k].flatMap { r.from < $0.runSec.count ? $0.runSec[r.from] : nil }.map(Double.init) }.min()
+        }
+        withAnimation { trip.begin(tl, distanceToOriginM: d, observation: obs, legs: plans, now: data.now, firstRunSec: firstRun) }
         data.requestGeometry()
         loc.startTracking()
         startActivity()
@@ -1348,6 +1355,7 @@ struct PlannerView: View {
         rideItinerary = nil; plannedTrains = [:]; forecastTrainId = nil; frozenLegs = []
         TripActivityService.shared.end()
         let tl = trip.end(by: by, api: Telemetry.shared.uploadURL(fallback: data.apiBase), now: data.now)
+        lastEndTs = data.now; lastEndOrigin = originId
         let destName = data.index?.stations[destId]?.name ?? "your stop"
         let at = Fmt.hhmm(tl?.endedTs ?? data.now)
         switch by {
@@ -1360,9 +1368,14 @@ struct PlannerView: View {
 
     /// Within 150 m of the origin station with no route in progress: it starts by itself.
     private func checkArrival() {
-        guard trip.phase == nil, !routeEndedByHand, !destId.isEmpty, let d = tripDistanceM(to: originId), d <= 150 else { return }
+        guard trip.phase == nil, !routeEndedByHand, !justEndedHere, !destId.isEmpty, let d = tripDistanceM(to: originId), d <= 150 else { return }
         startTrip(by: "gps")
     }
+
+    /// A route ended at this origin in the last three minutes: a fix near the station is the rider still there, or a
+    /// stale fix from the platform (Oct 10 at 7 Av: a second route started 13 s after the first closed, as the F
+    /// pulled in with the rider aboard, and forecast the next train for a ride already under way).
+    private var justEndedHere: Bool { originId == lastEndOrigin && data.now - lastEndTs < 180 }
 
     /// Every fix: before a route, the auto-start at the station; during one, the tracker.
     private func feedLocation() {

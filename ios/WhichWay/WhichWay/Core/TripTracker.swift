@@ -75,6 +75,8 @@ struct TripTracker {
     var awaySeconds = 30.0
     var usableAccuracyM = 100.0           // a fix less sure than this says nothing about where the rider is
     var preciseAccuracyM = 65.0           // speeds (the walk, a train pulling away) only from fixes this sure
+    var minRideSec = 45.0                 // steps sooner than this after a felt pull-away: it was the stairs or the platform, not a ride
+                                          // (the recorder sets it from the schedule: 0.6 of the run to the first stop, 45 s at least)
 
     private(set) var phase: TripPhase
     private(set) var timeline: TripTimeline
@@ -222,6 +224,15 @@ struct TripTracker {
             if e.kind == .departed, phase == .approaching, let f = lastFix, m.ts - f.ts < 120, f.toOrigin - f.acc > 300 {
                 detector.standDown()
                 motionState = detector.state
+                return
+            }
+            // a walk-off sooner after the pull-away than the train could have reached its first stop: the pull-away was the
+            // stairs or the platform, not a ride (Oct 10 at 7 Av: "departed" 16:50:29 on the way down, steps 39 s later closed
+            // the route as the real F pulled in, and a second route started under the rider). The departure is withdrawn:
+            // the rider is at the station and the next sustained push or vibration counts afresh.
+            if e.kind == .alighted, !departedByLocation, let dep = timeline.events.last, dep.kind == .departed, e.ts - dep.ts < minRideSec {
+                timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [dep.ts]
+                notOnTrain()
                 return
             }
             timeline.events.append(e)

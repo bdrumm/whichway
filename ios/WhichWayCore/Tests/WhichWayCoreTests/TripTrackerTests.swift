@@ -48,6 +48,34 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertEqual(t.timeline.endedBy, "alighted")
     }
 
+    func testStepsBeforeTheFirstStopWithdrawThePullAway() {
+        // Oct 10 at 7 Av: a "departure" felt on the way down to the platform, steps 39 s later, and the route closed as
+        // the real train pulled in. A ride shorter than most of the run to the first stop is no ride: the pull-away is
+        // withdrawn, the rider is still at the station, and the real train's pull-away then counts.
+        var t = TripTracker(start(), distanceToOriginM: 40)
+        t.minRideSec = 54                                                    // 0.6 of a 90 s run
+        t.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)
+        var ts = 1000.0
+        func ride(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false, shake: 0.04)); ts += 1 } }
+        func depart() { for _ in 0..<6 { t.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 } }
+        func walk(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: true)); ts += 1 } }
+        func stand(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false)); ts += 1 } }
+        stand(30); depart()                                                  // "pulls away" at 1030
+        XCTAssertEqual(t.phase, .riding)
+        ride(25); stand(5); walk(12)                                         // steps 36 s after: the stairs, not a ride
+        XCTAssertEqual(t.phase, .atStation)
+        XCTAssertEqual(t.timeline.withdrawnDepartures, [1030])
+        XCTAssertTrue(t.timeline.events.isEmpty)
+        t.tick(now: ts); XCTAssertEqual(t.phase, .atStation)
+        // the real train: a pull-away, a run past the floor, the walk-off, and the route ends on the clock
+        stand(20); depart(); ride(100); stand(15); walk(20)
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted])
+        XCTAssertEqual(t.timeline.withdrawnDepartures, [1030])
+        t.tick(now: 1600)
+        XCTAssertEqual(t.phase, .arrived)
+        XCTAssertEqual(t.timeline.endedBy, "alighted")
+    }
+
     func testTwoLegsMeasureTheChangeAndOnlyTheSecondAlightingEnds() {
         var t = TripTracker(start(legs: 2, transfer: "X"), distanceToOriginM: 20)
         t.updateForecast(boardTs: 1030, arriveTs: 2100, now: 1000)

@@ -137,9 +137,12 @@ final class TripRecorder {
     var currentLegKeys: [String] { currentLeg < legs.count ? legs[currentLeg].keys : [] }
     var currentLegChosenKey: String? { currentLeg < legs.count ? legs[currentLeg].chosenKey : nil }
 
-    func begin(_ start: TripTimeline, distanceToOriginM: Double?, observation: TripObservation?, legs: [LegPlan] = [], now: Double) {
+    func begin(_ start: TripTimeline, distanceToOriginM: Double?, observation: TripObservation?, legs: [LegPlan] = [], now: Double,
+               firstRunSec: Double? = nil) {
         if tracker != nil { end(by: "changed", api: nil, now: now) }
         tracker = TripTracker(start, distanceToOriginM: distanceToOriginM)
+        // steps sooner after a felt pull-away than most of the scheduled run to the first stop are not a ride
+        if let r = firstRunSec { tracker?.minRideSec = max(45, 0.6 * r) }
         endReason = nil
         self.legs = legs
         log.reset(); transferLog.reset(); logLeg = -1; candidates = [:]; beliefs = []; seenEvents = 0; handSet = []; dismissed = []
