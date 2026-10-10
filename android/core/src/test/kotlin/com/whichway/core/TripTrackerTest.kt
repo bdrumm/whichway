@@ -133,6 +133,10 @@ class TripTrackerTest {
         val v = TripTracker(start(), 900.0)
         v.updateForecast(1100.0, 1700.0, 1000.0); v.forecastTrainDeparted(1084.0)
         assertEquals(1100.0, v.timeline.forecastBoardTs)
+        // once the predicted time has passed the freeze is updateForecast's own, and the drop changes nothing
+        val w = TripTracker(start(), 30.0)
+        w.updateForecast(1100.0, 1700.0, 1000.0); w.forecastTrainDeparted(1110.0)
+        assertEquals(1100.0, w.timeline.forecastBoardTs)
     }
 
     @Test

@@ -1,6 +1,6 @@
-// The Go tab (ios/WhichWay/WhichWay/Views/PlannerView.swift + the Now card in PathViews.swift), reduced to the
-// planner: pick the two stations, every route ranked by expected and live time, the train to take with its
-// countdown, and the selected route's next itineraries. The route-in-progress half is not ported yet.
+// The Go tab (ios/WhichWay/WhichWay/Views/PlannerView.swift): three pages side by side (home with the countdown and
+// the numbers, the line view, the routes) under a corner glow, or the classic one long page with the Now card, the
+// route list and the five views. The stations, commutes, habits and the trip session are shared by both.
 package com.whichway.app.ui
 
 import androidx.compose.foundation.BorderStroke
@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -72,6 +73,16 @@ import com.whichway.core.enumeratePaths
 import com.whichway.core.evaluate
 import com.whichway.core.pathTrips
 import com.whichway.core.reachableStations
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment.Companion.CenterVertically
+import com.whichway.core.RouteConfidence
+import com.whichway.core.nextItineraryAfter
+import com.whichway.core.routeConfidence
+import kotlinx.coroutines.launch
 import kotlin.math.max
 
 /** Routes with a train in the feeds first, by that itinerary's arrival; the rest by expected time. */
@@ -255,42 +266,153 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     val commuteCoords = remember(currentPresetId, s.geometry) { val geo = s.geometry; if (currentPresetId != null && geo != null) stationCoordinates(sched, index, geo) else emptyMap() }
     val currentPreset = presets.firstOrNull { it.id == currentPresetId }
 
+    val classic by stores.classicGo.collectAsStateWithLifecycle()
+    var showDetails by remember { mutableStateOf(false) }
+    val ride = if (routeStarted) trip.rideItinerary else null
+    val itin = ride ?: headline?.live
+    val placeUsualSec = here?.let { pace.placeToStationSec(it.id, originId) }
+    val walkLine = walk?.takeIf { trip.phase == null || trip.phase == TripPhase.approaching }?.let { walkLineText(it, pace, here?.name, placeUsualSec, itin?.boardTs, now) }
+    val outlook = headline?.let { holdOutlook(data, s, it, sched) }
+    val confidence: RouteConfidence? = headline?.let { routeConfidence(it, itin, listOfNotNull(outlook?.usual, outlook?.dragsOn, outlook?.clearsNow), s.model, healthContext(s, data.scenario)) }
+    val next = headline?.let { nextItineraryAfter(ride, trip.onTrain, it, s.boards, sched, now) }
+    val others = headline?.let { h -> list.filter { it.id != h.id } } ?: emptyList()
+    val originName = origin?.name ?: ""; val destName = reachableDest?.name ?: ""
+    fun newPreset(): CommutePreset { val w = CommutePreset.suggestedWindow(s.now); return CommutePreset(name = CommutePreset.suggestedName(s.now), originId = originId, destId = destId, startMinute = w.first, endMinute = w.second) }
+
+    if (classic) ClassicContent(data, s, sched, index, stores, session, trip, presets, origin, dest, reachableDest, reach, paths, list, headline, live, now, walk, here, pace, habitNote, pendingNearest, locError, currentPresetId, originId, destId,
+        onPickFrom = { picking = "from" }, onPickTo = { picking = "to" }, onNearby = { nearbySheet = true }, onSwap = { val o = originId; setTrip(destId, o); pickedByHand() },
+        onPreset = { applyPreset(it, byHand = true) }, onEdit = { editing = it }, onAdd = { editing = newPreset() }, onSelect = { selected = it }, onInsights = { showInsights = true }, onOnTrain = { onTrainSheet = true })
+    else {
+        val pager = rememberPagerState(pageCount = { 3 })
+        val scope = rememberCoroutineScope()
+        // the glow in the colour of the time to the train, less the walk still to make
+        val glow = run {
+            val l0 = itin?.legs?.firstOrNull()
+            if (itin == null || l0 == null) MaterialTheme.colorScheme.primary
+            else {
+                val left = max(0.0, (if (trip.onTrain) l0.arriveTs else itin.boardTs) - now)
+                val walkSec = if ((trip.phase == null || trip.phase == TripPhase.approaching) && walk != null) placeUsualSec ?: (walk.meters / pace.walkSpeedMPerMin * 60 + (pace.accessSec(originId) ?: 0.0)) else null
+                boardingUrgency(left, walkSec, MaterialTheme.colorScheme.primary)
+            }
+        }
+        Box(Modifier.fillMaxSize()) {
+            GlowWash(glow, soft = pager.currentPage != 0)
+            HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    when (page) {
+                        0 -> {
+                            HomeHeader(origin, reachableDest, s, presets, stores.activePreset(s.now)?.id, currentPresetId, onPickFrom = { picking = "from" }, onPickTo = { picking = "to" },
+                                onSwap = { val o = originId; setTrip(destId, o); pickedByHand() }, onNearby = { nearbySheet = true }, onPreset = { applyPreset(it, byHand = true) }, onEdit = { editing = it }, onAdd = { editing = newPreset() })
+                            if (habitNote != null && !routeStarted) Caption("◷ $habitNote")
+                            when {
+                                pendingNearest -> Caption(locError ?: "Finding the nearest station…", if (locError == null) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFFD32F2F))
+                                origin == null || reachableDest == null -> SetupPrompt(origin != null, reachableDest != null, reach.size) { editing = newPreset() }
+                            }
+                            if (headline != null && reachableDest != null) {
+                                Spacer(Modifier.height(4.dp))
+                                HomeCard(headline, itin, next, now, originName, destName, trip, walkLine, others.take(3), max(0, others.size - 3), confidence,
+                                    routeHealth(headline, healthContext(s, data.scenario)), { routeHealth(it, healthContext(s, data.scenario)) }, s.predictedBoards.isEmpty(),
+                                    onPick = { selected = it.id }, onMore = { scope.launch { pager.animateScrollToPage(2) } })
+                                TripBar(session, trip, originName.ifEmpty { "the station" }, walk?.meters) { onTrainSheet = true }
+                            } else if (origin != null && reachableDest != null) Caption("No path with at most one change between these stations.")
+                            s.lastError?.let { Caption(it, Color(0xFFD32F2F)) }
+                        }
+                        1 -> {
+                            PageTitle(originName, destName, headline?.let { Fmt.minTxt(it.live?.totalSec ?: it.expectedSec) } ?: "")
+                            if (headline != null) {
+                                Spacer(Modifier.height(4.dp))
+                                StrandView(headline, itin, next, now, originName, destName, trip, others.take(4), confidence, s.predictedBoards.isEmpty(),
+                                    onPick = { selected = it.id }, onDetails = { showDetails = true }, onInsights = { showInsights = true })
+                            } else Caption("Pick where you are and where you're going.")
+                        }
+                        else -> {
+                            PageTitle(originName, destName, "")
+                            Caption("Tap a route to take it.")
+                            if (paths.isNotEmpty()) {
+                                val maxSec = max(60.0, list.maxOf { max(it.expectedSec, it.live?.totalSec ?: 0.0) })
+                                val hctx = healthContext(s, data.scenario)
+                                list.forEach { p -> PathRow(p, p.live, headline?.id == p.id, maxSec, routeHealth(p, hctx)) { selected = p.id; scope.launch { pager.animateScrollToPage(0) } } }
+                                Caption("Badge: expected extra minutes to your destination against the timetable. Bars: expected door-to-door time: wait (grey), ride (line colour), walk at the change (dark). Routes with a train on its way come first, by arrival.")
+                            } else if (origin != null && reachableDest != null) Caption("No path with at most one change between these stations.")
+                        }
+                    }
+                }
+            }
+            // the page dots
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                repeat(3) { i -> Box(Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurface.copy(alpha = if (pager.currentPage == i) 0.6f else 0.2f))) }
+            }
+        }
+        LaunchedEffect(Unit) { data.requestGeometry(); loc.request() }
+    }
+    if (showDetails && headline != null && reachableDest != null) AlertDialog(onDismissRequest = { showDetails = false }, confirmButton = { TextButton(onClick = { showDetails = false }) { Text("Done") } }, title = { Text("Route detail") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (routeStarted) DepartureBoard(data, headline, sched, originName, destName, now)
+            outlook?.let { HoldOutlookCard(data, it) }
+            Text(headline.label, style = MaterialTheme.typography.titleMedium)
+            PathViewsView(data, s, headline, sched, originName, destName, now)
+            val its = live[headline.id].orEmpty()
+            Text("Next itineraries", style = MaterialTheme.typography.titleSmall)
+            if (its.isEmpty()) Caption(if (s.predictedBoards.isEmpty()) "Waiting for the live feeds…" else "No train in the feeds covers this path right now.")
+            its.forEach { ItineraryRow(it) }
+            Text("Insights", style = MaterialTheme.typography.titleSmall)
+            insightLines(s, headline, sched, data.scenario).forEach { Caption("• $it") }
+        } })
+
+    when (picking) {
+        "from" -> StationPicker("From", index.sorted, null, { picking = null }, nearTo = currentPreset?.let { index.station(it.originId) }, coords = commuteCoords, places = placePicks(places, index)) { setTrip(it.id, destId); pickedByHand() }
+        "to" -> StationPicker("To", index.sorted, reach, { picking = null }, nearTo = currentPreset?.let { index.station(it.destId) }, coords = commuteCoords, places = placePicks(places, index)) { setTrip(originId, it.id); pickedByHand() }
+    }
+    if (nearbySheet) NearbyStationsSheet(data, loc, { nearbySheet = false }) { setTrip(it.id, destId); pickedByHand() }
+    if (showInsights && headline != null && reachableDest != null) RouteInsightsSheet(data, headline, sched, origin?.name ?: "", reachableDest.name) { showInsights = false }
+    if (onTrainSheet) OnTrainSheet(session, data, headline?.legs?.getOrNull(session.onTrainLeg)?.let { index.stations[index.stationOf(it.from)]?.name } ?: "the station") { onTrainSheet = false }
+    // riding by the phone's own reading, with no departure to name the train: ask which
+    LaunchedEffect(trip.needsTrainPick) { if (trip.needsTrainPick && !onTrainSheet) onTrainSheet = true }
+    editing?.let { p -> PresetEditor(data, p, { editing = null }) { saved -> stores.updatePreset(saved); applyPreset(saved, byHand = true) } }
+}
+
+/** The classic Go tab: the one long page with the Now card, the route list, the five views and the itineraries. */
+@Composable
+private fun ClassicContent(data: AppData, s: AppState, sched: ClientSchedule, index: StationIndex, stores: Stores, session: TripSession, trip: TripUi, presets: List<CommutePreset>,
+                           origin: Station?, dest: Station?, reachableDest: Station?, reach: Map<String, Reach>, paths: List<PathOption>, list: List<PathOption>, headline: PathOption?,
+                           live: Map<String, List<Itinerary>>, now: Double, walk: NearbyStation?, here: Place?, pace: com.whichway.core.PersonalModel, habitNote: String?, pendingNearest: Boolean,
+                           locError: String?, currentPresetId: String?, originId: String, destId: String,
+                           onPickFrom: () -> Unit, onPickTo: () -> Unit, onNearby: () -> Unit, onSwap: () -> Unit, onPreset: (CommutePreset) -> Unit, onEdit: (CommutePreset) -> Unit, onAdd: () -> Unit,
+                           onSelect: (String) -> Unit, onInsights: () -> Unit, onOnTrain: () -> Unit) {
+    val routeStarted = trip.phase != null
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Which way?", fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            CommuteChip(presets, stores.activePreset(s.now)?.id, currentPresetId, onPick = { applyPreset(it, byHand = true) }, onEdit = { editing = it },
-                onAdd = { val w = CommutePreset.suggestedWindow(s.now); editing = CommutePreset(name = CommutePreset.suggestedName(s.now), originId = originId, destId = destId, startMinute = w.first, endMinute = w.second) })
+            CommuteChip(presets, stores.activePreset(s.now)?.id, currentPresetId, onPick = onPreset, onEdit = onEdit, onAdd = onAdd)
             Spacer(Modifier.weight(1f))
             Caption(if (s.offline) "offline" else if (s.lastUpdateTs == null) "connecting" else "live")
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.weight(1f)) { StationButton("From", origin) { picking = "from" } }
-            IconButton(onClick = { nearbySheet = true }) { Icon(Icons.Filled.LocationOn, "Nearest station") }
+            Box(Modifier.weight(1f)) { StationButton("From", origin, onClick = onPickFrom) }
+            IconButton(onClick = onNearby) { Icon(Icons.Filled.LocationOn, "Nearest station") }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.weight(1f)) { StationButton("To", reachableDest, enabled = origin != null) { picking = "to" } }
-            IconButton(enabled = origin != null && reachableDest != null, onClick = { val o = originId; setTrip(destId, o); pickedByHand() }) { Icon(Icons.Filled.Refresh, "Swap stations") }
+            Box(Modifier.weight(1f)) { StationButton("To", reachableDest, enabled = origin != null, onClick = onPickTo) }
+            IconButton(enabled = origin != null && reachableDest != null, onClick = onSwap) { Icon(Icons.Filled.Refresh, "Swap stations") }
         }
         habitNote?.let { Caption("◷ $it") }
         when {
             pendingNearest -> Caption(locError ?: "Finding the nearest station…")
-            origin == null || reachableDest == null -> SetupPrompt(origin != null, reachableDest != null, reach.size) {
-                val w = CommutePreset.suggestedWindow(s.now); editing = CommutePreset(name = CommutePreset.suggestedName(s.now), originId = originId, destId = destId, startMinute = w.first, endMinute = w.second)
-            }
+            origin == null || reachableDest == null -> SetupPrompt(origin != null, reachableDest != null, reach.size, onAdd)
             paths.isEmpty() -> Caption("No path with at most one change between these stations.")
         }
         if (headline != null && reachableDest != null) {
             NowCard(headline, if (routeStarted) trip.rideItinerary ?: headline.live else headline.live, now, origin?.name ?: "", reachableDest.name,
                 if (trip.phase == null || trip.phase == TripPhase.approaching) walk else null, here, pace, trip)
-            TextButton(onClick = { showInsights = true }) { Text("Insights") }
-            TripBar(session, trip, origin?.name ?: "the station", walk?.meters) { onTrainSheet = true }
+            TextButton(onClick = onInsights) { Text("Insights") }
+            TripBar(session, trip, origin?.name ?: "the station", walk?.meters, onOnTrain)
             holdOutlook(data, s, headline, sched)?.let { HoldOutlookCard(data, it) }
             if (routeStarted) DepartureBoard(data, headline, sched, origin?.name ?: "", reachableDest.name, now)
             Text(if (routeStarted) "Other ways" else if (list.size == 1) "1 way to get there" else "${list.size} ways to get there", style = MaterialTheme.typography.titleMedium)
             val maxSec = max(60.0, list.maxOf { max(it.expectedSec, it.live?.totalSec ?: 0.0) })
             val ctx = healthContext(s, data.scenario)
             // the live itinerary is passed on its own: the row must recompose when the poll changes it
-            list.forEach { p -> PathRow(p, p.live, p.id == headline.id, maxSec, routeHealth(p, ctx)) { selected = p.id } }
+            list.forEach { p -> PathRow(p, p.live, p.id == headline.id, maxSec, routeHealth(p, ctx)) { onSelect(p.id) } }
             Caption("Badge: expected extra minutes to your destination against the timetable. Bars: expected door-to-door time: wait (grey), ride (line colour), walk at the change (dark). Routes with a train on its way come first, by arrival.")
             Caption("Route ${list.indexOfFirst { it.id == headline.id } + 1} of ${list.size}")
             Text(headline.label, style = MaterialTheme.typography.titleMedium)
@@ -305,16 +427,60 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
         s.lastError?.let { Caption(it, Color(0xFFD32F2F)) }
     }
 
-    when (picking) {
-        "from" -> StationPicker("From", index.sorted, null, { picking = null }, nearTo = currentPreset?.let { index.station(it.originId) }, coords = commuteCoords, places = placePicks(places, index)) { setTrip(it.id, destId); pickedByHand() }
-        "to" -> StationPicker("To", index.sorted, reach, { picking = null }, nearTo = currentPreset?.let { index.station(it.destId) }, coords = commuteCoords, places = placePicks(places, index)) { setTrip(originId, it.id); pickedByHand() }
+}
+
+/** The home page's header: where from and where to on one line, each a tap to change, swap and nearest beside; the commute and the feed's freshness under. */
+@Composable
+private fun HomeHeader(origin: Station?, dest: Station?, s: AppState, presets: List<CommutePreset>, activeId: String?, currentId: String?, onPickFrom: () -> Unit, onPickTo: () -> Unit,
+                       onSwap: () -> Unit, onNearby: () -> Unit, onPreset: (CommutePreset) -> Unit, onEdit: (CommutePreset) -> Unit, onAdd: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(origin?.name ?: "Choose a station", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = if (origin == null) accent else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).clickable(onClick = onPickFrom))
+            Text("to", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(dest?.name ?: "where?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = if (dest == null) accent else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).clickable(enabled = origin != null, onClick = onPickTo))
+            Spacer(Modifier.weight(1f))
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(34.dp)) {
+                IconButton(enabled = origin != null && dest != null, onClick = onSwap) { Icon(Icons.Filled.Refresh, "Swap stations", Modifier.size(18.dp)) }
+            }
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = onNearby) { Icon(Icons.Filled.LocationOn, "Nearest station", Modifier.size(18.dp)) }
+            }
+        }
+        Row(verticalAlignment = CenterVertically) {
+            CommuteChip(presets, activeId, currentId, onPick = onPreset, onEdit = onEdit, onAdd = onAdd)
+            Spacer(Modifier.weight(1f))
+            Caption(if (s.offline) "offline" else if (s.lastUpdateTs == null) "connecting" else "live")
+        }
     }
-    if (nearbySheet) NearbyStationsSheet(data, loc, { nearbySheet = false }) { setTrip(it.id, destId); pickedByHand() }
-    if (showInsights && headline != null && reachableDest != null) RouteInsightsSheet(data, headline, sched, origin?.name ?: "", reachableDest.name) { showInsights = false }
-    if (onTrainSheet) OnTrainSheet(session, data, headline?.legs?.getOrNull(session.onTrainLeg)?.let { index.stations[index.stationOf(it.from)]?.name } ?: "the station") { onTrainSheet = false }
-    // riding by the phone's own reading, with no departure to name the train: ask which
-    LaunchedEffect(trip.needsTrainPick) { if (trip.needsTrainPick && !onTrainSheet) onTrainSheet = true }
-    editing?.let { p -> PresetEditor(data, p, { editing = null }) { saved -> stores.updatePreset(saved); applyPreset(saved, byHand = true) } }
+}
+
+/** The line and routes pages' title: where from and where to, and a word on the right. */
+@Composable
+private fun PageTitle(originName: String, destName: String, caption: String) {
+    Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(originName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Text("to", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(destName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Spacer(Modifier.weight(1f))
+        Caption(caption)
+    }
+}
+
+/** The walk to the origin station in the rider's own pace, and whether it fits in the countdown (iOS walkLineText). */
+fun walkLineText(w: NearbyStation, pace: com.whichway.core.PersonalModel, placeName: String?, placeUsualSec: Double?, boardTs: Double?, now: Double): Pair<String, Boolean> {
+    val access = pace.accessSec(w.station.id) ?: 0.0
+    val walkSec = placeUsualSec ?: (w.meters / pace.walkSpeedMPerMin * 60 + access)
+    val mins = max(1, Math.round(walkSec / 60).toInt())
+    val left = boardTs?.let { max(0.0, it - now) }
+    val tight = left != null && walkSec > left
+    val reach = pace.walkSpeedMPerMin * max(0.0, (left ?: 0.0) - access) / 60
+    var text = (placeName?.let { "$it: " } ?: "") + if (placeUsualSec != null) "usually $mins min" else "${Fmt.miles(w.meters)} - $mins min"
+    if (placeUsualSec == null && access >= 30) text += " · ${Math.round(access / 60)} min to platform"
+    if (tight) text += " · ${Fmt.miles(reach)}"
+    return text to tight
 }
 
 /** The train to take, the countdown to it, the change, and the arrival with the engine's 80% window. */

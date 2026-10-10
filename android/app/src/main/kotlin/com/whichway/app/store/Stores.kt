@@ -42,6 +42,11 @@ class Stores private constructor(context: Context) {
         get() = p.getFloat("pickedByHandTs", 0f).toDouble()
         set(v) = p.edit().putFloat("pickedByHandTs", v.toFloat()).apply()
 
+    /** The Go tab as the one long page it was, in place of the three pages (iOS "classicGo"). */
+    private val _classicGo = MutableStateFlow(p.getBoolean("classicGo", false))
+    val classicGo: StateFlow<Boolean> = _classicGo
+    fun setClassicGo(v: Boolean) { p.edit().putBoolean("classicGo", v).apply(); _classicGo.value = v }
+
     // commutes
 
     private val _presets = MutableStateFlow(

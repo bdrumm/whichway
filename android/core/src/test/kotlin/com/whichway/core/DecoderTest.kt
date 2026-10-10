@@ -36,5 +36,13 @@ class DecoderTest {
         assertEquals(1, board.trains.size)
         assertEquals(0, board.trains[0].nextIdx)
         assertEquals("→ 14 St", board.trains[0].position?.text)
+        // a trip with no vehicle report at all, assigned and at its first stop: placed by its trip update, at the terminal
+        val tu2 = bytes(1, str(1, "020000_6..N") + str(3, "20260101") + str(5, "6") + bytes(1001, str(1, "06 0200 PEL/BBR") + vfield(2, 1))) + bytes(2, str(4, "635N") + bytes(2, vfield(2, 1_000_300)))
+        val feed2 = GtfsRealtime.parse((bytes(1, vfield(3, 1_000_000)) + bytes(2, str(1, "e3") + bytes(3, tu2))).toByteArray())
+        val b2 = lineBoard(sched, emptyList(), mapOf("x" to feed2), "6_N", 1_000_000.0, VehicleHistory())!!
+        assertEquals(1, b2.trains.size)
+        val pos = b2.trains[0].position!!
+        assertEquals(true, pos.derived); assertEquals("STOPPED_AT", pos.status); assertEquals("at 14 St · not yet departed", pos.text)
+        assertEquals("unknown", trainProgress(b2.trains[0], 0.0, sched.lines["6_N"]!!).state)
     }
 }

@@ -4,7 +4,7 @@ The iOS app leads. Android catches up in occasional, isolated port passes; nothi
 change `ios/`. This file records what each Kotlin file mirrors and the iOS commit it was last brought level with,
 so the next pass knows exactly what moved.
 
-**Last port pass:** iOS at `21bc708` (2026-10-09).
+**Last port pass:** iOS at `aa492fd` (2026-10-10).
 
 `scripts/ios-drift.sh` lists the iOS files changed since that commit, with the Kotlin file each maps to.
 
@@ -16,7 +16,7 @@ so the next pass knows exactly what moved.
 | `Models/GTFSRealtime.swift` | `core/…/GtfsRealtime.kt` | same wire decoder, no protobuf dependency |
 | `Models/Alerts.swift` | `core/…/Alerts.kt` | |
 | `Core/Predictor.swift` | `core/…/Predictor.kt` | checked against the iOS fixture to 1e-6 |
-| `Core/LineBoard.swift` | `core/…/LineBoard.kt` | `VehicleHistory` is an instance, not a singleton |
+| `Core/LineBoard.swift` | `core/…/LineBoard.kt` | `VehicleHistory` is an instance, not a singleton; derived positions (a train with no vehicle report is placed by its trip update, or "at the terminal, not yet departed") |
 | `Core/StationGraph.swift` | `core/…/StationGraph.kt` | complex names tie-break alphabetically (Swift: dictionary order) |
 | `Core/Planner.swift` (itineraries, headways, `evaluate`) | `core/…/Planner.kt` | |
 | `Core/PlatformTiming.swift` | `core/…/PlatformTiming.kt` | |
@@ -24,7 +24,7 @@ so the next pass knows exactly what moved.
 | `Core/Places.swift` | `core/…/Places.kt`, `app/…/store/Stores.kt` | |
 | `Core/Habits.swift`, `Services/HabitStore.swift` | `core/…/Habits.kt`, `app/…/store/Stores.kt` | with the Swift tests |
 | `Core/PersonalModel.swift`, `Services/PersonalModelStore.swift` | `core/…/PersonalModel.kt`, `app/…/store/Stores.kt` | |
-| `Core/BoardingDetector.swift`, `Core/TripTracker.swift` | `core/…/TripTracker.kt` | with the Swift tests; plus `forecastTrainDeparted`: the feed drops a train a few seconds before its predicted platform moment, which left the Swift freeze rule waiting for ever (Oct 9, 3:00:49 against 3:01:05), so the forecast and the plan's train freeze when the planner moves on at the platform |
+| `Core/BoardingDetector.swift`, `Core/TripTracker.swift` | `core/…/TripTracker.kt` | with the Swift tests; plus `forecastTrainDeparted`: the feed drops a train a few seconds before its predicted platform moment, which left the Swift freeze rule waiting for ever (Oct 9, 3:00:49 against 3:01:05), so the forecast and the plan's train freeze when the planner moves on at the platform (iOS adopted the same rule in d9ccec1; `TripRecorder.forecastTrainDeparted`) |
 | `Core/LineInference.swift`, `Core/OnTrain.swift` | `core/…/LineInference.kt` | with the Swift tests |
 | `Core/Planner.swift` (ride half) | `core/…/Planner.kt` | `ridingItinerary`, `plannedCandidate`, `connectionItinerary`, with the Swift tests |
 | `Services/TripRecorder.swift` | `core/…/TripRecorder.kt` | pure; the app feeds it sensors, fixes, feeds and the clock |
@@ -43,7 +43,8 @@ so the next pass knows exactly what moved.
 | `Views/PlacesViews.swift` | `app/…/ui/PlacesViews.kt` | places, editor with the pin, pace section |
 | `WhichWayShared/Format.swift`, `RouteStyle.swift` | `core/…/Format.kt` | colours as ints; Compose bullet in `app/…/ui/Common.kt` |
 | `Services/DataService.swift`, `DiskCache.swift` | `app/…/store/AppData.kt` | a 404 from the published site retries the other known bases, including the raw `gh-pages` branch (Pages was publishing the source branch on 2026-10-09, so `/data/` was a 404) |
-| `Views/PlannerView.swift`, `PathViews.swift` (Now card) | `app/…/ui/GoScreen.kt` | pickers, commutes (auto-apply, nearest origin), habits, walk line, ranked routes, Now card, itineraries; not the route in progress |
+| `Views/PlannerView.swift` | `app/…/ui/GoScreen.kt` | the three pages (home, line, routes) under the corner glow, or the classic page (Settings › Go tab › Classic layout, `classicGo`); pickers, commutes, habits, walk line, ranked routes, the details dialog in place of the sheet |
+| `Views/HomeViews.swift`, `Core/RouteConfidence.swift` | `app/…/ui/HomeViews.kt`, `core/…/RouteConfidence.kt` | home card, journey bar, strand view, mini strands, glow wash and `boardingUrgency`; route confidence, journey segments, `nextItineraryAfter`, `stopsToGo`/`stopsAway` |
 | `Views/LineBoardView.swift` | `app/…/ui/LineScreen.kt` | board, health row, engine chart, scenario picker, alerts, train rows; not the leg tabs that follow the Go tab's route (`TrainFocus`), the route chart or the alerts-affecting-route list |
 | `Views/SettingsView.swift` | `app/…/ui/SettingsScreen.kt` | the rider page and the Developer page (data source, status, build); commutes, places, pace and sharing sections not yet |
 | `Views/WelcomeView.swift`, `ContentView.swift` (first-launch sheet) | `app/…/ui/WelcomeView.kt`, `MainActivity.kt` | no sharing switch: Android records no trips yet, so the sheet says that instead |

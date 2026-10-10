@@ -168,6 +168,16 @@ class TripRecorder {
 
     fun updateForecast(boardTs: Double?, arriveTs: Double?, now: Double) { tracker?.updateForecast(boardTs, arriveTs, now) }
 
+    /** The boarding time of the forecast the rider acted on, as the tracker holds it (frozen once that train left). */
+    val forecastBoardTs: Double? get() = tracker?.timeline?.forecastBoardTs
+
+    /** The forecast's train has gone from the feed just before its time while the rider stood at the station: it left. Returns whether the forecast froze on it. */
+    fun forecastTrainDeparted(now: Double): Boolean {
+        val before = tracker?.timeline?.forecastBoardTs
+        tracker?.forecastTrainDeparted(now)
+        return tracker?.timeline?.forecastBoardTs != before
+    }
+
     /** Every feed poll while the route is on: the boards of the leg in hand go into the departure log. */
     fun observeBoards(boards: Map<String, LineBoard>, now: Double) {
         val t = tracker ?: return

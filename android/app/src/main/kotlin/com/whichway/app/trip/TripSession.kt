@@ -182,9 +182,7 @@ class TripSession private constructor(context: Context) {
         // so the forecast freezes and the plan's train for the leg is kept as it was
         val liveId = h?.live?.legs?.firstOrNull()?.train?.id
         if (forecastTrainId != null && liveId != forecastTrainId && recorder.phase == TripPhase.atStation) {
-            val before = recorder.tracker?.timeline?.forecastBoardTs
-            recorder.tracker?.forecastTrainDeparted(n)
-            if (recorder.tracker?.timeline?.forecastBoardTs != before) frozenLegs.add(recorder.currentLeg)
+            if (recorder.forecastTrainDeparted(n)) frozenLegs.add(recorder.currentLeg)
         }
         followPlan(n)
         recorder.observeBoards(s.boards, n)
@@ -440,6 +438,7 @@ class TripSession private constructor(context: Context) {
         val plans = legPlans(p)
         data()?.setWanted(plans.flatMap { it.platformKeys.keys }.toSet(), "trip")
         recorder.replan(plans, p.transfer?.station)
+        forecastTrainId = null
         telemetry.updateRoute(p.label, p.legs.map { TripObservation.Leg(it.primaryKey, it.from, it.to) }, p.transfer?.station, p.transfer?.walkSec)
         refreshRideArrival()
         publish()

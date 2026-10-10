@@ -34,9 +34,12 @@ data class TrainPosition(
     val atTerminal: Boolean,
     val expectedRunSec: Double?,
     val positionLatenessSec: Double?,
+    /** No vehicle report for this trip: the position is read off the trip update (no dwell, no hold, no stall). */
+    val derived: Boolean = false,
 ) {
     val text: String
         get() {
+            if (derived) return if (status == "STOPPED_AT") "at $stopName · not yet departed" else "→ $stopName · no position report"
             val verb = when (status) { "STOPPED_AT" -> "at"; "INCOMING_AT" -> "arriving"; else -> "→" }
             return "$verb $stopName" + if (sinceSec >= 60) " · ${(sinceSec / 60).toInt()} min" else ""
         }
@@ -136,15 +139,22 @@ fun lineBoard(schedule: ClientSchedule, lineSched: List<LineSchedEntry>, feeds: 
     val c = schedule.constants
     val idx = HashMap<String, Int>()
     line.stops.forEachIndexed { i, s -> idx[s] = i }
+    // vehicle reports by the dated trip key, and by trip id alone for a report whose start date is missing or
+    // differs from the trip update's (a train is otherwise left with no position at all)
     val vehicles = HashMap<String, RTVehicle>()
-    for (fd in feeds.values) for (v in fd.vehicles) if (v.trip.tripId.isNotEmpty()) vehicles[v.trip.key] = v
+    val vehiclesByTrip = HashMap<String, RTVehicle>()
+    for (fd in feeds.values) for (v in fd.vehicles) if (v.trip.tripId.isNotEmpty()) {
+        vehicles[v.trip.key] = v
+        val ts = v.timestamp
+        if (ts != null && now - ts <= 1200) vehiclesByTrip[v.trip.tripId] = v
+    }
     val trains = ArrayList<LiveTrain>()
     for (fd in feeds.values) for (tu in fd.trips) {
         val first = tu.stops.firstOrNull() ?: continue
         if (tu.trip.routeId != route || !first.stopId.endsWith(direction)) continue
         val points = tu.stops.mapNotNull { s -> val i = idx[s.stopId]; val t = s.eta; if (i != null && t != null) TrainPoint(i, t) else null }
         val firstPoint = points.firstOrNull() ?: continue
-        val veh = vehicles[tu.trip.key]
+        val veh = vehicles[tu.trip.key] ?: vehiclesByTrip[tu.trip.tripId]
         val hasPos = veh != null && veh.stopId != null && veh.timestamp != null && veh.timestamp <= now + 60
         val lastRun = if (hasPos) history.observe(tu.trip.key, veh, now, line) else null
         val started = hasPos || tu.trip.isAssigned == true
@@ -209,11 +219,15 @@ fun lineBoard(schedule: ClientSchedule, lineSched: List<LineSchedEntry>, feeds: 
                 corroboration = if (pl - lateness > 60) "feed_optimistic" else "agree"
                 effective = max(lateness, pl)
             }
+        } else {
+            // no vehicle report at all: the trip update still says which stop the train reaches next. With the line's
+            // first stop ahead the train is assigned and waiting at its terminal; otherwise it is somewhere before that stop.
+            pos = TrainPosition(if (j == 0) "STOPPED_AT" else "IN_TRANSIT_TO", first.stopId, j, line.name(j), 0.0, false, false, j == 0 || j == line.stops.size - 1, null, null, derived = true)
         }
         var segment: SegmentInfo? = null
-        val p = pos
-        val pj = p?.stopIdx
-        if (p != null && pj != null && p.status != "STOPPED_AT" && pj > 0) {
+        val p: TrainPosition = pos
+        val pj = p.stopIdx
+        if (!p.derived && pj != null && p.status != "STOPPED_AT" && pj > 0) {
             val d = line.distM.getOrNull(pj - 1)
             if (d != null) {
                 val run = line.runSec.getOrNull(pj - 1)?.toDouble()
@@ -236,7 +250,7 @@ data class TrainProgress(val idx: Double, val state: String, val since: Double?)
 fun trainProgress(t: LiveTrain, age: Double, line: LineTopology): TrainProgress {
     val p = t.position
     val j = p?.stopIdx
-    if (p == null || j == null) return TrainProgress(max(0.0, t.nextIdx - 0.5), "unknown", null)
+    if (p == null || p.derived || j == null) return TrainProgress(max(0.0, t.nextIdx - 0.5), "unknown", null)
     val since = p.sinceSec + max(0.0, age)
     if (p.status == "STOPPED_AT") return TrainProgress(j.toDouble(), if (p.holding) "holding" else if (p.atTerminal) "terminal" else "stopped", since)
     if (j <= 0) return TrainProgress(0.0, "moving", since)

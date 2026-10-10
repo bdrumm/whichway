@@ -342,7 +342,7 @@ class TripTracker(start: TripTimeline, distanceToOriginM: Double?) {
      * The train the forecast named has gone from the feed a little before its predicted platform moment (the feed
      * moves a train on as it leaves, and its ETA for the stop was a few seconds optimistic): at the station, that
      * is the train leaving now, so the forecast freezes here and the assumed ride is counted from this moment.
-     * Android-only; the Swift tracker waits for the predicted time itself to pass. `graceSec` bounds how early.
+     * `graceSec` bounds how early a drop may come and still be that train leaving (iOS has the same rule since d9ccec1).
      */
     fun forecastTrainDeparted(now: Double, graceSec: Double = 90.0) {
         if (phase != TripPhase.atStation) return

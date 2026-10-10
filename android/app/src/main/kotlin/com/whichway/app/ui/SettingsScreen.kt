@@ -69,6 +69,13 @@ fun SettingsScreen(data: AppData, modifier: Modifier = Modifier) {
         PlacesSection(data, stores, loc)
         PaceSection(stores)
         SharingSection(stores)
+        val classic by stores.classicGo.collectAsStateWithLifecycle()
+        Text("Go tab", style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Classic layout", modifier = Modifier.weight(1f))
+            androidx.compose.material3.Switch(classic, { stores.setClassicGo(it) })
+        }
+        Caption("The one long page with the route list and the five views, in place of the three pages (home, line, routes).")
         Card(Modifier.clickable { developer = true }) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Developer", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
