@@ -34,12 +34,59 @@ struct DelayModel: Decodable {
         var byCause: [String: Row]?
         enum CodingKeys: String, CodingKey { case all, byCause = "by_cause" }
     }
+    struct Prewarn: Decodable {
+        struct Rate: Decodable {
+            var n: Int
+            var pAlert30: Double
+            var pAlert60: Double
+            enum CodingKeys: String, CodingKey { case n, pAlert30 = "p_alert_30", pAlert60 = "p_alert_60" }
+        }
+        struct Severity: Decodable {
+            var loss: String
+            var trains: String
+            var lossLo: Double
+            var minTrains: Int
+            var n: Int
+            var pAlert30: Double
+            var pAlert60: Double
+            /// the station-local rows carry what chance alone gives and the lift over it
+            var chance30: Double?
+            var lift30: Double?
+            var chance60: Double?
+            var lift60: Double?
+            enum CodingKeys: String, CodingKey { case loss, trains, lossLo = "loss_lo", minTrains = "min_trains", n, pAlert30 = "p_alert_30", pAlert60 = "p_alert_60",
+                                                 chance30 = "chance_30", lift30 = "lift_30", chance60 = "chance_60", lift60 = "lift_60" }
+        }
+        /// The station-local test: an alert naming a stop within a few of the slowdown's segment, against chance.
+        struct Local: Decodable {
+            struct FromSlowdowns: Decodable {
+                var n: Int
+                var pAlert30: Double
+                var chance30: Double?
+                var lift30: Double?
+                var pAlert60: Double
+                var chance60: Double?
+                var lift60: Double?
+                var bySeverity: [Severity]?
+                enum CodingKeys: String, CodingKey { case n, pAlert30 = "p_alert_30", chance30 = "chance_30", lift30 = "lift_30", pAlert60 = "p_alert_60",
+                                                     chance60 = "chance_60", lift60 = "lift_60", bySeverity = "by_severity" }
+            }
+            var fromSlowdowns: FromSlowdowns?
+            enum CodingKeys: String, CodingKey { case fromSlowdowns = "from_slowdowns" }
+        }
+        var all: Rate?
+        var bySeverity: [Severity]?
+        var byRoute: [String: Rate]?
+        var local: Local?
+        enum CodingKeys: String, CodingKey { case all, bySeverity = "by_severity", byRoute = "by_route", local }
+    }
     var version: Int
     var gridMin: Double
     var nEvents: Int
     var lifetime: Lifetime
     var stale: Stale
-    enum CodingKeys: String, CodingKey { case version, gridMin = "grid_min", nEvents = "n_events", lifetime, stale }
+    var prewarn: Prewarn?
+    enum CodingKeys: String, CodingKey { case version, gridMin = "grid_min", nEvents = "n_events", lifetime, stale, prewarn }
 
     static let minGroupN = 8
     /// A line whose trains run within two minutes of the timetable reads as normal.
@@ -143,6 +190,62 @@ struct DelayModel: Decodable {
                                text: bits.joined(separator: " · ") + " → \(status.rawValue)", short: short)
     }
 
+    // MARK: the pre-warning
+
+    /// Slowdowns the boards show right now: on one segment of a line, at least two trains and at least 60% of
+    /// those whose last run the phone timed lost two minutes or more against the scheduled run (the server's
+    /// detector over the arrivals, read here from the trains' last runs). Scored with the share of such slowdowns
+    /// a delay alert naming a nearby station followed within 30 and 60 minutes, by what the trains lost, against chance (the
+    /// station-local tables; the line-level ones when the model lacks them). It is a slowdown notice first: the alert clause
+    /// is added only where the record shows a real lift over chance, the heaviest slowdowns.
+    func prewarnings(boards: [LineBoard], alerts: [RouteAlert], stopName: (String, String) -> String?) -> [PreWarning] {
+        guard let pwm = prewarn, let all = pwm.all else { return [] }
+        let alerted = Set(alerts.filter { $0.kind == "delay" && ($0.type ?? "").lowercased().contains("delay") }.flatMap { $0.routes })
+        var out: [PreWarning] = []
+        for b in boards {
+            var groups: [String: [(loss: Double, from: String, to: String)]] = [:]
+            for t in b.trains where t.started {
+                guard let lr = t.lastRun, !lr.assumedFrom, let d = lr.distM, let sched = lr.schedSpeedKmh, sched > 0 else { continue }
+                let schedRun = d / (sched / 3.6)
+                groups["\(lr.fromStop)>\(lr.toStop)", default: []].append((lr.runSec - schedRun, lr.fromStop, lr.toStop))
+            }
+            for (_, runs) in groups {
+                let slow = runs.filter { $0.loss >= DelayModel.normalLatenessSec }
+                guard runs.count >= 2, slow.count >= 2, Double(slow.count) / Double(runs.count) >= 0.6 else { continue }
+                let loss = slow.map(\.loss).reduce(0, +) / Double(slow.count)
+                var p30 = all.pAlert30, p60 = all.pAlert60, lift = 1.0
+                var basis = "all slowdowns on the line"
+                if let loc = pwm.local?.fromSlowdowns {
+                    // the station-local record: an alert naming a stop near the segment, against what chance gives
+                    p30 = loc.pAlert30; p60 = loc.pAlert60; lift = loc.lift30 ?? 1; basis = "all slowdowns, an alert nearby"
+                    if let best = (loc.bySeverity ?? []).filter({ loss >= $0.lossLo && ($0.minTrains == 3 ? slow.count >= 3 : slow.count == 2) }).max(by: { $0.lossLo < $1.lossLo }) {
+                        p30 = best.pAlert30; p60 = best.pAlert60; lift = best.lift30 ?? 1; basis = "\(best.trains) losing \(best.loss), an alert nearby"
+                    }
+                } else {
+                    if let best = (pwm.bySeverity ?? []).filter({ loss >= $0.lossLo && ($0.minTrains == 3 ? slow.count >= 3 : slow.count == 2) }).max(by: { $0.lossLo < $1.lossLo }) {
+                        p30 = best.pAlert30; p60 = best.pAlert60; basis = "\(best.trains) losing \(best.loss)"
+                    }
+                    if let r = pwm.byRoute?[b.route], all.pAlert30 > 0 {
+                        p30 = min(0.98, p30 * (0.5 + 0.5 * r.pAlert30 / all.pAlert30))
+                        p60 = min(0.98, p60 * (0.5 + 0.5 * (all.pAlert60 > 0 ? r.pAlert60 / all.pAlert60 : 1)))
+                        basis += ", the \(b.route)"
+                    }
+                }
+                let from = stopName(b.key, slow[0].from) ?? slow[0].from, to = stopName(b.key, slow[0].to) ?? slow[0].to
+                let way = b.direction == "N" ? "uptown" : (b.direction == "S" ? "downtown" : "")
+                let covered = alerted.contains(b.route)
+                // a slowdown notice first; the alert clause only where the record shows a real lift over chance
+                let claim = (!covered && lift >= 1.5 && p30 >= 0.04)
+                    ? " · an alert nearby follows \(Int((p30 * 100).rounded()))% of such slowdowns within 30 min, \(Int(lift.rounded()))× the usual" : ""
+                let text = "\(b.route) \(way): \(slow.count) of \(runs.count) trains lost \(Fmt.minTxt(loss)) between \(from) and \(to)"
+                    + (covered ? " · a delay alert is posted" : " · no alert yet") + claim
+                out.append(PreWarning(route: b.route, key: b.key, direction: b.direction, fromStop: slow[0].from, toStop: slow[0].to, fromName: from, toName: to,
+                                      lossSec: loss, nSlow: slow.count, nTrains: runs.count, alerted: covered, pAlert30: p30, pAlert60: p60, lift30: lift, basis: basis, text: text))
+            }
+        }
+        return out.sorted { ($0.alerted ? 1 : 0, -$0.lossSec * Double($0.nSlow)) < ($1.alerted ? 1 : 0, -$1.lossSec * Double($1.nSlow)) }
+    }
+
     // MARK: reading the alert's text (mirrors mta_delay_insights/sources/alerts.py and analysis/delay_lifecycle.py)
 
     static let causePatterns: [(String, String)] = [
@@ -204,6 +307,28 @@ struct DelayModel: Decodable {
         if h.range(of: "\\bdowntown\\b|\\bsouthbound\\b|brooklyn-bound", options: .regularExpression) != nil { return "S" }
         return "unknown"
     }
+}
+
+/// A slowdown the boards show on one segment, before any alert: the pre-warning.
+struct PreWarning: Identifiable {
+    var id: String { "\(key)|\(fromStop)>\(toStop)" }
+    var route: String
+    var key: String
+    var direction: String
+    var fromStop: String
+    var toStop: String
+    var fromName: String
+    var toName: String
+    var lossSec: Double
+    var nSlow: Int
+    var nTrains: Int
+    var alerted: Bool
+    var pAlert30: Double
+    var pAlert60: Double
+    /// how many times chance the 30-minute figure is (1 where the model has no station-local table)
+    var lift30: Double
+    var basis: String
+    var text: String
 }
 
 /// What the model makes of one live alert.

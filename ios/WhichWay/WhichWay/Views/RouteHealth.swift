@@ -132,6 +132,16 @@ func routeHealth(_ option: PathOption, data: DataService) -> RouteHealth {
             if a.kind == "delay" { add(ev.corroborated ? 2 : 0, "delay alert on the \(routes)") }
             else if a.kind == "planned" { add(ev.corroborated ? 1 : 0, "planned work on the \(routes)") }
         }
+        // a slowdown the boards show on the leg's lines with no alert yet: the pre-warning
+        if let m = data.delayModel, let sched = data.schedule {
+            let boards = leg.keys.compactMap { data.boards[$0] }
+            for w in m.prewarnings(boards: boards, alerts: data.alerts, stopName: { key, stop in
+                guard let line = sched.lines[key], let i = line.stops.firstIndex(of: stop), i < line.names.count else { return nil }
+                return line.names[i]
+            }) where !w.alerted {
+                add(w.lossSec >= 300 && w.nSlow >= 3 ? 2 : 1, w.text)
+            }
+        }
         for k in leg.keys where !seenKeys.contains(k) {
             seenKeys.insert(k)
             if let b = data.boards[k], b.nHolding + b.nStalled > 0 {

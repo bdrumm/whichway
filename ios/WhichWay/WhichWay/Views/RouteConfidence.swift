@@ -112,6 +112,18 @@ func routeConfidence(_ option: PathOption, itinerary: Itinerary?, outlook: HoldO
                 else if s.status == .fresh { take(0.08, "a delay alert on the \(a.routes.joined(separator: "/")) just posted") }
             }
         }
+        // a slowdown with no alert yet on the route's lines: the pre-warning, weighed by what the trains are losing
+        // (an alert rarely follows even the heaviest, so the loss itself is the evidence)
+        if let sched = data.schedule {
+            let boards = option.legs.flatMap { $0.keys }.compactMap { data.boards[$0] }
+            let warns = m.prewarnings(boards: boards, alerts: data.alerts, stopName: { key, stop in
+                guard let line = sched.lines[key], let i = line.stops.firstIndex(of: stop), i < line.names.count else { return nil }
+                return line.names[i]
+            }).filter { !$0.alerted }
+            if let w = warns.first {
+                take(min(0.2, 0.06 + w.lossSec / 3000), "trains losing \(Fmt.minTxt(w.lossSec)) on the \(w.route) between \(w.fromName) and \(w.toName), no alert yet")
+            }
+        }
     }
 
     score = max(0, min(1, score))

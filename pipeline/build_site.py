@@ -443,9 +443,19 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     (out_data / "lines.json").write_text(json.dumps(lines, default=str))
     cur_alerts = current_alerts(alerts, now.timestamp())
     delay_model = assess_current_alerts(cur_alerts, live, now.timestamp())
+    prewarns: list[dict] = []
     if delay_model:
         (out_data / "delay_model.json").write_text(json.dumps(delay_model, separators=(",", ":")))
-    (out_data / "alerts.json").write_text(json.dumps({"generated_at": now.isoformat(), "alerts": cur_alerts}, default=str))
+        try:
+            from mta_delay_insights.analysis.schedule_match import match_arrivals
+            from mta_delay_insights.realtime import delay_service
+            recent = store.arrivals(None, now.timestamp() - 3600, now.timestamp() + 1)
+            if recent is not None and not recent.empty:
+                prewarns = delay_service.prewarnings(match_arrivals(recent, static), [a for a in cur_alerts if a.get("active_now")], delay_model,
+                                                     now.timestamp(), stop_name=static.stop_name)
+        except Exception as exc:
+            logging.warning("pre-warnings failed: %s", exc)
+    (out_data / "alerts.json").write_text(json.dumps({"generated_at": now.isoformat(), "alerts": cur_alerts, "prewarnings": prewarns}, default=str))
     # Collection status: arrivals per day and run log.
     arr_all = store.arrivals()
     per_day = {}

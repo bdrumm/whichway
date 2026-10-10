@@ -174,6 +174,53 @@ def assess_alerts(alerts_now: pd.DataFrame | list[dict], model: dict, now: float
     return out
 
 
+def prewarnings(matched_recent: pd.DataFrame, alerts_now: pd.DataFrame | list[dict], model: dict, now: float | None = None,
+                stop_name=None, hold_sec: float = 2 * 300) -> list[dict]:
+    """Slowdowns holding right now (analysis/prewarn.py's episodes over the last hour of schedule-matched arrivals),
+    each with where it is, since when, what the trains lost, whether a delay alert already covers the line, and the
+    share of such slowdowns an alert naming a nearby station followed within 30 and 60 minutes, with its lift over
+    chance. The pre-warning for a line with no alert: a slowdown notice first, with the alert clause in the text
+    only where the record shows a real lift."""
+    from ..analysis import prewarn as pw
+    now = now or time.time()
+    pwm = model.get("prewarn") or {}
+    if matched_recent is None or matched_recent.empty or not pwm.get("all"):
+        return []
+    losses = pw.segment_losses(matched_recent)
+    eps = pw.slowdown_episodes(losses)
+    if eps.empty:
+        return []
+    eps = eps[eps["end_ts"] >= now - hold_sec]
+    rows = alerts_now.to_dict(orient="records") if isinstance(alerts_now, pd.DataFrame) else list(alerts_now or [])
+    alerted = set()
+    for a in rows:
+        if alert_kind(a.get("alert_type"), a.get("header") or "") == "delay" and "delay" in str(a.get("alert_type") or "").lower():
+            alerted |= {str(r) for r in (a.get("routes") or [])}
+    name = stop_name or (lambda s: s)
+    out = []
+    for e in eps.itertuples(index=False):
+        route = str(e.route_id)
+        p30, p60, lift, basis = pw.score_slowdown(pwm, route, float(e.peak_loss_sec), int(e.peak_n_slow), e.band)
+        covered = route in alerted
+        since = max(0.0, (now - e.onset_ts) / 60)
+        where = f"{name(e.from_stop)} → {name(e.to_stop)}"
+        way = {"N": "uptown", "S": "downtown"}.get(e.direction, "")
+        text = (f"{route} {way}: {e.peak_n_slow} of {e.peak_n} trains lost {e.peak_loss_sec / 60:.1f} min between {where} over the last 20 min, "
+                f"since {time.strftime('%-H:%M', time.localtime(e.onset_ts))}")
+        if covered:
+            text += " · a delay alert is already posted"
+        else:
+            text += " · no alert yet"
+            if lift >= 1.5 and p30 >= 0.04:
+                text += f" · an alert nearby follows {p30:.0%} of such slowdowns within 30 min, {lift:.0f}× the usual"
+        out.append({"route": route, "direction": e.direction, "from_stop": e.from_stop, "to_stop": e.to_stop, "where": where,
+                    "onset_ts": float(e.onset_ts), "since_min": round(since, 1), "loss_sec": round(float(e.peak_loss_sec)), "n_slow": int(e.peak_n_slow),
+                    "n_trains": int(e.peak_n), "alerted": covered, "p_alert_30": round(p30, 3), "p_alert_60": round(p60, 3), "lift_30": round(lift, 2),
+                    "basis": basis, "text": text})
+    out.sort(key=lambda x: (x["alerted"], -x["loss_sec"] * x["n_slow"]))
+    return out
+
+
 def feed_from_routes(routes: list[dict]) -> dict:
     """`feed` for assess_alerts from the live snapshot's per-route summaries (realtime.status.route_status): both
     directions of a route pooled, the median lateness weighted by trains, held and stalled counted together."""
