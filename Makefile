@@ -83,7 +83,11 @@ ios-organizer: ## Archive the app (Release) and hand it to Xcode's Organizer, to
 ios-fixtures: ## Regenerate the Swift predictor fixture from the Python reference
 	$(PYTHON) ios/WhichWayCore/Tests/make_fixtures.py
 
+delay-model: ## Refit the delay-alert lifecycle model from this Mac's store: data/delay_model.json (published by the site build, force-added to git) + docs/delay_model_report.md
+	$(PYTHON) -m pipeline.delay_model --store data/mta.sqlite --out data/delay_model.json --report docs/delay_model_report.md
+	cp data/delay_model.json ios/WhichWay/WhichWay/Resources/Seed/delay_model.json
+
 ios-seed: ## Refresh the tables built into the app (its last resort when the data site is unreachable) from gh-pages
-	@for f in client_schedule.json client_lines.json client_model.json holds.json segments.json client_geometry.json; do \
+	@for f in client_schedule.json client_lines.json client_model.json holds.json segments.json client_geometry.json delay_model.json; do \
 	  curl -sfL -o ios/WhichWay/WhichWay/Resources/Seed/$$f https://raw.githubusercontent.com/bdrumm/whichway/gh-pages/data/$$f && echo "  $$f"; done
 	@du -sh ios/WhichWay/WhichWay/Resources/Seed

@@ -33,7 +33,8 @@ CAUSE_PATTERNS: list[tuple[str, str]] = [
     ("signal", r"signal(s|ling)? (problem|malfunction|failure|trouble|issue|work|maintenance)|signal(s)?\b"),
     ("switch", r"switch (problem|trouble|malfunction|failure)"),
     ("track", r"rail condition|track (condition|problem|fire|maintenance|work|replacement|inspection|defect)|broken rail|switch"),
-    ("rolling_stock", r"mechanical (problem|issue)|door (problem|issue)|brakes?|disabled train|train with mechanical"),
+    ("rolling_stock", r"mechanical (problem|issue)|door (problem|issue)|brakes?|disabled train|train with mechanical"
+                      r"|(removed|moved) a train|train (car|from service)|train that (had|has|needed)|in need of cleaning"),
     ("power", r"power (problem|loss|outage)|third rail|electrical|con ?ed(ison)?"),
     ("obstruction", r"debris|obstruction|object on the track|tree"),
     ("water_weather", r"flood|water condition|\bweather\b|\bsnow\b|\bice\b|\bheat\b|\bstorm\b|\bwind\b|hurricane|lightning"),

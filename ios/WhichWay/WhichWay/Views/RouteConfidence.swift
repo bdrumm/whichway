@@ -101,6 +101,19 @@ func routeConfidence(_ option: PathOption, itinerary: Itinerary?, outlook: HoldO
     if held > 0 { take(min(0.1, 0.05 * Double(held)), "\(held) train\(held == 1 ? "" : "s") held or overdue on the way") }
     if knock > 0 { take(min(0.1, 0.05 * Double(knock)), "\(knock) held back by the train ahead") }
 
+    // a delay alert the feed still bears out, by the lifecycle model; a stale or standing one costs nothing
+    if let m = data.delayModel {
+        var seenAlerts = Set<String>()
+        for leg in option.legs {
+            for a in data.alertsFor(routes: leg.routes) where a.kind == "delay" && !seenAlerts.contains(a.id) && (a.type ?? "").lowercased().contains("delay") {
+                seenAlerts.insert(a.id)
+                let s = m.assess(a, now: data.now, boards: data.boards.values.filter { a.routes.contains($0.route) })
+                if s.status == .active { take(0.15, "a delay alert on the \(a.routes.joined(separator: "/")) the feed bears out") }
+                else if s.status == .fresh { take(0.08, "a delay alert on the \(a.routes.joined(separator: "/")) just posted") }
+            }
+        }
+    }
+
     score = max(0, min(1, score))
     let why = penalties.filter { $0.0 > 0 }.sorted { $0.0 > $1.0 }.map { $0.1 }
     if why.isEmpty {

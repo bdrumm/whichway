@@ -76,6 +76,8 @@ final class DataService {
     @ObservationIgnored private var geometryRequested = false
     /// The prediction engine's tables (data/client_model.json); nil means physical priors.
     private(set) var model: ClientModel?
+    /// The delay-alert lifecycle model (delay_model.json): how long alerts stay posted and when they go stale.
+    private(set) var delayModel: DelayModel?
     /// Per line key, the engine's projections per scenario ("baseline" always; the hold scenarios when a train is held).
     private(set) var predictions: [String: [String: LinePrediction]] = [:]
     /// Boards whose points are the engine's ETAs for the chosen scenario (the planner and diagrams read these).
@@ -231,6 +233,7 @@ final class DataService {
         holds = try? await fetchJSON(HoldsSummary.self, "holds.json")
         segments = try? await fetchJSON(SegmentsSummary.self, "segments.json")
         model = try? await fetchJSON(ClientModel.self, "client_model.json")
+        delayModel = try? await fetchJSON(DelayModel.self, "delay_model.json")
         deviations = [:]
         deviationRequested = []
         for k in wanted { requestDeviation(k) }

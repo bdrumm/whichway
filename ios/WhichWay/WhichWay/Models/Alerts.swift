@@ -12,6 +12,8 @@ struct RouteAlert: Identifiable {
     var start: Double?
     var end: Double?
     var stops: [String] = []      // GTFS stop ids the alert names (stations or platforms), when it is stop-specific
+    var createdAt: Double? = nil  // when the MTA posted it (the Mercury extension), for the delay model
+    var updatedAt: Double? = nil
 }
 
 enum Alerts {
@@ -38,6 +40,7 @@ enum Alerts {
             let routes = Array(Set(informed.compactMap { $0["route_id"] as? String })).sorted()
             let stops = Array(Set(informed.compactMap { $0["stop_id"] as? String })).sorted()
             let updated = num(merc["updated_at"])
+            let created = num(merc["created_at"])
             var periods = (a["active_period"] as? [[String: Any]]) ?? []
             if periods.isEmpty { periods = [[:]] }
             let id = (ent["id"] as? String) ?? UUID().uuidString
@@ -48,7 +51,8 @@ enum Alerts {
                 if endEff == nil, let s = start { endEff = s + 3 * 3600 }
                 if let s = start, s > now { continue }
                 if let e = endEff, e < now { continue }
-                out.append(RouteAlert(id: "\(id)#\(i)", kind: kind(type: type, header: header), type: type, header: header, routes: routes, start: start, end: end, stops: stops))
+                out.append(RouteAlert(id: "\(id)#\(i)", kind: kind(type: type, header: header), type: type, header: header, routes: routes, start: start, end: end, stops: stops,
+                                      createdAt: created, updatedAt: updated))
             }
         }
         let rank = ["delay": 0, "planned": 1, "notice": 2]

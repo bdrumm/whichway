@@ -125,9 +125,30 @@ def current_alerts(alerts: pd.DataFrame, now_ts: float, lookback_h: float = 24) 
         out.append({"alert_id": r.alert_id, "alert_type": r.alert_type, "planned": bool(r.planned),
                     "kind": alert_kind(r.alert_type, r.header),
                     "cause_category": r.cause_category, "active_start": _n(r.active_start), "active_end": _n(r.active_end),
+                    "created_at": _n(getattr(r, "created_at", None)),
                     "updated_at": _n(r.updated_at), "routes": list(r.routes), "header": r.header,
                     "active_now": bool(start <= now_ts <= float(r.end_ts))})
     return out[:400]
+
+
+def assess_current_alerts(cur: list[dict], live: dict | None, now_ts: float, model_path: Path = Path("data/delay_model.json")) -> dict | None:
+    """Read the active unplanned delay alerts against the lifecycle model (pipeline/delay_model.py) and the live
+    snapshot's per-route lateness; each gets an `assessment`. Returns the model, to publish beside the alerts."""
+    if not model_path.exists():
+        return None
+    try:
+        model = json.loads(model_path.read_text())
+        from mta_delay_insights.realtime import delay_service
+        feed = delay_service.feed_from_routes(live.get("routes", [])) if live else None
+        active = [a for a in cur if a.get("active_now")]
+        assessed = {x["alert_id"]: x for x in delay_service.assess_alerts(active, model, now_ts, feed)}
+        for a in cur:
+            if a["alert_id"] in assessed:
+                a["assessment"] = assessed[a["alert_id"]]
+        return model
+    except Exception as exc:  # the alerts page must not fail on the model
+        logging.warning("delay assessment failed: %s", exc)
+        return None
 
 
 def _n(v):
@@ -420,7 +441,11 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         logging.warning("line insights failed: %s", exc)
         lines = {"months": [], "lines": {}, "system": {}, "categories": [], "error": str(exc)[:300]}
     (out_data / "lines.json").write_text(json.dumps(lines, default=str))
-    (out_data / "alerts.json").write_text(json.dumps({"generated_at": now.isoformat(), "alerts": current_alerts(alerts, now.timestamp())}, default=str))
+    cur_alerts = current_alerts(alerts, now.timestamp())
+    delay_model = assess_current_alerts(cur_alerts, live, now.timestamp())
+    if delay_model:
+        (out_data / "delay_model.json").write_text(json.dumps(delay_model, separators=(",", ":")))
+    (out_data / "alerts.json").write_text(json.dumps({"generated_at": now.isoformat(), "alerts": cur_alerts}, default=str))
     # Collection status: arrivals per day and run log.
     arr_all = store.arrivals()
     per_day = {}

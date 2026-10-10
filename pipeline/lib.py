@@ -134,7 +134,13 @@ def save_alerts(data_dir: Path, df: pd.DataFrame, seen_ts: float) -> int:
         row = {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row.items()}
         row["routes"] = list(row.get("routes") or [])
         row["stops"] = list(row.get("stops") or [])
-        row["last_seen_ts"] = seen_ts
+        # the store's own last-seen (the last poll the feed carried the alert) is the alert's end; the save time
+        # only stands in for rows that never had one. Stamping every row with the save time, as this did until
+        # Oct 10 2026, hid every end inside a run and made lifetimes unmeasurable from the archive.
+        row["last_seen_ts"] = row.get("last_seen_ts") or seen_ts
+        prev = existing.get((row["alert_id"], row.get("active_start")))
+        if prev and (prev.get("last_seen_ts") or 0) > row["last_seen_ts"]:
+            row["last_seen_ts"] = prev["last_seen_ts"]
         existing[(row["alert_id"], row.get("active_start"))] = row
     with gzip.open(f, "wt") as fh:
         json.dump(list(existing.values()), fh)

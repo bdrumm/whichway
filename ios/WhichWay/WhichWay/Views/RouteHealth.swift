@@ -119,8 +119,15 @@ func routeHealth(_ option: PathOption, data: DataService) -> RouteHealth {
     for leg in option.legs {
         for a in data.alertsFor(routes: leg.routes) where !seenAlerts.contains(a.id) {
             seenAlerts.insert(a.id)
-            let ev = alertEvidence(a, data: data)
             let routes = a.routes.joined(separator: "/")
+            // an unplanned delay alert read by the lifecycle model: when it was posted, where, whether the feed
+            // still bears it out; one the feed no longer shows, or that has stood for hours, is context only
+            if a.kind == "delay", let m = data.delayModel, (a.type ?? "").lowercased().contains("delay") {
+                let s = m.assess(a, now: data.now, boards: data.boards.values.filter { a.routes.contains($0.route) })
+                add(s.status == .active ? 2 : (s.status == .fresh || s.status == .aging ? 1 : 0), s.short)
+                continue
+            }
+            let ev = alertEvidence(a, data: data)
             // an alert the feeds bear out carries weight; one they do not is context only
             if a.kind == "delay" { add(ev.corroborated ? 2 : 0, "delay alert on the \(routes)") }
             else if a.kind == "planned" { add(ev.corroborated ? 1 : 0, "planned work on the \(routes)") }
