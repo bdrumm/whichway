@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from mta_delay_insights.analysis import delay_lifecycle as dl
+from mta_delay_insights.analysis import phases as ph
 from mta_delay_insights.analysis import prewarn as pw
 from mta_delay_insights.analysis.schedule_match import match_arrivals
 from mta_delay_insights.sources.alerts import classify_cause
@@ -190,6 +191,54 @@ def report(model: dict, events: pd.DataFrame, rec: pd.DataFrame, sources: dict) 
                  "curve relative to the MTA's stated end when there is one (the cause's curve, shrunk toward all alerts), else from age since creation. "
                  "The feed is then read against it: the line's lateness and held trains now. A line that has looked normal for a while while the alert "
                  "stands is scored stale with the table in section 4: the share of such alerts that were gone within 30 minutes of recovery.\n")
+    phm = model.get("phases") or {}
+    evd, pkm = phm.get("evidence") or {}, phm.get("peak") or {}
+    if evd and phm.get("by_phase"):
+        lines.append("\n## 7. The phases: starting, in effect, waning, stale\n")
+        fe = evd["first_evidence_min"]
+        lines.append(f"The same alerts followed at {phm['bin_min']}-minute bins, as the excess of the arrivals' lateness over the hour before the alert, at the stops within three "
+                     f"of the station named ({evd['share_local']:.0%} of the {evd['n']} followed; the whole line otherwise). The feed showed the delay (two minutes or more over "
+                     f"the baseline) at posting for {evd['share_under_way_at_posting']:.0%}, within 10 min for {evd['share_seen_within_10']:.0%}, within 20 for "
+                     f"{evd['share_seen_within_20']:.0%}, within 30 for {evd['share_seen_within_30']:.0%}, and at some point for {evd['share_seen_ever']:.0%}. Among alerts "
+                     f"that showed, the first evidence came a median {fe['p50']:.0f} min after posting (upper quartile {fe['p75']:.0f}). So the score reads a fresh alert as "
+                     f"*starting* until {evd['never_min']:.0f} min with nothing in the feed, and *unconfirmed* past that: an alert that was going to register has, by then.\n")
+        if pkm.get("n"):
+            lines.append(f"Where the feed showed it ({pkm['n']} alerts), the delay peaked a median {pkm['minutes_to_peak_p50']:.0f} min after posting, at "
+                         f"{pkm['peak_excess_sec_p50'] / 60:.1f} min over the baseline; the stops came back under the margin a median "
+                         f"{pkm['minutes_to_recovery_p50']:.0f} min after posting ({pkm['minutes_peak_to_recovery_p50']:.0f} after the peak), with the alert still up for "
+                         f"{pkm['share_recovered_while_posted']:.0%} of them.\n")
+        lines.append("Each bin of each alert's life labeled with what was knowable then, and how the alert went from there:\n")
+        lines.append("| phase | share of alert-minutes | alerts | median age min | gone within 15 min | within 30 | within 60 |\n|---|---|---|---|---|---|---|")
+        def pct(v):
+            return "–" if v is None else f"{v:.0%}"
+        for pname in ph.PHASES:
+            b = phm["by_phase"].get(pname)
+            if b:
+                lines.append(f"| {pname} | {b['share_of_minutes']:.0%} | {b['n_alerts']} | {b['median_age_min']:.0f} | {pct(b.get('p_gone_15'))} | {pct(b.get('p_gone_30'))} | {pct(b.get('p_gone_60'))} |")
+        if phm.get("phase_by_age"):
+            lines.append("\nWhat a rider sees at each point of an alert's life (share of bins in each phase):\n")
+            lines.append("| age | starting | in effect | waning | stale | unconfirmed |\n|---|---|---|---|---|---|")
+            for band, v in phm["phase_by_age"].items():
+                lines.append(f"| {band} min | {v.get('starting', 0):.0%} | {v.get('in effect', 0):.0%} | {v.get('waning', 0):.0%} | {v.get('stale', 0):.0%} | {v.get('unconfirmed', 0):.0%} |")
+        if phm.get("by_cause"):
+            lines.append("\n| cause | alerts | feed shows it | first evidence min | gone within 30: in effect | waning | stale | unconfirmed |\n|---|---|---|---|---|---|---|---|")
+            for c, v in sorted(phm["by_cause"].items(), key=lambda kv: -kv[1]["n_alerts"]):
+                g = lambda pn: pct((v["phases"].get(pn) or {}).get("p_gone_30"))
+                fm = v.get("first_evidence_min_p50")
+                lines.append(f"| {c} | {v['n_alerts']} | {v['share_seen_ever']:.0%} | {'–' if fm is None else round(fm)} | {g('in effect')} | {g('waning')} | {g('stale')} | {g('unconfirmed')} |")
+        na = phm.get("new_alert") or {}
+        if na:
+            lines.append("\nA new alert, by what the trains showed when it was posted:\n")
+            lines.append("| trains at posting | alerts | feed ever shows it | median lifetime min | gone within 30 min of posting | within 60 |\n|---|---|---|---|---|---|")
+            for k, label in (("trains_late_at_posting", "already late near the station"), ("trains_normal_at_posting", "on time")):
+                v = na.get(k)
+                if v:
+                    ml = v.get("median_lifetime_min")
+                    lines.append(f"| {label} | {v['n']} | {v['share_seen_ever']:.0%} | {'–' if ml is None else round(ml)} | {pct(v.get('p_gone_30_at_start'))} | {pct(v.get('p_gone_60_at_start'))} |")
+        lines.append("\nThe realtime score (delay_service.assess_alert, the app's DelayModel.assess) reads each live alert this way: a status of *active* or *stale*, and the "
+                     "interpretation, starting / in effect / waning / unconfirmed / stale, from the alert's age, the feed's excess lateness near its station now, the peak "
+                     "so far and how long the stops have read normal, with the chance it is gone within 30 minutes from the phase's own record above. The server reads the "
+                     "trajectory from the store's arrivals since posting; the phone from its boards and the lateness it has seen while open.\n")
     lines.append("## Limits\n")
     lines.append("Two weeks of alerts from one collector; ends are only observed while it polls; the station is read from the text, which names "
                  "the place of the cause rather than every stop affected; the feed's lateness is a median over the whole line, so a localised delay "
@@ -216,6 +265,7 @@ def main() -> int:
     stale: dict = {"n_measured": 0}
     rec = pd.DataFrame()
     prewarn: dict = {}
+    phases: dict = {}
     if not args.no_recovery and len(ev):
         static = lib.load_static(args.gtfs)
         lines = {}
@@ -246,6 +296,8 @@ def main() -> int:
         if not matched.empty:
             bins = dl.stop_lateness_bins(matched)
             rec = dl.recovery_lag(ev, bins, windows, lines=lines)
+            phases = ph.calibrate(ev, matched, lines, windows)
+            print(f"phases: {phases.get('n_followed', 0)} alerts followed at {ph.BIN_MIN}-min bins", flush=True)
             stale = dl.stale_tables(rec)
     sources = {"store": args.store, "windows": len(windows), "polling_hours": sum(b - a for a, b in windows) / 3600,
                "first_day": time.strftime("%Y-%m-%d", time.localtime(ev["start_ts"].min())) if len(ev) else None,
@@ -253,6 +305,7 @@ def main() -> int:
                "prewarn_days": args.prewarn_days}
     model = dl.build_model(tables, stale, time.time(), sources)
     model["prewarn"] = prewarn
+    model["phases"] = phases
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(dl.dumps(model))

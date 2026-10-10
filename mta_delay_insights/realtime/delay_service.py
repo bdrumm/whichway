@@ -14,6 +14,7 @@ import time
 import numpy as np
 import pandas as pd
 
+from ..analysis import phases as ph
 from ..analysis.delay_lifecycle import extract_direction, extract_station
 from ..sources.alerts import alert_kind, classify_cause
 
@@ -87,7 +88,65 @@ def clear_probabilities(curve: list[float], grid_start: float, step: float, t: f
     return probs, expected
 
 
-def assess_alert(a: dict, model: dict, now: float, feed: dict | None = None) -> dict:
+PHASE_WORDS = {"starting": "starting", "in effect": "in effect", "waning": "waning", "stale": "stale", "unconfirmed": "no sign in the feed"}
+
+
+def _phase_params(model: dict) -> tuple[float, float, float, float]:
+    """start_min, never_min, margin_sec, stale_min from the calibrated phases, else the module defaults."""
+    phm = model.get("phases") or {}
+    ev = phm.get("evidence") or {}
+    return (float(ev.get("start_min") or ph.DEFAULT_START_MIN), float(ev.get("never_min") or ph.DEFAULT_NEVER_MIN),
+            float(phm.get("margin_sec") or ph.MARGIN_SEC), float(phm.get("stale_min") or ph.STALE_BINS * ph.BIN_MIN))
+
+
+def _phase_gone(model: dict, phase: str, cause: str, h: int = 30, min_n: int = 8) -> float | None:
+    """P(gone within h min) for alerts in this phase, by cause where the record is deep enough, else overall."""
+    phm = model.get("phases") or {}
+    overall = ((phm.get("by_phase") or {}).get(phase) or {}).get(f"p_gone_{h}")
+    row = ((phm.get("by_cause") or {}).get(cause) or {}).get("phases", {}).get(phase)
+    if row and row.get(f"n_gone_{h}", 0) >= min_n and row.get(f"p_gone_{h}") is not None and overall is not None:
+        n = float(row[f"n_gone_{h}"])
+        return float((n * row[f"p_gone_{h}"] + 10 * overall) / (n + 10))      # the cause's own rate, shrunk toward all alerts
+    return None if overall is None else float(overall)
+
+
+def interpret(phase: str, age_min: float, excess_sec: float | None, peak_sec: float, recovered_min: float | None, seen: bool,
+              p_gone_30: float | None, never_min: float, where: str = "", expected_remaining_min: float | None = None) -> str:
+    """One line for a rider: the phase and what in the feed says so."""
+    gone = f"{p_gone_30:.0%} of such alerts gone within 30 min" if p_gone_30 is not None else None
+    at = f" {where}" if where else ""
+    if phase == "in effect":
+        bits = [f"trains {max(excess_sec or 0, 0) / 60:.0f} min late{at}, {age_min:.0f} min in"]
+        if expected_remaining_min is not None:
+            bits.append(f"typically {expected_remaining_min:.0f} min to go")
+    elif phase == "waning":
+        if excess_sec is not None and excess_sec >= 0.5 * ph.MARGIN_SEC and peak_sec > 0 and excess_sec < peak_sec:
+            bits = [f"delay down to {excess_sec / 60:.0f} min from {peak_sec / 60:.0f}{at}"]
+        elif recovered_min is not None:
+            bits = [f"trains back to normal{at} {recovered_min:.0f} min ago" if recovered_min >= 1 else f"trains just back to normal{at}"]
+        else:
+            bits = [f"trains back to normal{at}"]
+        if gone:
+            bits.append(gone)
+    elif phase == "stale":
+        if seen and recovered_min is not None:
+            bits = [f"trains normal{at} for {recovered_min:.0f} min after a {peak_sec / 60:.0f} min delay"]
+        elif seen:
+            bits = [f"trains normal{at} again"]
+        else:
+            bits = [f"posted {age_min / 60:.0f} h ago with nothing in the feed{at} since"]
+        if gone:
+            bits.append(gone)
+    elif phase == "starting":
+        bits = [f"posted {age_min:.0f} min ago, nothing in the feed{at} yet; alerts that register do so within {never_min:.0f} min"]
+    else:  # unconfirmed
+        bits = [f"nothing in the feed{at} {age_min:.0f} min after posting"]
+        if gone:
+            bits.append(gone)
+    return f"{PHASE_WORDS.get(phase, phase)} · " + " · ".join(bits)
+
+
+def assess_alert(a: dict, model: dict, now: float, feed: dict | None = None, history: dict | None = None) -> dict:
     routes = [str(r) for r in (a.get("routes") or [])]
     header = a.get("header") or ""
     cause = a.get("cause_category") or classify_cause(header)
@@ -140,6 +199,39 @@ def assess_alert(a: dict, model: dict, now: float, feed: dict | None = None) -> 
     station = extract_station(header)
     direction = extract_direction(header)
     where = (station + " · " if station else "") + "/".join(routes) + {"N": " uptown", "S": " downtown", "both": " both ways", "unknown": ""}[direction]
+
+    # the phase: from the alert's trajectory in the store (the server), else from the feed's reading now alone
+    start_min, never_min, margin, stale_min = _phase_params(model)
+    if history and history.get("phase"):
+        phase = str(history["phase"])
+        excess_now = history.get("excess_now_sec")
+        peak = float(history.get("peak_excess_sec") or 0.0)
+        recovered_min = history.get("recovered_min")
+        h_seen = bool(history.get("seen"))
+        local = bool(history.get("local"))
+        # the boards are fresher than the store's bins: trains late near the station now is in effect whatever the bins said
+        if feed_active and phase in ("stale", "unconfirmed", "starting"):
+            phase, excess_now, peak = "in effect", max(late, excess_now or 0.0), max(peak, late)
+            h_seen = True
+    else:
+        excess_now = late if seen and n >= 2 else None
+        h_seen = feed_active
+        peak = late if feed_active else 0.0
+        recovered_min = None
+        local = False
+        phase = ph.phase_now(age, excess_now, h_seen, peak, recovered_min, start_min, never_min, margin, stale_min=stale_min)
+    if age >= 240 and phase in ("unconfirmed", "starting"):
+        phase = "stale"       # a notice standing for hours with nothing in the feed is boilerplate, not a delay
+    p_gone_30 = _phase_gone(model, phase, cause, 30)
+    if p_gone_30 is None:
+        p_gone_30 = float(probs[30])
+    # the chip: active while the alert is starting, in effect or waning; stale once the feed has read normal for a
+    # while after the delay, or never showed it in the time alerts that register take to (the calibration: alerts in
+    # either state end at much the same rate, 37-46% gone within 30 min, against 30% in effect)
+    is_active = phase in ("starting", "in effect", "waning")
+    near = (f"near {station}" if station and local else "on the " + "/".join(routes))
+    interpretation = interpret(phase, age, excess_now, peak, recovered_min, h_seen, p_gone_30, never_min, near,
+                               expected if phase == "in effect" else None)
     posted = time.strftime("%-H:%M", time.localtime(created))
     bits = [f"{CAUSE_WORDS.get(cause, cause)} on the {'/'.join(routes)}" + (f" at {station}" if station else ""),
             f"posted {posted} ({age:.0f} min ago)"]
@@ -155,10 +247,18 @@ def assess_alert(a: dict, model: dict, now: float, feed: dict | None = None) -> 
         "expected_remaining_min": round(expected, 1), "basis": basis,
         "feed": {"seen": seen, "lateness_sec": round(late), "n_trains": int(n), "n_held": int(held)},
         "stale_score": round(float(stale), 3), "status": status, "text": " · ".join(bits) + f" → {status}",
+        "phase": phase, "active": bool(is_active), "priority": ph.PRIORITY.get(phase, 9), "p_gone_30_phase": round(float(p_gone_30), 3),
+        "interpretation": interpretation,
+        "trajectory": {"excess_now_sec": None if excess_now is None else round(float(excess_now)), "peak_excess_sec": round(float(peak)),
+                       "recovered_min": None if recovered_min is None else round(float(recovered_min), 1), "seen": bool(h_seen),
+                       "local": bool(local), "bins": (history or {}).get("bins") or []},
     }
 
 
-def assess_alerts(alerts_now: pd.DataFrame | list[dict], model: dict, now: float | None = None, feed: dict | None = None) -> list[dict]:
+def assess_alerts(alerts_now: pd.DataFrame | list[dict], model: dict, now: float | None = None, feed: dict | None = None,
+                  histories: dict | None = None) -> list[dict]:
+    """Every live unplanned delay alert assessed, in the order a rider should read them: in effect, starting, waning,
+    unconfirmed, stale; within a phase the later trains first. `histories`: alert_id -> summarize_trajectory()."""
     now = now or time.time()
     rows = alerts_now.to_dict(orient="records") if isinstance(alerts_now, pd.DataFrame) else list(alerts_now)
     out = []
@@ -169,8 +269,37 @@ def assess_alerts(alerts_now: pd.DataFrame | list[dict], model: dict, now: float
             continue
         if set(str(r) for r in (a.get("routes") or [])) <= {"SI"}:
             continue
-        out.append(assess_alert(a, model, now, feed))
-    out.sort(key=lambda x: (x["status"] == "standing", x["stale_score"], -x["age_min"]))
+        out.append(assess_alert(a, model, now, feed, (histories or {}).get(a.get("alert_id"))))
+    out.sort(key=lambda x: (x["priority"], -(x["trajectory"].get("excess_now_sec") or 0), x["age_min"]))
+    return out
+
+
+def alert_histories(store, static, lines: dict, alerts_now: list[dict], model: dict, now: float, reach: int = 3) -> dict:
+    """Each live delay alert's trajectory from the store's arrivals since an hour before it was posted, summarized
+    for assess_alert: the phase by the calibrated rules, the excess now, the peak and the recovery."""
+    from ..analysis.schedule_match import match_arrivals
+    start_min, never_min, _, _ = _phase_params(model)
+    out: dict = {}
+    for a in alerts_now:
+        routes = [str(r) for r in (a.get("routes") or [])]
+        header = a.get("header") or ""
+        if not routes or alert_kind(a.get("alert_type"), header) != "delay" or "delay" not in str(a.get("alert_type") or "").lower():
+            continue
+        created = float(a.get("created_at") or a.get("active_start") or now)
+        try:
+            arr = store.arrivals(None, created - ph.PRE_MIN * 60, now + 1, route_ids=routes)
+            if arr is None or arr.empty:
+                continue
+            m = match_arrivals(arr, static)
+            bins = ph.stop_lateness_bins(m, ph.BIN_MIN)
+            stops = ph.station_stops(extract_station(header), routes, extract_direction(header), lines or {}, reach)
+            t = ph.trajectory(bins, created, now, routes, stops or None)
+            if t.empty:
+                continue
+            t.attrs["local"] = bool(stops)
+            out[a.get("alert_id")] = ph.summarize_trajectory(t, now, start_min, never_min)
+        except Exception as exc:  # one alert's history must not block the rest
+            out[a.get("alert_id")] = {"phase": None, "error": str(exc)[:120]}
     return out
 
 

@@ -151,14 +151,17 @@ struct RouteInsightsView: View {
 
     private var alerts: some View {
         let routes = Array(Set(option.legs.flatMap { $0.routes })).sorted()
-        let list = data.alertsFor(routes: routes)
+        let list = data.rankedAlerts(routes: routes)
         return Section("Alerts on these lines") {
             if list.isEmpty { Text("None active.").font(.caption).foregroundStyle(.secondary) }
-            ForEach(list) { a in
+            ForEach(list, id: \.alert.id) { x in
+                let a = x.alert
                 let ev = alertEvidence(a, data: data)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(a.kind): \(a.header)").font(.caption).foregroundStyle(a.kind == "delay" ? Color.red : Color.primary)
-                    Text(ev.text).font(.caption2.weight(.medium)).foregroundStyle(ev.corroborated ? Color.red : Color.secondary)
+                    Text("\(a.kind)\(x.assessment.map { " · \($0.active ? "active" : "stale")" } ?? ""): \(a.header)").font(.caption)
+                        .foregroundStyle(a.kind == "delay" && (x.assessment?.active ?? true) ? Color.red : Color.primary)
+                    Text(x.assessment?.interpretation ?? ev.text).font(.caption2.weight(.medium))
+                        .foregroundStyle((x.assessment?.active ?? ev.corroborated) ? Color.red : Color.secondary)
                 }
             }
         }

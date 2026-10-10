@@ -97,11 +97,16 @@ struct LineBoardView: View {
                     }
                     // alerts that touch this route directly come first: station and entrance notices at its stops, skipped
                     // stops, and line-wide delays on its lines
-                    let direct = data.alertsAffecting(legs: legs, schedule: sched)
+                    // the model's reading orders them: in effect, starting, waning, no sign, stale, then planned work and notices
+                    let direct = data.alertsAffecting(legs: legs, schedule: sched).map { ($0.alert, $0.station, data.assess($0.alert)) }.sorted { x, y in
+                        let px = x.2?.priority ?? (x.0.kind == "delay" ? 5 : (x.0.kind == "planned" ? 6 : 7))
+                        let py = y.2?.priority ?? (y.0.kind == "delay" ? 5 : (y.0.kind == "planned" ? 6 : 7))
+                        return px != py ? px < py : (x.2?.excessSec ?? 0) > (y.2?.excessSec ?? 0)
+                    }
                     if !direct.isEmpty {
                         Text("Affects your route").font(.subheadline.bold()).padding(.top, 2)
-                        ForEach(direct.prefix(4), id: \.alert.id) { item in
-                            AlertCard(alert: item.alert, evidence: alertEvidence(item.alert, data: data), station: item.station)
+                        ForEach(direct.prefix(4), id: \.0.id) { item in
+                            AlertCard(alert: item.0, evidence: alertEvidence(item.0, data: data), station: item.1, assessment: item.2)
                         }
                     }
                 } else {
@@ -143,10 +148,10 @@ struct LineBoardView: View {
                         }
                         ScenarioPicker()
                         let directIds = Set((data.focus?.legs).map { data.alertsAffecting(legs: $0, schedule: sched).map { $0.alert.id } } ?? [])
-                        let alerts = data.alertsFor(routes: [route]).filter { !directIds.contains($0.id) }
+                        let alerts = data.rankedAlerts(routes: [route]).filter { !directIds.contains($0.alert.id) }
                         if !alerts.isEmpty {
                             Text(directIds.isEmpty ? "Alerts on the \(route)" : "Other alerts on the \(route)").font(.subheadline.bold()).padding(.top, 2)
-                            ForEach(alerts.prefix(3)) { a in AlertCard(alert: a, evidence: alertEvidence(a, data: data)) }
+                            ForEach(alerts.prefix(4), id: \.alert.id) { x in AlertCard(alert: x.alert, evidence: alertEvidence(x.alert, data: data), assessment: x.assessment) }
                         }
                         ForEach(b.trains) { t in TrainRow(train: t, focused: t.id == focusedTrainId).id("train-\(t.id)") }
                         if b.trains.isEmpty { Text("No started train on this line in the feed.").font(.caption).foregroundStyle(.secondary) }
@@ -307,6 +312,17 @@ struct AlertCard: View {
     let alert: RouteAlert
     let evidence: AlertEvidence
     var station: String? = nil      // the station on your route this alert names
+    /// The delay model's reading: a status, active or stale, and the interpretation (starting, in effect, waning…).
+    var assessment: DelayAssessment? = nil
+
+    private func phaseColor(_ p: DelayAssessment.Phase) -> Color {
+        switch p {
+        case .inEffect: return .red
+        case .starting: return .orange
+        case .waning: return Color(red: 0.85, green: 0.65, blue: 0.0)
+        case .stale, .unconfirmed: return .secondary
+        }
+    }
 
     private var kindColor: Color {
         switch alert.kind {
@@ -328,14 +344,23 @@ struct AlertCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Flag(kindTitle, kindColor)
+                if let s = assessment { Flag(s.active ? "active" : "stale", s.active ? Color.red : Color.secondary) }
                 RouteBullets(routes: alert.routes, size: 16)
                 if let st = station { Flag("at \(st)", Color.accentColor) }
                 Spacer()
             }
             Text(alert.header).font(.subheadline).lineLimit(station == nil ? 3 : 5)
-            HStack(alignment: .top, spacing: 6) {
-                Circle().fill(evidence.corroborated ? Color.red : Color.secondary.opacity(0.6)).frame(width: 7, height: 7).padding(.top, 5)
-                Text(evidence.text).font(.caption).foregroundStyle(evidence.corroborated ? Color.red : Color.secondary).lineLimit(2)
+            if let s = assessment {
+                // the model's interpretation: the phase, what the trains near the station say, the odds it is gone soon
+                HStack(alignment: .top, spacing: 6) {
+                    Circle().fill(phaseColor(s.phase)).frame(width: 7, height: 7).padding(.top, 5)
+                    Text(s.interpretation).font(.caption).foregroundStyle(s.active ? phaseColor(s.phase) : Color.secondary).lineLimit(3)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 6) {
+                    Circle().fill(evidence.corroborated ? Color.red : Color.secondary.opacity(0.6)).frame(width: 7, height: 7).padding(.top, 5)
+                    Text(evidence.text).font(.caption).foregroundStyle(evidence.corroborated ? Color.red : Color.secondary).lineLimit(2)
+                }
             }
         }
         .padding(10)

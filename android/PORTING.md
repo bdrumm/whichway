@@ -50,6 +50,7 @@ so the next pass knows exactly what moved.
 | `Views/WelcomeView.swift`, `ContentView.swift` (first-launch sheet) | `app/…/ui/WelcomeView.kt`, `MainActivity.kt` | no sharing switch: Android records no trips yet, so the sheet says that instead |
 
 ## Not ported yet (in rough order of value)
+- `Core/DelayModel.swift` phases (Oct 10): `assess` now returns a phase, starting / in effect / waning / stale / unconfirmed, from the trains within three stops of the alert's station on the boards, the per-route lateness history the service keeps for three hours (`DataService.latenessHistory`, a sample per poll), and the server's reading in `alerts.json` (`assessment.phase`, `trajectory`) when under 20 min old; `rankedAlerts` orders a line's alerts by phase; the Line tab's alert card shows an active/stale flag and the interpretation. Rules in `mta_delay_insights/analysis/phases.py`, tables in `delay_model.json` under `phases`.
 
 - **Motion traces** (`MotionTrace`, Debug-only on iOS) and the route-health badge on the Now card (`RouteHealth`).
 - **Polling with the app gone**: the feeds are polled by the activity's view model, so a route survives the screen going off (the service holds the sensors and fixes) but not the activity being destroyed. Moving the poller into the service is the fix.

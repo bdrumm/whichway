@@ -85,8 +85,37 @@ struct DelayModel: Decodable {
     var nEvents: Int
     var lifetime: Lifetime
     var stale: Stale
+    /// The phases (section 7 of the report): when the feed first shows an alert's delay, which sets how long a
+    /// fresh alert reads as starting, and how alerts in each phase go on from there (the chance of being gone
+    /// within 15, 30 and 60 minutes), overall and by cause.
+    struct Phases: Decodable {
+        struct Evidence: Decodable {
+            var startMin: Double
+            var neverMin: Double
+            var shareSeenEver: Double?
+            enum CodingKeys: String, CodingKey { case startMin = "start_min", neverMin = "never_min", shareSeenEver = "share_seen_ever" }
+        }
+        struct Row: Decodable {
+            var nAlerts: Int?
+            var nGone30: Int?
+            var pGone15: Double?
+            var pGone30: Double?
+            var pGone60: Double?
+            enum CodingKeys: String, CodingKey { case nAlerts = "n_alerts", nGone30 = "n_gone_30", pGone15 = "p_gone_15", pGone30 = "p_gone_30", pGone60 = "p_gone_60" }
+        }
+        struct CauseRows: Decodable {
+            var phases: [String: Row]?
+        }
+        var marginSec: Double?
+        var staleMin: Double?
+        var evidence: Evidence?
+        var byPhase: [String: Row]?
+        var byCause: [String: CauseRows]?
+        enum CodingKeys: String, CodingKey { case marginSec = "margin_sec", staleMin = "stale_min", evidence, byPhase = "by_phase", byCause = "by_cause" }
+    }
     var prewarn: Prewarn?
-    enum CodingKeys: String, CodingKey { case version, gridMin = "grid_min", nEvents = "n_events", lifetime, stale, prewarn }
+    var phases: Phases?
+    enum CodingKeys: String, CodingKey { case version, gridMin = "grid_min", nEvents = "n_events", lifetime, stale, prewarn, phases }
 
     static let minGroupN = 8
     /// A line whose trains run within two minutes of the timetable reads as normal.
@@ -139,8 +168,35 @@ struct DelayModel: Decodable {
 
     // MARK: the assessment
 
-    /// A live unplanned delay alert read against the curves and the boards of its lines.
-    func assess(_ a: RouteAlert, now: Double, boards: [LineBoard]) -> DelayAssessment {
+    /// A name as the schedule and the alert might each spell it: letters and digits only, lowercase.
+    static func normName(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+
+    /// The phase from what is knowable now: the alert's age, the feed's excess near its station now (nil: no
+    /// reading), whether the feed has shown the delay at any point, the peak so far, and how long the stops have
+    /// read normal since (the rules of analysis/phases.py, calibrated in section 7 of the report).
+    static func phaseNow(age: Double, excess: Double?, seen: Bool, peak: Double, recoveredMin: Double?, neverMin: Double, margin: Double, staleMin: Double) -> DelayAssessment.Phase {
+        if let e = excess, e >= margin { return e >= 0.5 * peak ? .inEffect : .waning }
+        if seen { return (recoveredMin ?? 0) < staleMin || recoveredMin == nil ? .waning : .stale }
+        return age < neverMin ? .starting : .unconfirmed
+    }
+
+    /// P(gone within 30 min) for alerts in this phase: the cause's own rate where the record is deep enough,
+    /// shrunk toward all alerts; nil without the phase tables.
+    private func phaseGone30(_ phase: DelayAssessment.Phase, cause: String) -> Double? {
+        guard let ph = phases, let overall = ph.byPhase?[phase.rawValue]?.pGone30 else { return nil }
+        if let row = ph.byCause?[cause]?.phases?[phase.rawValue], let n = row.nGone30, n >= DelayModel.minGroupN, let p = row.pGone30 {
+            return (Double(n) * p + 10 * overall) / (Double(n) + 10)
+        }
+        return overall
+    }
+
+    /// A live unplanned delay alert read against the curves, the boards of its lines (the trains near the station
+    /// it names, now), the lateness the phone has seen on those lines while open (the trajectory: a peak, a
+    /// recovery) and, when fresh, the server's own reading from the store. The phase, starting / in effect / waning
+    /// / stale / unconfirmed, follows section 7 of the report; the chance of being gone within 30 minutes is the
+    /// phase's own record, by cause where deep enough.
+    func assess(_ a: RouteAlert, now: Double, boards: [LineBoard], lines: [String: LineTopology] = [:],
+                history: [LatenessSample] = [], published: PublishedAssessment? = nil) -> DelayAssessment {
         let cause = DelayModel.classifyCause(a.header)
         let created = a.createdAt ?? a.start ?? now
         let age = max(0, (now - created) / 60)
@@ -156,38 +212,103 @@ struct DelayModel: Decodable {
             probs = clearProbabilities(curve, start: start, age)
             basis = b
         }
-        // the feed now, on the alert's lines
-        var lates: [Double] = []
-        var held = 0
-        for b in boards {
-            lates += b.trains.compactMap { $0.effectiveLatenessSec }
-            held += b.nHolding + b.nStalled
-        }
-        let seen = lates.count >= 2
-        let late = seen ? lates.sorted()[lates.count / 2] : 0
-        let feedNormal = seen && late < DelayModel.normalLatenessSec && held == 0
-        let feedActive = seen && (late >= DelayModel.normalLatenessSec || held > 0)
-        let goneAfterRecovery = (stale.byCause?[cause] ?? stale.all)?.shareRemovedWithin30 ?? 0
-        let staleScore: Double = feedNormal ? (age >= 10 ? max(probs.p30, goneAfterRecovery) : probs.p30) : (feedActive ? min(probs.p30, 0.25) : probs.p30)
-        let status: DelayAssessment.Status
-        if age < 10 { status = .fresh }
-        else if feedActive { status = .active }
-        else if age >= 240 && feedNormal { status = .standing }
-        else if staleScore >= 0.5 { status = .likelyStale }
-        else { status = .aging }
         let station = DelayModel.station(in: a.header)
+        let direction = DelayModel.direction(in: a.header)
+        let margin = phases?.marginSec ?? DelayModel.normalLatenessSec
+        let neverMin = phases?.evidence?.neverMin ?? 30
+        let staleMin = phases?.staleMin ?? 10
+
+        // the feed now: the trains within three stops of the named station on the boards, in the direction named,
+        // else the whole line
+        var lates: [Double] = [], near: [Double] = []
+        var held = 0, heldNear = 0
+        let want = station.map(DelayModel.normName)
+        for b in boards {
+            if (direction == "N" && b.direction == "S") || (direction == "S" && b.direction == "N") { continue }
+            let idx: Int? = want.flatMap { w in lines[b.key]?.names.firstIndex { DelayModel.normName($0) == w } }
+            for t in b.trains where t.started {
+                guard let l = t.effectiveLatenessSec else { continue }
+                lates.append(l)
+                let stuck = t.position?.holding == true || t.position?.stalled == true
+                if stuck { held += 1 }
+                if let i = idx, abs((t.position?.stopIdx ?? t.nextIdx) - i) <= 3 {
+                    near.append(l)
+                    if stuck { heldNear += 1 }
+                }
+            }
+        }
+        let local = near.count >= 2
+        let sample = local ? near : lates
+        let seenNow = sample.count >= 2
+        let late = seenNow ? sample.sorted()[sample.count / 2] : 0
+        let heldHere = local ? heldNear : held
+        let feedActive = seenNow && (late >= margin || heldHere > 0)
+        let feedNormal = seenNow && late < margin && heldHere == 0
+
+        // the trajectory as the phone has seen it: the lateness on these lines at each poll since the alert was posted
+        var seen = feedActive
+        var peak = feedActive ? late : 0.0
+        var lastLateTs: Double? = feedActive ? now : nil
+        for smp in history where smp.ts >= created {
+            if smp.latenessSec >= margin || smp.held > 0 {
+                seen = true
+                peak = max(peak, smp.latenessSec)
+                lastLateTs = max(lastLateTs ?? 0, smp.ts)
+            }
+        }
+        var recoveredMin: Double? = (seen && !feedActive && lastLateTs != nil) ? (now - lastLateTs!) / 60 : nil
+        var excessNow: Double? = seenNow ? late : nil
+        var phase = DelayModel.phaseNow(age: age, excess: excessNow, seen: seen, peak: peak, recoveredMin: recoveredMin, neverMin: neverMin, margin: margin, staleMin: staleMin)
+        var source = "phone"
+        // the server's reading from the store, the whole trajectory since posting, when fresh: the phone's own
+        // history begins when the app opened, so the server knows of a peak and a recovery the phone never saw.
+        // The boards are fresher than the server, so trains late near the station now stay in effect.
+        if let pub = published, now - pub.generatedAt < 20 * 60, let ph = DelayAssessment.Phase(rawValue: pub.phase ?? ""), !feedActive {
+            phase = ph
+            source = "server"
+            if let pk = pub.peakExcessSec { peak = max(peak, pk) }
+            if let r = pub.recoveredMin { recoveredMin = r }
+            if excessNow == nil, let e = pub.excessNowSec { excessNow = e }
+            seen = seen || pub.seen
+            if ph == .inEffect && feedNormal { phase = .waning; recoveredMin = nil }
+        }
+        if age >= 240 && (phase == .unconfirmed || phase == .starting) { phase = .stale }
+        let pGone30 = phaseGone30(phase, cause: cause) ?? probs.p30
+
         let routes = a.routes.joined(separator: "/")
-        var bits = ["\(DelayModel.causeWords(cause)) on the \(routes)" + (station.map { " at \($0)" } ?? ""),
-                    "posted \(Fmt.hhmm(created)) (\(Int(age)) min ago)"]
-        if let e = statedEnd { bits.append("MTA's end \(Fmt.hhmm(e))" + (now > e ? " passed" : "")) }
-        bits.append("\(Int((probs.p30 * 100).rounded()))% gone within 30 min")
-        if seen { bits.append(late < DelayModel.normalLatenessSec ? "trains on time now" : "trains \(Fmt.late(late))" + (held > 0 ? ", \(held) held" : "")) }
-        let short = "delay alert on the \(routes)" + (station.map { " at \($0)" } ?? "") + ": \(status.rawValue)"
-            + (status == .active ? "" : ", posted \(Fmt.hhmm(created))") + (feedNormal ? ", trains on time" : (feedActive ? ", trains \(Fmt.late(late))" : ""))
-        return DelayAssessment(cause: cause, station: station, direction: DelayModel.direction(in: a.header), postedTs: created, ageMin: age,
+        let whereTxt = (local && station != nil) ? "near \(station!)" : "on the \(routes)"
+        let gone = "\(Int((pGone30 * 100).rounded()))% of such alerts gone within 30 min"
+        var bits: [String]
+        switch phase {
+        case .inEffect:
+            bits = ["trains \(Fmt.late(max(0, excessNow ?? late))) \(whereTxt), \(Int(age)) min in"]
+            if probs.expected > 0 { bits.append("typically \(Int(probs.expected)) min to go") }
+        case .waning:
+            if let e = excessNow, e >= margin / 2, peak > 0, e < peak { bits = ["delay down to \(Fmt.minTxt(e)) from \(Fmt.minTxt(peak)) \(whereTxt)"] }
+            else if let r = recoveredMin { bits = [r >= 1 ? "trains back to normal \(whereTxt) \(Int(r)) min ago" : "trains just back to normal \(whereTxt)"] }
+            else { bits = ["trains back to normal \(whereTxt)"] }
+            bits.append(gone)
+        case .stale:
+            if seen, let r = recoveredMin { bits = ["trains normal \(whereTxt) for \(Int(r)) min after a \(Fmt.minTxt(peak)) delay"] }
+            else if seen { bits = ["trains normal \(whereTxt) again"] }
+            else { bits = ["posted \(Int(age / 60)) h ago with nothing in the feed \(whereTxt) since"] }
+            bits.append(gone)
+        case .starting:
+            bits = ["posted \(Int(age)) min ago, nothing in the feed \(whereTxt) yet; alerts that register do so within \(Int(neverMin)) min"]
+        case .unconfirmed:
+            bits = ["nothing in the feed \(whereTxt) \(Int(age)) min after posting", gone]
+        }
+        let interpretation = phase.word + " · " + bits.joined(separator: " · ")
+        let at = station.map { " at \($0)" } ?? ""
+        var head = ["\(DelayModel.causeWords(cause)) on the \(routes)\(at)", "posted \(Fmt.hhmm(created)) (\(Int(age)) min ago)"]
+        if let e = statedEnd { head.append("MTA's end \(Fmt.hhmm(e))" + (now > e ? " passed" : "")) }
+        let short = "delay alert on the \(routes)\(at): \(phase.word)"
+            + (feedActive ? ", trains \(Fmt.late(late))" : (feedNormal ? ", trains on time" : "")) + (phase == .inEffect ? "" : ", posted \(Fmt.hhmm(created))")
+        return DelayAssessment(cause: cause, station: station, direction: direction, postedTs: created, ageMin: age,
                                statedEndTs: statedEnd, pClear15: probs.p15, pClear30: probs.p30, pClear60: probs.p60, expectedRemainingMin: probs.expected,
-                               feedSeen: seen, latenessSec: late, held: held, staleScore: staleScore, status: status, basis: basis,
-                               text: bits.joined(separator: " · ") + " → \(status.rawValue)", short: short)
+                               feedSeen: seenNow, latenessSec: late, held: heldHere, phase: phase, pGone30: pGone30, excessSec: excessNow, peakSec: peak,
+                               recoveredMin: recoveredMin, local: local, source: source, basis: basis, interpretation: interpretation,
+                               text: head.joined(separator: " · ") + " · " + interpretation, short: short)
     }
 
     // MARK: the pre-warning
@@ -331,9 +452,25 @@ struct PreWarning: Identifiable {
     var text: String
 }
 
-/// What the model makes of one live alert.
+/// What the model makes of one live alert: a status, active or stale, and the interpretation.
 struct DelayAssessment {
-    enum Status: String { case fresh, active, aging, likelyStale = "likely stale", standing }
+    /// starting: posted, nothing in the feed yet · in effect: the feed shows the delay · waning: receding or just
+    /// cleared · stale: cleared a while ago · unconfirmed: nothing in the feed in the time alerts that register take.
+    enum Phase: String {
+        case starting, inEffect = "in effect", waning, stale, unconfirmed
+        var word: String { self == .unconfirmed ? "no sign in the feed" : rawValue }
+        /// The order a rider should read them in.
+        var priority: Int {
+            switch self {
+            case .inEffect: return 0
+            case .starting: return 1
+            case .waning: return 2
+            case .unconfirmed: return 3
+            case .stale: return 4
+            }
+        }
+        var active: Bool { self == .starting || self == .inEffect || self == .waning }
+    }
     var cause: String
     var station: String?
     var direction: String
@@ -347,14 +484,76 @@ struct DelayAssessment {
     var feedSeen: Bool
     var latenessSec: Double
     var held: Int
-    var staleScore: Double
-    var status: Status
+    var phase: Phase
+    /// P(gone within 30 min) from the phase's own record (by cause where deep enough), else the survival curve.
+    var pGone30: Double
+    /// The feed's excess near the station now (nil: no reading), the peak seen, and how long normal since.
+    var excessSec: Double?
+    var peakSec: Double
+    var recoveredMin: Double?
+    /// The reading is of the trains near the named station (else the whole line).
+    var local: Bool
+    /// phone | server: whose trajectory the phase came from.
+    var source: String
     var basis: String
-    /// The full line: "signal problems on the F at Jay St · posted 8:12 (47 min ago) · MTA's end 8:45 passed · 61% gone within 30 min · trains on time now → likely stale".
+    /// "in effect · trains 4 min late near Jay St, 18 min in · typically 25 min to go"
+    var interpretation: String
+    /// The full line: cause, where, posted, the MTA's end, then the interpretation.
     var text: String
-    /// For a route's reasons: "delay alert on the F at Jay St: likely stale, posted 8:12, trains on time".
+    /// For a route's reasons: "delay alert on the F at Jay St: in effect, trains 4 min late".
     var short: String
 
+    var active: Bool { phase.active }
+    var priority: Int { phase.priority }
     /// Whether the alert should count against the route right now.
-    var countsAgainstRoute: Bool { status == .active || status == .fresh }
+    var countsAgainstRoute: Bool { phase == .inEffect || phase == .starting }
+}
+
+/// One poll's reading of a line: the median lateness of its started trains and how many were held or overdue.
+struct LatenessSample {
+    var ts: Double
+    var latenessSec: Double
+    var held: Int
+}
+
+/// The server's reading of a live alert, from alerts.json (its `assessment`): the phase from the store's whole
+/// trajectory since posting, and the figures behind it.
+struct PublishedAssessment: Decodable {
+    var phase: String?
+    var active: Bool?
+    var interpretation: String?
+    var excessNowSec: Double?
+    var peakExcessSec: Double?
+    var recoveredMin: Double?
+    var seen: Bool = false
+    /// When alerts.json was generated (set by the loader).
+    var generatedAt: Double = 0
+
+    enum CodingKeys: String, CodingKey { case phase, active, interpretation, trajectory }
+    enum TrajectoryKeys: String, CodingKey { case excessNowSec = "excess_now_sec", peakExcessSec = "peak_excess_sec", recoveredMin = "recovered_min", seen }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        phase = try c.decodeIfPresent(String.self, forKey: .phase)
+        active = try c.decodeIfPresent(Bool.self, forKey: .active)
+        interpretation = try c.decodeIfPresent(String.self, forKey: .interpretation)
+        if let t = try? c.nestedContainer(keyedBy: TrajectoryKeys.self, forKey: .trajectory) {
+            excessNowSec = try t.decodeIfPresent(Double.self, forKey: .excessNowSec)
+            peakExcessSec = try t.decodeIfPresent(Double.self, forKey: .peakExcessSec)
+            recoveredMin = try t.decodeIfPresent(Double.self, forKey: .recoveredMin)
+            seen = (try t.decodeIfPresent(Bool.self, forKey: .seen)) ?? false
+        }
+    }
+}
+
+/// alerts.json as the site publishes it: the alerts with the server's assessment of each live delay.
+struct PublishedAlerts: Decodable {
+    struct Entry: Decodable {
+        var alertId: String
+        var assessment: PublishedAssessment?
+        enum CodingKeys: String, CodingKey { case alertId = "alert_id", assessment }
+    }
+    var generatedAt: String?
+    var alerts: [Entry]
+    enum CodingKeys: String, CodingKey { case generatedAt = "generated_at", alerts }
 }

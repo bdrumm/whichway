@@ -101,15 +101,21 @@ func routeConfidence(_ option: PathOption, itinerary: Itinerary?, outlook: HoldO
     if held > 0 { take(min(0.1, 0.05 * Double(held)), "\(held) train\(held == 1 ? "" : "s") held or overdue on the way") }
     if knock > 0 { take(min(0.1, 0.05 * Double(knock)), "\(knock) held back by the train ahead") }
 
-    // a delay alert the feed still bears out, by the lifecycle model; a stale or standing one costs nothing
+    // a delay alert by its phase in the lifecycle model: in effect costs most, one just posted or waning less, a
+    // stale one or one the feed never showed nothing
     if let m = data.delayModel {
         var seenAlerts = Set<String>()
         for leg in option.legs {
-            for a in data.alertsFor(routes: leg.routes) where a.kind == "delay" && !seenAlerts.contains(a.id) && (a.type ?? "").lowercased().contains("delay") {
+            for a in data.alertsFor(routes: leg.routes) where a.kind == "delay" && !seenAlerts.contains(a.id) {
                 seenAlerts.insert(a.id)
-                let s = m.assess(a, now: data.now, boards: data.boards.values.filter { a.routes.contains($0.route) })
-                if s.status == .active { take(0.15, "a delay alert on the \(a.routes.joined(separator: "/")) the feed bears out") }
-                else if s.status == .fresh { take(0.08, "a delay alert on the \(a.routes.joined(separator: "/")) just posted") }
+                guard let s = data.assess(a) else { continue }
+                let on = "a delay alert on the \(a.routes.joined(separator: "/"))"
+                switch s.phase {
+                case .inEffect: take(0.15, "\(on) in effect")
+                case .starting: take(0.08, "\(on) just posted")
+                case .waning: take(0.05, "\(on) waning")
+                case .stale, .unconfirmed: break
+                }
             }
         }
         // a slowdown with no alert yet on the route's lines: the pre-warning, weighed by what the trains are losing

@@ -131,9 +131,11 @@ def current_alerts(alerts: pd.DataFrame, now_ts: float, lookback_h: float = 24) 
     return out[:400]
 
 
-def assess_current_alerts(cur: list[dict], live: dict | None, now_ts: float, model_path: Path = Path("data/delay_model.json")) -> dict | None:
-    """Read the active unplanned delay alerts against the lifecycle model (pipeline/delay_model.py) and the live
-    snapshot's per-route lateness; each gets an `assessment`. Returns the model, to publish beside the alerts."""
+def assess_current_alerts(cur: list[dict], live: dict | None, now_ts: float, model_path: Path = Path("data/delay_model.json"),
+                          store: Store | None = None, static: StaticGTFS | None = None, lines: dict | None = None) -> dict | None:
+    """Read the active unplanned delay alerts against the lifecycle model (pipeline/delay_model.py), the live
+    snapshot's per-route lateness and, with the store, each alert's trajectory since posting (the phase: starting,
+    in effect, waning, stale); each gets an `assessment`. Returns the model, to publish beside the alerts."""
     if not model_path.exists():
         return None
     try:
@@ -141,7 +143,13 @@ def assess_current_alerts(cur: list[dict], live: dict | None, now_ts: float, mod
         from mta_delay_insights.realtime import delay_service
         feed = delay_service.feed_from_routes(live.get("routes", [])) if live else None
         active = [a for a in cur if a.get("active_now")]
-        assessed = {x["alert_id"]: x for x in delay_service.assess_alerts(active, model, now_ts, feed)}
+        histories = None
+        if store is not None and static is not None:
+            try:
+                histories = delay_service.alert_histories(store, static, lines or {}, active, model, now_ts)
+            except Exception as exc:
+                logging.warning("alert histories failed: %s", exc)
+        assessed = {x["alert_id"]: x for x in delay_service.assess_alerts(active, model, now_ts, feed, histories)}
         for a in cur:
             if a["alert_id"] in assessed:
                 a["assessment"] = assessed[a["alert_id"]]
@@ -442,7 +450,11 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         lines = {"months": [], "lines": {}, "system": {}, "categories": [], "error": str(exc)[:300]}
     (out_data / "lines.json").write_text(json.dumps(lines, default=str))
     cur_alerts = current_alerts(alerts, now.timestamp())
-    delay_model = assess_current_alerts(cur_alerts, live, now.timestamp())
+    try:
+        cs_lines = json.loads((out_data / "client_schedule.json").read_text()).get("lines", {})
+    except Exception:
+        cs_lines = {}
+    delay_model = assess_current_alerts(cur_alerts, live, now.timestamp(), store=store, static=static, lines=cs_lines)
     prewarns: list[dict] = []
     if delay_model:
         (out_data / "delay_model.json").write_text(json.dumps(delay_model, separators=(",", ":")))

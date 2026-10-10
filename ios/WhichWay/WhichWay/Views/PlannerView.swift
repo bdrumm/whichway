@@ -1629,8 +1629,9 @@ struct PathDetailView: View {
                     }
                 }
             }
-            for a in data.alertsFor(routes: leg.routes).prefix(2) {
-                out.append("alert (\(a.kind)) on the \(a.routes.joined(separator: "/")): \(a.header) — \(alertEvidence(a, data: data).text)")
+            for x in data.rankedAlerts(routes: leg.routes).prefix(2) {
+                let a = x.alert
+                out.append("alert (\(a.kind)) on the \(a.routes.joined(separator: "/")): \(a.header) — \(x.assessment?.interpretation ?? alertEvidence(a, data: data).text)")
             }
         }
         if let b = data.boards[option.legs[0].primaryKey] {

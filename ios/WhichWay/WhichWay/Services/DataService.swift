@@ -89,6 +89,11 @@ final class DataService {
     private(set) var nextPollSec: Double = 30
     var anyHeld: Bool { predictions.values.contains { $0["hold_persists"] != nil } }
     private(set) var alerts: [RouteAlert] = []
+    /// Per route, the median lateness and the held count of its started trains at each poll, kept three hours: the
+    /// trajectory behind a delay alert's phase (its peak, its recovery) as far as the phone has seen it.
+    private(set) var latenessHistory: [String: [LatenessSample]] = [:]
+    /// The server's reading of each live delay alert (alerts.json), by the MTA's alert id.
+    private(set) var publishedAssessments: [String: PublishedAssessment] = [:]
     private(set) var lastUpdate: Date?
     private(set) var lastError: String?
     private(set) var loading = false
@@ -411,6 +416,16 @@ final class DataService {
         if pollCount % 4 == 1, let au = sched.alertsUrl, let u = url(au) {
             if let r = try? await URLSession.shared.data(from: u) { alerts = Alerts.parse(r.0, now: now); cache.write("alerts", r.0) }
             else if alerts.isEmpty, let d = cache.read("alerts") { alerts = Alerts.parse(d, now: now) }
+            // the server's reading of the live delay alerts, from the store's whole trajectory since each was posted
+            if let f = try? await fetchJSON(PublishedAlerts.self, "alerts.json") {
+                let iso = ISO8601DateFormatter()
+                iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let plain = ISO8601DateFormatter()
+                let gen = f.generatedAt.flatMap { iso.date(from: $0) ?? plain.date(from: $0) }?.timeIntervalSince1970 ?? 0
+                var m: [String: PublishedAssessment] = [:]
+                for e in f.alerts { if var x = e.assessment { x.generatedAt = gen; m[e.alertId] = x } }
+                publishedAssessments = m
+            }
         }
         rebuildBoards()
         lastUpdate = Date()
@@ -430,6 +445,20 @@ final class DataService {
             if let b = lineBoard(schedule: sched, lineSched: lineSched[k] ?? [], feeds: feeds, key: k, now: t) { out[k] = b }
         }
         boards = out
+        // the lines' lateness at this poll, for the delay alerts' trajectories
+        var perRoute: [String: (lates: [Double], held: Int)] = [:]
+        for b in out.values {
+            var e = perRoute[b.route] ?? ([], 0)
+            e.lates += b.trains.filter { $0.started }.compactMap { $0.effectiveLatenessSec }
+            e.held += b.nHolding + b.nStalled
+            perRoute[b.route] = e
+        }
+        for (r, e) in perRoute where e.lates.count >= 2 {
+            var h = latenessHistory[r] ?? []
+            if let last = h.last, t - last.ts < 25 { continue }
+            h.append(LatenessSample(ts: t, latenessSec: e.lates.sorted()[e.lates.count / 2], held: e.held))
+            latenessHistory[r] = h.filter { t - $0.ts <= 3 * 3600 }
+        }
         var preds: [String: [String: LinePrediction]] = [:]
         for (k, b) in out { if let line = sched.lines[k] { preds[k] = Predictor.predictBoard(b, line: line, model: model, now: t) } }
         predictions = preds
@@ -456,6 +485,27 @@ final class DataService {
             out[k] = nb
         }
         return out
+    }
+
+    /// The delay model's reading of a live unplanned delay alert, with everything the phone has: the boards of its
+    /// lines, the lateness seen on them while open, the schedule's station names, and the server's reading when fresh.
+    func assess(_ a: RouteAlert) -> DelayAssessment? {
+        guard let m = delayModel, a.kind == "delay", (a.type ?? "").lowercased().contains("delay") else { return nil }
+        let bs = boards.values.filter { a.routes.contains($0.route) }
+        let hist = a.routes.flatMap { latenessHistory[$0] ?? [] }.sorted { $0.ts < $1.ts }
+        let pid = String(a.id.split(separator: "#").first ?? Substring(a.id))
+        return m.assess(a, now: now, boards: bs, lines: schedule?.lines ?? [:], history: hist, published: publishedAssessments[pid])
+    }
+
+    /// Alerts in the order a rider should read them: the model's phase first (in effect, starting, waning, no sign,
+    /// stale), the later trains first within a phase, then planned work and notices.
+    func rankedAlerts(routes: [String]) -> [(alert: RouteAlert, assessment: DelayAssessment?)] {
+        alertsFor(routes: routes).map { ($0, assess($0)) }.sorted { x, y in
+            let px = x.1?.priority ?? (x.0.kind == "delay" ? 5 : (x.0.kind == "planned" ? 6 : 7))
+            let py = y.1?.priority ?? (y.0.kind == "delay" ? 5 : (y.0.kind == "planned" ? 6 : 7))
+            if px != py { return px < py }
+            return (x.1?.excessSec ?? 0) > (y.1?.excessSec ?? 0)
+        }
     }
 
     func alertsFor(routes: [String]) -> [RouteAlert] {
