@@ -257,10 +257,18 @@ struct PlannerView: View {
         .ignoresSafeArea()
     }
 
-    /// Where from and where to on one line, each a tap to change, with swap and nearest beside; the commute and
-    /// the feed's freshness under.
+    /// The commute and the feed's freshness on the first line; under them, where from and where to, each a tap to
+    /// change, with swap and nearest beside.
     private func homeHeader(_ index: StationIndex) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                CommuteChip(presets: presets.presets, activeId: presets.active(at: data.now)?.id, currentId: currentPresetId,
+                            onPick: { applyPreset($0, byHand: true) },
+                            onEdit: { editing = $0 },
+                            onAdd: { editing = newPresetFromCurrent() })
+                Spacer(minLength: 8)
+                StatusDot(chip: true).fixedSize()
+            }
             HStack(alignment: .center, spacing: 8) {
                 Button { pickingOrigin = true } label: {
                     Text(index.stations[originId]?.name ?? "Choose a station").font(.title3.weight(.semibold))
@@ -288,14 +296,6 @@ struct PlannerView: View {
                         .frame(width: 34, height: 34).background(Circle().fill(Color(.secondarySystemBackground)))
                 }
                 .buttonStyle(.plain).accessibilityLabel("Nearest station")
-            }
-            HStack(alignment: .center, spacing: 12) {
-                CommuteChip(presets: presets.presets, activeId: presets.active(at: data.now)?.id, currentId: currentPresetId,
-                            onPick: { applyPreset($0, byHand: true) },
-                            onEdit: { editing = $0 },
-                            onAdd: { editing = newPresetFromCurrent() })
-                Spacer(minLength: 8)
-                StatusDot(chip: true).fixedSize()
             }
         }
         .padding(.top, 12)
