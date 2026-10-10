@@ -30,10 +30,14 @@ struct TrainFocus: Equatable {
 @Observable
 final class DataService {
     static let publishedBase = "https://bdrumm.github.io/whichway/data/"
-    /// Where the published site has lived: the repository was renamed from Test-22222222 to whichway on Oct 7 2026,
-    /// and GitHub Pages does not redirect a renamed project site. A 404 from one is retried on the others, so a
-    /// build from either side of the rename finds the data.
-    static let publishedBases = [publishedBase, "https://bdrumm.github.io/Test-22222222/data/"]
+    /// The same files straight from the gh-pages branch, which the pipeline writes: the data when the Pages site
+    /// is down or pointed at the wrong branch (Oct 9-10 2026, every phone "offline" for a day).
+    static let rawBase = "https://raw.githubusercontent.com/bdrumm/whichway/gh-pages/data/"
+    /// Where the published data lives, in the order to try: the site, the branch behind it, and where the site
+    /// lived before the repository was renamed from Test-22222222 on Oct 7 2026 (GitHub Pages does not redirect a
+    /// renamed project site). A failure at one is retried on the others, and the session stays where it found the
+    /// data. The last one keys the disk cache, so the order's tail must not change.
+    static let publishedBases = [publishedBase, rawBase, "https://bdrumm.github.io/Test-22222222/data/"]
     /// The disk cache is keyed by the base; the published bases share one key, so the rename keeps the cached copy.
     static func cacheKey(_ base: String) -> String {
         var b = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -136,7 +140,7 @@ final class DataService {
     var apiBase: URL? {
         var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if !base.hasSuffix("/") { base += "/" }
-        guard let u = URL(string: base), let host = u.host, !host.hasSuffix("github.io") else { return nil }
+        guard let u = URL(string: base), let host = u.host, !host.hasSuffix("github.io"), !host.hasSuffix("githubusercontent.com") else { return nil }
         if base.hasSuffix("/data/") { base.removeLast("data/".count) }
         return URL(string: base)
     }
@@ -148,6 +152,10 @@ final class DataService {
         return URL(string: base + path)
     }
 
+    /// A file from the data source, in the order of trust: the source itself; the other places the published data
+    /// lives (the gh-pages branch behind the site, the site's old address) when the source fails in any way; the
+    /// copy on disk from the last successful fetch; and, for the tables, the copy built into the app. The last two
+    /// mark the app offline.
     private func fetch(_ path: String) async throws -> Data {
         guard let u = url(path) else { throw URLError(.badURL) }
         var req = URLRequest(url: u)
@@ -155,20 +163,32 @@ final class DataService {
         req.timeoutInterval = 25
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            if let http = resp as? HTTPURLResponse, http.statusCode == 404, let moved = await fetchMoved(path) { return moved }
-            if let http = resp as? HTTPURLResponse, http.statusCode >= 400 { throw URLError(.badServerResponse) }
+            if let http = resp as? HTTPURLResponse, http.statusCode >= 400 {
+                if let moved = await fetchMoved(path) { return moved }
+                throw URLError(.badServerResponse)
+            }
             cache.write(path, data)
             offline = false
             return data
         } catch {
-            // no signal (or no server): the copy from the last successful fetch, when there is one
-            guard let data = cache.read(path) else { throw error }
+            // the site unreachable: the branch behind it may still answer (a service problem, not the signal)
+            if (error as? URLError)?.code != .badServerResponse, let moved = await fetchMoved(path) { return moved }
+            // no signal, or no server: the copy from the last successful fetch, else the one built into the app
+            guard let data = cache.read(path) ?? DataService.seed(path) else { throw error }
             offline = true
             return data
         }
     }
 
-    /// The published site answered 404: try where else it has lived, and stay there for the session.
+    /// The copy of a published table built into the app (Resources/Seed, refreshed with `make ios-seed`): a first
+    /// launch with no data service at all still gets the timetable, the lines, the model, the holds, the segments
+    /// and the geometry. Feeds and per-line histories are not seeded.
+    static func seed(_ path: String) -> Data? {
+        guard !path.contains("/"), path.hasSuffix(".json"), let u = Bundle.main.url(forResource: String(path.dropLast(5)), withExtension: "json") else { return nil }
+        return try? Data(contentsOf: u)
+    }
+
+    /// The source failed: try where else the published data lives, and stay there for the session.
     private func fetchMoved(_ path: String) async -> Data? {
         var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if !base.hasSuffix("/") { base += "/" }

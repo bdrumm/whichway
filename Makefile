@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
+.PHONY: help local venv gtfs site-synthetic site data-branch serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures ios-seed
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -82,3 +82,8 @@ ios-organizer: ## Archive the app (Release) and hand it to Xcode's Organizer, to
 
 ios-fixtures: ## Regenerate the Swift predictor fixture from the Python reference
 	$(PYTHON) ios/WhichWayCore/Tests/make_fixtures.py
+
+ios-seed: ## Refresh the tables built into the app (its last resort when the data site is unreachable) from gh-pages
+	@for f in client_schedule.json client_lines.json client_model.json holds.json segments.json client_geometry.json; do \
+	  curl -sfL -o ios/WhichWay/WhichWay/Resources/Seed/$$f https://raw.githubusercontent.com/bdrumm/whichway/gh-pages/data/$$f && echo "  $$f"; done
+	@du -sh ios/WhichWay/WhichWay/Resources/Seed
