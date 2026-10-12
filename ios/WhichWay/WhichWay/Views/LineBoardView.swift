@@ -117,7 +117,7 @@ struct LineBoardView: View {
                 }
                 if let line = sched.lines[lineKey] {
                     let route = String(lineKey.split(separator: "_").first ?? "")
-                    if let h = lineHealth(key: lineKey, data: data) {
+                    if let h = lineHealth(key: lineKey, data: data, span: focusLeg?.idx[lineKey]) {
                         LineHealthRow(health: h, route: route)
                     }
                     if let id = focusedTrainId, let b = data.boards[lineKey], let t = b.trains.first(where: { $0.id == id }) {
@@ -264,7 +264,7 @@ struct LegTabs: View {
                             RouteBullets(routes: [route], size: 20)
                             Text(legs.count > 1 ? "Line \(i + 1)" : "Your line").font(.caption.bold()).foregroundStyle(selected ? Color.primary : Color.secondary)
                             Spacer(minLength: 0)
-                            if let h = lineHealth(key: leg.key, data: data) {
+                            if let h = lineHealth(key: leg.key, data: data, span: span) {
                                 Circle().fill(h.color).frame(width: 8, height: 8).accessibilityLabel(h.label)
                             }
                         }

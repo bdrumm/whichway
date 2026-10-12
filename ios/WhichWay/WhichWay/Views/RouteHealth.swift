@@ -153,9 +153,12 @@ func routeHealth(_ option: PathOption, data: DataService) -> RouteHealth {
         }
         for k in leg.keys where !seenKeys.contains(k) {
             seenKeys.insert(k)
-            if let b = data.boards[k], b.nHolding + b.nStalled > 0 {
-                let n = b.nHolding + b.nStalled
-                add(1, "\(n) \(b.route) train\(n == 1 ? "" : "s") held or overdue")
+            // held or overdue trains on the rider's stretch or on their way to it; elsewhere on the line, context only
+            if let b = data.boards[k], let ix = leg.idx[k] {
+                let near = b.trains.filter { $0.isHeld && $0.nextIdx >= max(0, ix.from - 8) && $0.nextIdx <= ix.to }.count
+                let far = b.trains.filter(\.isHeld).count - near
+                if near > 0 { add(1, "\(near) \(b.route) train\(near == 1 ? "" : "s") held or overdue on your way") }
+                if far > 0 { add(0, "\(far) \(b.route) train\(far == 1 ? "" : "s") held elsewhere on the line") }
             }
             if let lp = data.predictions[k]?[data.scenario] ?? data.predictions[k]?["baseline"], lp.nKnockOn > 0 {
                 add(1, "\(lp.nKnockOn) held back by the train ahead")
