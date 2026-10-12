@@ -77,6 +77,33 @@ def test_a_trip_is_scored_against_the_train_the_phone_named(static):
     assert "false start" in md
 
 
+def test_a_ride_no_train_at_the_platform_made_is_dropped_before_the_legs(static):
+    # Oct 12 at 4 Av-9 St: a 108 s "ride" with no stop felt that no train at the rider's platform made (an R left the
+    # level below), then the real train. The phantom is dropped, the real ride is the first leg, and a trip id that
+    # repeats on another day is not scored against that day's run.
+    route, seq = _line(static)
+    a, b = seq[0], seq[3]
+    t0 = 1_700_000_000.0
+    me = _arrivals(route, seq, "0600_X..N1", t0)                       # the train taken: at the platform at t0
+    week_ago = [dict(r, trip_key="20260825|0600_X..N1", arrival_ts=r["arrival_ts"] - 6 * 86400, departure_ts=r["departure_ts"] - 6 * 86400)
+                for r in me]
+    arr = pd.DataFrame(week_ago + me)
+    obs = {"id": "t1", "installId": "p", "createdTs": t0 - 600, "endedTs": t0 + 3 * 120 + 90, "endedBy": "alighted", "startedBy": "gps",
+           "routeLabel": f"{route} direct", "legs": [{"line": f"{route}_N", "from": a, "to": b}], "expectedSec": 900, "schedSec": 360,
+           "events": [{"kind": "departed", "ts": t0 - 300}, {"kind": "alighted", "ts": t0 - 192},
+                      {"kind": "departed", "ts": t0 + 50}, {"kind": "alighted", "ts": t0 + 3 * 120 + 25}],
+           "boarded": [{"leg": 0, "key": "R_N", "trainId": "R_N|0599_R..N9", "confidence": 0.9, "verdict": "switched", "evidence": ["departure"]},
+                       {"leg": 1, "key": f"{route}_N", "trainId": f"{route}_N|0600_X..N1", "confidence": 1.0, "verdict": "onPlan", "evidence": ["hand"]}],
+           "rideStops": [0, 3]}
+    m = trips.TrainMatcher(static, arr)
+    r = trips.review_trip(obs, static, m)
+    assert r["phantomRides"] == [t0 - 300]
+    leg = r["legs"][0]
+    assert leg["departedTs"] == t0 + 50 and leg["stopsFelt"] == 3
+    assert leg["boardedKey"] == f"{route}_N" and leg["train"]["trip_id"] == "0600_X..N1"
+    assert leg["arriveTs"] == pytest.approx(trips.at_platform(t0 + 360, route)), "today's run, not the one six days before"
+
+
 def test_review_all_writes_the_report_and_the_ledger(static, tmp_path):
     route, seq = _line(static)
     t0 = 1_700_000_000.0

@@ -74,6 +74,7 @@ final class TripRecorder {
     @ObservationIgnored private var legs: [LegPlan] = []
     @ObservationIgnored private var log = DepartureLog()
     @ObservationIgnored private var transferLog = DepartureLog()     // the next leg's lines at the transfer platform, followed during this leg
+    @ObservationIgnored private var prevLog = DepartureLog()         // the leg before's lines at its platform, still followed: a ride found not to be one is read again there
     @ObservationIgnored private var logLeg = -1
     @ObservationIgnored private var candidates: [Int: [BoardingCandidate]] = [:]
     @ObservationIgnored private var departedTs: [Int: Double] = [:]
@@ -85,8 +86,11 @@ final class TripRecorder {
     @ObservationIgnored private var handSet: Set<Int> = []
     @ObservationIgnored private var dismissed: Set<Int> = []
     @ObservationIgnored private var departureChecked: Set<Int> = []
+    @ObservationIgnored private var locationRides: Set<Int> = []      // legs whose ride began from the phone's movement, not a felt pull-away
     /// A felt pull-away is checked against the feed this long after: time for a train that left then to show as gone.
     var departureCheckSec = 100.0
+    /// A ride this short with no station stop felt is the first one taken back when the phone has counted a ride too many.
+    var phantomRideMaxSec = 180.0
     /// Standing this long at a station, with the believed train gone past it, on a same-platform change: off the train.
     var samePlatformStandSec = 90.0
     /// Walking this long, with the steps begun while the believed train stood at a station by the feed: off the train.
@@ -145,9 +149,9 @@ final class TripRecorder {
         if let r = firstRunSec { tracker?.minRideSec = max(45, 0.6 * r) }
         endReason = nil
         self.legs = legs
-        log.reset(); transferLog.reset(); logLeg = -1; candidates = [:]; beliefs = []; seenEvents = 0; handSet = []; dismissed = []
+        log.reset(); transferLog.reset(); prevLog.reset(); logLeg = -1; candidates = [:]; beliefs = []; seenEvents = 0; handSet = []; dismissed = []
         departureBeliefs = [:]; departedTs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
-        stayedOn = nil; stayedOnChecked = []
+        stayedOn = nil; stayedOnChecked = []; locationRides = []
         publish()
         if let o = observation { Telemetry.shared.beginTrip(o) }
         MotionTrace.shared.begin(ts: start.startTs)
@@ -241,18 +245,34 @@ final class TripRecorder {
         guard let t = tracker, t.phase != .arrived else { return }
         let leg = t.timeline.legsRidden
         guard leg < legs.count else { return }
-        if leg != logLeg {
-            // on to the next leg: the log that followed its lines at the transfer platform during the last leg takes over
-            log = (logLeg >= 0 && leg == logLeg + 1) ? transferLog : DepartureLog()
-            transferLog = DepartureLog()
-            logLeg = leg
-        }
+        if leg != logLeg { advanceLogs(to: leg) }
         observe(legs[leg], boards: boards, into: &log, now: now)
         if leg + 1 < legs.count { observe(legs[leg + 1], boards: boards, into: &transferLog, now: now) }
+        if leg >= 1 { observe(legs[leg - 1], boards: boards, into: &prevLog, now: now) }
         rideEvidence(now: now)
         checkDepartureMade(now: now)
         checkSamePlatformChange(now: now)
         checkStayedOn(now: now)
+    }
+
+    /// On to leg `leg`: the log that followed its lines at the transfer platform during the last leg takes over, and the
+    /// last leg's own log is kept as the one before.
+    private func advanceLogs(to leg: Int) {
+        if logLeg >= 0, leg == logLeg + 1 {
+            prevLog = log; log = transferLog
+        } else {
+            prevLog = DepartureLog(); log = DepartureLog()
+        }
+        transferLog = DepartureLog()
+        logLeg = leg
+    }
+
+    /// The log that follows leg `leg`'s lines at its boarding platform, when one does.
+    private func platformLog(_ leg: Int) -> DepartureLog? {
+        if leg == logLeg { return log }
+        if leg == logLeg + 1 { return transferLog }
+        if leg == logLeg - 1, leg >= 0 { return prevLog }
+        return nil
     }
 
     /// The train the plan has the rider on for each leg still to board, as the planner's itinerary stands now:
@@ -275,20 +295,132 @@ final class TripRecorder {
     /// train: withdrawn once per leg, and the next pull-away counts afresh. Seen twice on Oct 7: at 4 Av-9 St three
     /// minutes before the G the rider took, and at Hoyt as the G they had just left pulled out. Not for a ride the
     /// rider named or the phone's movement began.
+    ///
+    /// The ride just behind is checked too: a few steps on the platform can close a "ride" before the feed has had time
+    /// to say no train left (Oct 12 at 4 Av-9 St: the pull-away at 11:47:51, the shuffle at 11:49:39, the check due at
+    /// 11:49:31 and the next poll after the walk-off). Such a ride is withdrawn whole, and the rides after it move up a leg.
     private func checkDepartureMade(now: Double) {
-        guard let t = tracker, t.phase == .riding, !t.departedByLocation else { return }
+        guard let t = tracker, t.phase == .riding else { return }
         let leg = t.timeline.legsRidden
-        guard leg < legs.count, !handSet.contains(leg), !departureChecked.contains(leg), let dep = departedTs[leg], now - dep >= departureCheckSec else { return }
-        guard now - dep <= departureCheckSec + 240 else { departureChecked.insert(leg); return }   // too long ago to say
-        guard log.lastPollTs >= dep + 75 else { return }                                            // the feed has not been read since
-        departureChecked.insert(leg)
-        let check = log.departureCheck(at: dep)
-        guard !check.left, check.waiting else { return }
-        tracker?.withdrawDeparture()
-        beliefs.removeAll { $0.leg == leg }
-        departureBeliefs[leg] = nil; candidates[leg] = nil; departedTs[leg] = nil
-        departureChecked.remove(leg)
-        seenEvents = tracker?.timeline.events.count ?? 0
+        for k in [leg, leg - 1] where k >= 0 && k < legs.count {
+            guard !handSet.contains(k), !locationRides.contains(k), !departureChecked.contains(k), let dep = departedTs[k], now - dep >= departureCheckSec,
+                  let lg = platformLog(k) else { continue }
+            if k == leg, t.timeline.events.last?.kind != .departed { continue }
+            guard now - dep <= departureCheckSec + 240 else { departureChecked.insert(k); continue }   // too long ago to say
+            guard lg.lastPollTs >= dep + 75 else { continue }                                           // the feed has not been read since
+            departureChecked.insert(k)
+            let check = lg.departureCheck(at: dep)
+            guard !check.left, check.waiting else { continue }
+            if k == leg {
+                tracker?.withdrawDeparture()
+                beliefs.removeAll { $0.leg == leg }
+                departureBeliefs[leg] = nil; candidates[leg] = nil; departedTs[leg] = nil
+                departureChecked.remove(leg)
+                seenEvents = tracker?.timeline.events.count ?? 0
+                publish()
+            } else {
+                withdrawRide(k)
+            }
+            return
+        }
+    }
+
+    /// Ride `k` was not one (see `TripTracker.withdrawRide`): what the phone made of it goes, every leg after it moves
+    /// up one, the platform logs follow the leg in hand back, and the rides that moved are read again against the
+    /// trains at their own platform (the F at 4 Av-9 St, not the trains that happened to leave Jay St then).
+    private func withdrawRide(_ k: Int) {
+        guard var t = tracker else { return }
+        let before = t.timeline.legsRidden
+        t.withdrawRide(k)
+        guard t.timeline.legsRidden == before - 1 else { return }
+        tracker = t
+        func up<V>(_ d: [Int: V]) -> [Int: V] {
+            var out: [Int: V] = [:]
+            for (l, v) in d where l != k { out[l > k ? l - 1 : l] = v }
+            return out
+        }
+        func up(_ s: Set<Int>) -> Set<Int> { Set(s.filter { $0 != k }.map { $0 > k ? $0 - 1 : $0 }) }
+        candidates = up(candidates); departedTs = up(departedTs); departureBeliefs = up(departureBeliefs)
+        beliefs = beliefs.filter { $0.leg != k }.map { var b = $0; if b.leg > k { b.leg -= 1 }; return b }
+        handSet = up(handSet); dismissed = up(dismissed); departureChecked = up(departureChecked); locationApplied = up(locationApplied)
+        stayedOnChecked = up(stayedOnChecked); locationRides = up(locationRides)
+        if let la = lastAlight { lastAlight = la.leg == k ? nil : (la.leg > k ? (la.leg - 1, la.ts) : la) }
+        offPlanAlighting = nil; stayedOn = nil
+        let leg = t.timeline.legsRidden
+        if logLeg == leg + 1 {
+            transferLog = log; log = prevLog; prevLog = DepartureLog(); logLeg = leg
+        }
+        seenEvents = t.timeline.events.count
+        for l in max(k, leg - 1)...leg where l < legs.count { reread(l) }
+        publish()
+    }
+
+    /// Ride `l` read afresh against the trains its own platform's log followed: the pull-away, then the stops felt and
+    /// the walk-off if it is over. The rider's word on the line stands; only the train is looked up again.
+    private func reread(_ l: Int) {
+        guard let t = tracker, let r = t.ride(l), let lg = platformLog(l) else { return }
+        let plan = legs[l]
+        let cands = lg.candidates(departedTs: r.departedTs, windowSec: inference.departureWindowSec, chosenTrainId: plan.chosenTrainId)
+        candidates[l] = cands
+        departedTs[l] = r.departedTs
+        if handSet.contains(l) {
+            if let key = belief(leg: l)?.bestKey { store(LineBelief.byHand(leg: l, key: key, chosenKey: plan.chosenKey, candidates: cands, departedTs: r.departedTs)) }
+            return
+        }
+        var b = inference.fromDeparture(cands, departedTs: r.departedTs, leg: l, chosenKey: plan.chosenKey)
+        guard !b.byTrain.isEmpty else {
+            departureBeliefs[l] = nil
+            beliefs.removeAll { $0.leg == l }
+            if let f = LineBelief.fromPlan(leg: l, chosenKey: plan.chosenKey, chosenTrainId: plan.chosenTrainId, evidence: "plan") { store(f) }
+            return
+        }
+        departureBeliefs[l] = b
+        if let a = r.alightedTs {
+            if t.timeline.rideStops.indices.contains(l) {
+                b = inference.withStops(b, candidates: cands, stopsFelt: t.timeline.rideStops[l], departedTs: r.departedTs, alightedTs: a)
+            }
+            b = inference.withAlighting(b, candidates: cands, alightedTs: a)
+        }
+        store(b)
+    }
+
+    /// A pull-away with every leg already ridden: one of the rides was not one. The likeliest is a short ride with no
+    /// station stop felt (the shortest of them), not one the rider named; withdrawn, the new pull-away is the last
+    /// leg's and is read against that platform's trains. True when a ride was withdrawn.
+    private func reconcileExtraDeparture() -> Bool {
+        guard let t = tracker else { return false }
+        var best: (k: Int, sec: Double)?
+        for k in 0..<legs.count where !handSet.contains(k) && !locationRides.contains(k) {
+            guard let r = t.ride(k), let a = r.alightedTs, t.timeline.rideStops.indices.contains(k), t.timeline.rideStops[k] == 0 else { continue }
+            let sec = a - r.departedTs
+            if sec <= phantomRideMaxSec, sec < (best?.sec ?? .infinity) { best = (k, sec) }
+        }
+        guard let p = best?.k else { return false }
+        withdrawRide(p)
+        return true
+    }
+
+    /// The rider names, for the ride in hand, a line of the leg before that this leg does not have, while the phone
+    /// had that earlier ride on another line with no station stop felt: the earlier "ride" was not one, and this is
+    /// the earlier leg's train (Oct 12: the F picked while the phone had the rider on the C leg, the R below the F
+    /// platform having been taken for the first leg). The Go tab asks before switching the route to that line.
+    func namesEarlierLeg(_ key: String) -> Bool {
+        guard let t = tracker, t.onTrain else { return false }
+        let leg = t.timeline.legsRidden, k = leg - 1
+        guard k >= 0, leg < legs.count, legs[k].keys.contains(key), !legs[leg].keys.contains(key), !handSet.contains(k) else { return false }
+        let stops = t.timeline.rideStops.indices.contains(k) ? t.timeline.rideStops[k] : 0
+        return stops == 0 && belief(leg: k)?.bestKey != key
+    }
+
+    /// The ride in hand is the earlier leg's, by the rider's word on `key`: the ride before it is withdrawn and this one
+    /// takes its place, on that line.
+    private func refileAsEarlierLeg(_ key: String) {
+        guard let t = tracker else { return }
+        withdrawRide(t.timeline.legsRidden - 1)
+        let leg = currentLeg
+        guard leg < legs.count else { return }
+        handSet.insert(leg); dismissed.remove(leg)
+        store(LineBelief.byHand(leg: leg, key: key, chosenKey: legs[leg].chosenKey, candidates: candidates[leg] ?? [], departedTs: departedTs[leg]))
         publish()
     }
 
@@ -339,8 +471,17 @@ final class TripRecorder {
             seenEvents += 1
             switch e.kind {
             case .departed:
-                let leg = t.timeline.legsRidden
-                guard leg < legs.count else { continue }
+                var leg = t.timeline.legsRidden
+                if leg >= legs.count {
+                    // every leg ridden and a pull-away again: take back the ride that was not one, and read this one as the last leg's
+                    guard reconcileExtraDeparture(), let nt = tracker else { continue }
+                    leg = nt.timeline.legsRidden
+                    guard leg < legs.count, nt.timeline.events.last == e else { return }
+                    if nt.departedByLocation { locationRides.insert(leg) }
+                    reread(leg)
+                    return
+                }
+                if t.departedByLocation { locationRides.insert(leg) }
                 let plan = legs[leg]
                 let cands = log.candidates(departedTs: e.ts, windowSec: inference.departureWindowSec, chosenTrainId: plan.chosenTrainId)
                 candidates[leg] = cands
@@ -402,6 +543,7 @@ final class TripRecorder {
 
     /// The rider's own word on the line they boarded for the leg in hand; nothing measured later overrides it.
     func setBoardedByHand(key: String) {
+        if namesEarlierLeg(key) { refileAsEarlierLeg(key); return }
         let leg = currentLeg
         guard leg < legs.count else { return }
         handSet.insert(leg)
@@ -424,6 +566,7 @@ final class TripRecorder {
     /// departure if it was not already, the train is the leg's belief, by hand, and the departure log follows it
     /// from here on, so the arrival clock and the alighting read its progress.
     func setOnTrain(_ c: BoardingCandidate, now: Double) {
+        if namesEarlierLeg(c.key) { refileAsEarlierLeg(c.key); return }
         guard var t = tracker, t.phase != .arrived else { return }
         let leg = t.timeline.legsRidden
         guard leg < legs.count else { return }
@@ -432,7 +575,7 @@ final class TripRecorder {
             tracker = t
             seenEvents = t.timeline.events.count          // the departure on the record is this one, not one to infer from
         }
-        if logLeg != leg { log = leg == logLeg + 1 ? transferLog : DepartureLog(); transferLog = DepartureLog(); logLeg = leg }
+        if logLeg != leg { advanceLogs(to: leg) }
         log.seed(c, now: now)
         var cands = (candidates[leg] ?? []).filter { $0.trainId != c.trainId }
         cands.append(c)
@@ -492,7 +635,7 @@ final class TripRecorder {
         guard let t = tracker else { return }
         let leg = t.timeline.legsRidden
         guard leg < legs.count else { return }
-        if logLeg != leg { log = DepartureLog(); transferLog = DepartureLog(); logLeg = leg }
+        if logLeg != leg { advanceLogs(to: leg); log = DepartureLog() }
         for c in cands { log.seed(c, now: now) }
         guard !handSet.contains(leg), let dep = departedTs[leg], t.phase == .riding else { return }
         let plan = legs[leg]
@@ -550,9 +693,9 @@ final class TripRecorder {
         let tl = t.end(now: now, by: by)
         tracker = nil
         legs = []
-        log.reset(); transferLog.reset(); candidates = [:]; departedTs = [:]; handSet = []
+        log.reset(); transferLog.reset(); prevLog.reset(); candidates = [:]; departedTs = [:]; handSet = []
         departureBeliefs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
-        stayedOn = nil; stayedOnChecked = []
+        stayedOn = nil; stayedOnChecked = []; locationRides = []
         phase = nil
         motionState = .unknown
         endReason = tl.endedBy

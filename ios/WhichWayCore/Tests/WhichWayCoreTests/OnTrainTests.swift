@@ -122,6 +122,27 @@ final class OnTrainTests: XCTestCase {
         XCTAssertEqual(l2.lastPollTs, 90)
     }
 
+    func testATrainLeavingAnotherPlatformDoesNotVouchForAPullAway() {
+        // Oct 12, 4 Av-9 St at 11:47:51 (0 here): the rider stood on the F platform; the R pulled out of the level below
+        // 18 s before (its feed time at 9 St 11:48:11, 85 s after it really arrived), the G had left three minutes before,
+        // and the F the rider took was still to come. The R shook the platform; no train left this one.
+        var log = DepartureLog()
+        log.observe(trains: [train("r1", key: "R_N", points: [(4, -5), (5, 100)])], key: "R_N", boardIdx: 4, span: nil, onLeg: false, now: -60, samePlatform: false)
+        log.observe(trains: [train("g1", key: "G_N", points: [(4, -240), (5, -120)])], key: "G_N", boardIdx: 4, span: nil, onLeg: false, now: -260)
+        log.observe(trains: [train("f2", key: "F_N", points: [(4, 236), (7, 750)])], key: "F_N", boardIdx: 4, span: (from: 4, to: 7), onLeg: true, now: -60)
+        log.observe(trains: [train("r1", key: "R_N", points: [(5, 100), (6, 200)])], key: "R_N", boardIdx: 4, span: nil, onLeg: false, now: 90, samePlatform: false)
+        log.observe(trains: [train("g1", key: "G_N", points: [(5, -120), (6, 0)])], key: "G_N", boardIdx: 4, span: nil, onLeg: false, now: 90)
+        log.observe(trains: [train("f2", key: "F_N", points: [(4, 236), (7, 750)])], key: "F_N", boardIdx: 4, span: (from: 4, to: 7), onLeg: true, now: 90)
+        let felt = log.departureCheck(at: 0)
+        XCTAssertFalse(felt.left, "the R left another platform")
+        XCTAssertTrue(felt.waiting)
+        // the same R from its own platform does vouch for it
+        var own = DepartureLog()
+        own.observe(trains: [train("r1", key: "R_N", points: [(4, -5), (5, 100)])], key: "R_N", boardIdx: 4, span: (from: 4, to: 8), onLeg: true, now: -60)
+        own.observe(trains: [train("r1", key: "R_N", points: [(5, 100), (6, 200)])], key: "R_N", boardIdx: 4, span: (from: 4, to: 8), onLeg: true, now: 90)
+        XCTAssertTrue(own.departureCheck(at: 0).left)
+    }
+
     func testTheLogTakesUpATrainItNeverSawAtThePlatform() {
         var log = DepartureLog()
         let c = BoardingCandidate(trainId: "G_N|g1", key: "G_N", route: "G", boardTs: 900, alightTs: 1260, stopsToAlight: 3, chosen: false, onLeg: true,

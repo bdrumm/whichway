@@ -43,6 +43,8 @@ NOTES = "rider_notes.jsonl"
 PERIODS = {"morning": (5, 12), "afternoon": (12, 18), "evening": (18, 24), "night": (0, 5)}
 ENDED_AT_DESTINATION = {"arrived", "alighted", "walked"}
 MATCH_WINDOW_SEC = 240.0        # a felt departure matches a train that left the platform within this
+PHANTOM_RIDE_MAX_SEC = 180.0    # a ride this short with no stop felt, that no train at the rider's own platform made, was not one
+PHANTOM_CHECK_SEC = 120.0       # (as the app's departure check: a train pulling away within this of the felt pull-away made it)
 
 # The feed's last time for a stop (the store's arrival_ts) runs this long after the train really reaches the
 # platform, by route: measured Oct 7 2026 from the vehicle feed and the phone's felt departures (the app's
@@ -399,11 +401,28 @@ class TrainMatcher:
         r = d.iloc[0].to_dict()
         return r
 
-    def by_trip(self, stops: list[str], trip_id: str) -> dict | None:
+    def by_trip(self, stops: list[str], trip_id: str, near_ts: float | None = None) -> dict | None:
+        """The trip's call at one of the platforms; trip ids repeat every day, so the run nearest `near_ts` (within three
+        hours) when it is given: Oct 12's C 069400 was once scored against the same trip id six days before."""
         d = self.at(stops, trip_id)
         if d.empty:
             return None
+        if near_ts is not None:
+            d = d.assign(_dt=(d["arrival_ts"].astype(float) - near_ts).abs())
+            d = d[d["_dt"] <= 3 * 3600]
+            if d.empty:
+                return None
+            return d.sort_values("_dt").iloc[0].to_dict()
         return d.sort_values("arrival_ts").iloc[0].to_dict()
+
+    def left_own_platform(self, stop: str, ts: float, window: float = PHANTOM_CHECK_SEC) -> bool:
+        """Did a train pull away from this very platform (not another of the station) within `window` of `ts`?"""
+        return self.by_time([stop], ts, window=window) is not None
+
+    def still_to_come(self, stop: str, ts: float) -> bool:
+        """Did a train reach this platform after `ts`, so the feed was alive there (a quiet line proves nothing)?"""
+        d = self.at([stop])
+        return bool(not d.empty and (d["arrival_ts"].astype(float) > ts).any())
 
 
 def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | None = None, notes: list[dict] | None = None) -> dict:
@@ -411,8 +430,26 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
     events = sorted((e for e in (o.get("events") or []) if isinstance(e, dict) and e.get("ts")), key=lambda e: e["ts"])
     departs = [float(e["ts"]) for e in events if e.get("kind") == "departed"]
     alights = [float(e["ts"]) for e in events if e.get("kind") == "alighted"]
-    boarded = {int(b.get("leg", -1)): b for b in (o.get("boarded") or []) if isinstance(b, dict)}
-    ride_stops = o.get("rideStops") or []
+    boarded_by_ride = {int(b.get("leg", -1)): b for b in (o.get("boarded") or []) if isinstance(b, dict)}
+    ride_stops_all = o.get("rideStops") or []
+    # rides that were not rides (the platform shaking as another platform's train left, then a few steps): dropped
+    # before the rides are paired with the legs, so the phone's count running a leg ahead does not shift every leg after
+    kept: list[int] = []
+    phantoms: list[float] = []
+    for j, dep in enumerate(departs):
+        i = len(kept)
+        if i < len(legs_in) and j < len(alights) and isinstance(legs_in[i], dict) and legs_in[i].get("from"):
+            stops_felt = ride_stops_all[j] if j < len(ride_stops_all) else None
+            frm = legs_in[i]["from"]
+            if (alights[j] - dep <= PHANTOM_RIDE_MAX_SEC and stops_felt == 0 and not matcher.left_own_platform(frm, dep)
+                    and matcher.still_to_come(frm, dep)):
+                phantoms.append(dep)
+                continue
+        kept.append(j)
+    departs = [departs[j] for j in kept]
+    alights = [alights[j] for j in kept if j < len(alights)]
+    ride_stops = [ride_stops_all[j] for j in kept if j < len(ride_stops_all)]
+    boarded = {i: boarded_by_ride[j] for i, j in enumerate(kept) if j in boarded_by_ride}
     created = float(o.get("createdTs") or 0)
     ended = o.get("endedTs")
     r: dict = {
@@ -423,7 +460,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
         "transferStation": o.get("transferStation"), "transferWalkSec": o.get("transferWalkSec"), "measuredTransferSec": o.get("measuredTransferSec"),
         "accessSec": o.get("accessSec"), "walkSpeedMPerMin": o.get("walkSpeedMPerMin"), "startDistanceM": o.get("startDistanceM"),
         "nDeparts": len(departs), "nAlights": len(alights), "legs": [],
-        "withdrawnDepartures": o.get("withdrawnDepartures") or [],
+        "withdrawnDepartures": o.get("withdrawnDepartures") or [], "phantomRides": phantoms,
         "origin": legs_in[0].get("from") if legs_in and isinstance(legs_in[0], dict) else None,
     }
     truth = next((n["lines"] for n in notes or [] if n.get("lines")), None)
@@ -465,7 +502,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
         # the phone's own train, unless the rider says the leg was on another line
         if b and b.get("trainId") and "|" in b["trainId"] and (rider_route is None or b_route == rider_route):
             tid = b["trainId"].split("|", 1)[1]
-            match = matcher.by_trip(from_stops, tid)
+            match = matcher.by_trip(from_stops, tid, near_ts=leg["departedTs"] or created)
             leg["matchedBy"] = "phone" if match is not None else None
         timed, timed_how = None, None
         if rider_route:
@@ -479,6 +516,11 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
             if timed is None:
                 timed = matcher.by_time(from_stops, leg["departedTs"], exclude_trip=prev_trip)
                 timed_how = "departure, another line"
+        # the phone's train left well away from the pull-away it felt (a train the rider picked from another platform's
+        # list, Oct 12): the train that did leave then is the one
+        if match is not None and timed is not None and leg["departedTs"] and abs(leg["departedTs"] - _pick_time(match)) > MATCH_WINDOW_SEC:
+            leg["phoneTrainOff"] = {"trip_id": match.get("trip_id"), "errSec": leg["departedTs"] - _pick_time(match)}
+            match = None
         if match is None and timed is not None:
             match, leg["matchedBy"] = timed, timed_how
         if timed is not None:
@@ -492,7 +534,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
                             "boardTs": _pick_time(match), "arrivedBoardTs": float(match["arrival_ts"])}
             if leg["departedTs"]:
                 leg["departureErrSec"] = leg["departedTs"] - _pick_time(match)
-            arr = matcher.by_trip(to_stops, str(match.get("trip_id")))
+            arr = matcher.by_trip(to_stops, str(match.get("trip_id")), near_ts=float(match["arrival_ts"]))
             if arr is not None:
                 leg["arriveTs"] = at_platform(float(arr["arrival_ts"]), arr.get("route_id"))
                 if leg["alightedTs"]:

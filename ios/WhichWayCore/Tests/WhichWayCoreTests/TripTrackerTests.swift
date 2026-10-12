@@ -96,6 +96,75 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertEqual(t.phase, .arrived)
     }
 
+    func testARideFoundNotToBeOneIsWithdrawnAndTheRidesAfterItMoveUpALeg() {
+        // Oct 12, F to Jay St then the C: the platform shook as an R left the level below (a "ride" of 108 s with no stop
+        // felt, closed by a few steps), then the real F, the change and the C. Withdrawn, the F is the first leg, the C the
+        // second, and the trip waits for the C's walk-off instead of ending on the clock.
+        var t = TripTracker(start(legs: 2, transfer: "Jay St"), distanceToOriginM: 20)
+        t.updateForecast(boardTs: 1300, arriveTs: 3000, now: 1000)
+        var ts = 1000.0
+        func ride(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false, shake: 0.04)); ts += 1 } }
+        func depart() { for _ in 0..<6 { t.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 } }
+        func walk(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: true)); ts += 1 } }
+        func stand(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false)); ts += 1 } }
+        stand(30); depart(); ride(90); stand(10); walk(10)       // the phantom: 1030, off at 1136
+        stand(30); depart()                                       // the F at 1176
+        XCTAssertEqual(t.timeline.legsRidden, 1)
+        XCTAssertEqual(t.timeline.transferWalkSec ?? -1, 10, accuracy: 1, "the shuffle reads as a change before the withdrawal")
+        t.withdrawRide(0)
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed])
+        XCTAssertEqual(t.timeline.events.first?.ts, 1176)
+        XCTAssertEqual(t.timeline.withdrawnDepartures, [1030])
+        XCTAssertEqual(t.timeline.rideStops, [])
+        XCTAssertEqual(t.timeline.walkingSecondsBetweenTrains, 0)
+        XCTAssertTrue(t.onTrain)
+        ride(500); stand(15); walk(20); stand(20)                 // off the F at Jay St, across to the C
+        depart(); ride(300)
+        XCTAssertEqual(t.timeline.legsRidden, 1)
+        XCTAssertEqual(t.timeline.transferWalkSec ?? -1, 20, accuracy: 2)
+        t.tick(now: ts)
+        XCTAssertNotEqual(t.phase, .arrived, "on the second leg's train")
+        ride(300); stand(15); walk(20)
+        t.tick(now: 2990)
+        XCTAssertEqual(t.phase, .arrived)
+        XCTAssertEqual(t.timeline.endedBy, "alighted")
+    }
+
+    func testAPullAwayAfterEveryLegIsRiddenKeepsTheTripOpen() {
+        // the count ran a ride ahead and the rider is on a train again: not over at the clock, but at the next walk-off
+        var t = TripTracker(start(legs: 1), distanceToOriginM: 20)
+        t.updateForecast(boardTs: 1030, arriveTs: 1500, now: 1000)
+        var ts = 1000.0
+        func ride(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false, shake: 0.04)); ts += 1 } }
+        func depart() { for _ in 0..<6 { t.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 } }
+        func walk(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: true)); ts += 1 } }
+        func stand(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false)); ts += 1 } }
+        stand(30); depart(); ride(90); stand(10); walk(10); stand(20)
+        depart(); ride(60)
+        t.tick(now: 1450)
+        XCTAssertNotEqual(t.phase, .arrived, "a pull-away after the last walk-off: on a train again")
+        ride(200); stand(15); walk(20)
+        t.tick(now: ts)
+        XCTAssertEqual(t.phase, .arrived)
+        // a ride that is withdrawn leaves the trip at the station, its platform moment unseen
+        var w = TripTracker(start(legs: 1), distanceToOriginM: 20)
+        ts = 1000
+        func wdepart() { for _ in 0..<6 { w.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 } }
+        for _ in 0..<5 { w.motion(sec(ts, walking: true)); ts += 1 }
+        for _ in 0..<15 { w.motion(sec(ts, walking: false)); ts += 1 }
+        wdepart()
+        for _ in 0..<90 { w.motion(sec(ts, walking: false, shake: 0.04)); ts += 1 }
+        for _ in 0..<10 { w.motion(sec(ts, walking: false)); ts += 1 }
+        for _ in 0..<10 { w.motion(sec(ts, walking: true)); ts += 1 }
+        XCTAssertEqual(w.timeline.legsRidden, 1)
+        w.withdrawRide(0)
+        XCTAssertEqual(w.phase, .atStation)
+        XCTAssertTrue(w.timeline.events.isEmpty)
+        XCTAssertNil(w.timeline.platformTs)
+        w.tick(now: ts + 600)
+        XCTAssertEqual(w.phase, .atStation)
+    }
+
     func testAPushInTheFirstSecondsOfSensingIsNotADeparture() {
         var t = TripTracker(start(), distanceToOriginM: 20)
         var ts = 1000.0

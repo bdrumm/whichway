@@ -100,6 +100,9 @@ struct TripTracker {
     private(set) var lastRideStopTimes: [Double] = []
     private var quietStartTs: Double?
     private var walkStartTs: Double?
+    /// The walking between trains counted so far, as it stood at each departure on the record (in order): what a
+    /// withdrawn first ride's shuffle added to it can be taken back out.
+    private var walkAtDeparture: [Double] = []
 
     /// The ride in hand began from the phone's movement (moving away from the station at a train's pace), not
     /// from a felt pull-away at the platform.
@@ -238,6 +241,10 @@ struct TripTracker {
             timeline.events.append(e)
             switch e.kind {
             case .departed:
+                walkAtDeparture.append(timeline.walkingSecondsBetweenTrains)
+                // every leg was ridden and the rider is on a train again: the count was off (a ride that was not one, or a
+                // change the plan did not have), so the trip is not over at the clock; the next walk-off says so again
+                alightedAll = false
                 afterAlight = false
                 departedByLocation = false
                 stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
@@ -360,6 +367,8 @@ struct TripTracker {
     mutating func notOnTrain() {
         guard phase == .riding, let last = timeline.events.last, last.kind == .departed else { return }
         timeline.events.removeLast()
+        if !walkAtDeparture.isEmpty { walkAtDeparture.removeLast() }
+        alightedAll = timeline.legsRidden >= timeline.legs     // as it stood before the pull-away that was not one
         phase = .atStation
         if timeline.arrivedStationTs == nil { timeline.arrivedStationTs = last.ts }
         stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
@@ -378,6 +387,8 @@ struct TripTracker {
         if timeline.arrivedStationTs == nil { timeline.arrivedStationTs = dep }
         if timeline.platformTs == nil { timeline.platformTs = dep }
         timeline.events.append(MotionEvent(kind: .departed, ts: dep))
+        walkAtDeparture.append(timeline.walkingSecondsBetweenTrains)
+        alightedAll = false
         timeline.rideAssumed = false
         phase = .riding
         afterAlight = false
@@ -410,6 +421,51 @@ struct TripTracker {
         guard phase == .riding, let last = timeline.events.last, last.kind == .departed else { return }
         notOnTrain()
         timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [last.ts]
+    }
+
+    /// The departure and walk-off of ride `k` (0 the first), as the record holds them.
+    func ride(_ k: Int) -> (departedTs: Double, alightedTs: Double?)? {
+        let deps = timeline.events.filter { $0.kind == .departed }, alis = timeline.events.filter { $0.kind == .alighted }
+        guard deps.indices.contains(k) else { return nil }
+        return (deps[k].ts, alis.indices.contains(k) ? alis[k].ts : nil)
+    }
+
+    /// Ride `k` was not one: its pull-away was another platform's train shaking this one and its walk-off a few steps
+    /// on the platform (Oct 12 at 4 Av-9 St). Both are struck from the record, the rides after it move up a leg (the
+    /// F the rider then took is the first leg, not the change), and the trip stands where that leaves it: on the train
+    /// of a later ride, between trains, or still at the origin station. The pull-away is kept as withdrawn.
+    mutating func withdrawRide(_ k: Int) {
+        guard phase != .arrived else { return }
+        let deps = timeline.events.indices.filter { timeline.events[$0].kind == .departed }
+        let alis = timeline.events.indices.filter { timeline.events[$0].kind == .alighted }
+        guard deps.indices.contains(k), alis.indices.contains(k), alis[k] > deps[k] else { return }
+        let depTs = timeline.events[deps[k]].ts
+        if k == 0 {
+            // before the first real ride, steps are the way to the platform, not a change between trains
+            let upTo = walkAtDeparture.indices.contains(1) ? walkAtDeparture[1] : timeline.walkingSecondsBetweenTrains
+            let from = walkAtDeparture.first ?? 0
+            timeline.walkingSecondsBetweenTrains = max(0, timeline.walkingSecondsBetweenTrains - (upTo - from))
+            for i in walkAtDeparture.indices.dropFirst(2) { walkAtDeparture[i] = max(0, walkAtDeparture[i] - (upTo - from)) }
+            if !timeline.platformObserved, timeline.platformTs == depTs { timeline.platformTs = deps.indices.contains(1) ? timeline.events[deps[1]].ts : nil }
+        }
+        timeline.events.remove(at: alis[k])
+        timeline.events.remove(at: deps[k])
+        if walkAtDeparture.indices.contains(k) { walkAtDeparture.remove(at: k) }
+        if timeline.rideStops.indices.contains(k) { timeline.rideStops.remove(at: k) }
+        timeline.boarded = timeline.boarded.filter { $0.leg != k }.map { var b = $0; if b.leg > k { b.leg -= 1 }; return b }
+        timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [depTs]
+        alightedAll = timeline.legsRidden >= timeline.legs && timeline.events.last?.kind == .alighted
+        switch timeline.events.last?.kind {
+        case .departed?:
+            phase = .riding; afterAlight = false              // on the train of a later ride; the sensors carry on with it
+        case .alighted?:
+            phase = .riding; afterAlight = true               // between trains at the change
+        case nil:
+            phase = .atStation; afterAlight = false
+            if !timeline.platformObserved { timeline.platformTs = nil }
+            stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
+            if detector.state == .riding { detector.standDown(); motionState = detector.state }
+        }
     }
 
     /// What the line inference concluded about a leg, kept with the trip (the latest word per leg).

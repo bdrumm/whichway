@@ -1093,7 +1093,9 @@ struct PlannerView: View {
         if !routeStarted { startTrip(by: "onboard") }
         guard routeStarted, let sel = headline else { return }
         let leg = trip.currentLeg
-        if sel.legs.indices.contains(leg), !sel.legs[leg].keys.contains(c.key), let alt = routeRiding(c.key, leg: leg, like: sel) {
+        // the earlier leg's line, with the earlier "ride" one the phone made up: the recorder takes that ride back and
+        // this is the earlier leg, on the route as planned
+        if !trip.namesEarlierLeg(c.key), sel.legs.indices.contains(leg), !sel.legs[leg].keys.contains(c.key), let alt = routeRiding(c.key, leg: leg, like: sel) {
             lastSwitchTs = data.now
             switchRoute(to: alt)
         }

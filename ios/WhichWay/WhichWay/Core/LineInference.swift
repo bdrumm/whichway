@@ -214,11 +214,14 @@ struct DepartureLog: Equatable {
     /// Did a train leave the boarding platform about when a pull-away was felt at `ts`? `left`: one went past the
     /// platform and pulled away within `windowSec` of it (by the feed's time, put back to the platform moment);
     /// `waiting`: some train the log follows has still not reached the platform, so the feed is alive here.
+    /// Only trains at the rider's own platform can vouch for a pull-away: one leaving another platform of the station
+    /// is what shook this one (Oct 12 at 4 Av-9 St: the R pulling out of the level below at 11:47:33 was felt on the
+    /// F platform at 11:47:51, read as a ride on that R, and the trip ran a leg behind from there).
     func departureCheck(at ts: Double, windowSec: Double = 120) -> (left: Bool, waiting: Bool) {
         var left = false, waiting = false
         for e in entries.values {
             let passed = (e.progressIdx ?? e.boardIdx) > e.boardIdx
-            if passed, abs(PlatformTiming.pullsAway(e.boardTs, route: e.route) - ts) <= windowSec { left = true }
+            if passed, e.samePlatform, abs(PlatformTiming.pullsAway(e.boardTs, route: e.route) - ts) <= windowSec { left = true }
             if !passed { waiting = true }
         }
         return (left, waiting)
