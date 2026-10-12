@@ -1268,7 +1268,7 @@ struct PlannerView: View {
         switch ph {
         case .approaching:
             var s = "Heading to \(originName)"
-            if let d = distanceM(to: originId) { s += " · \(Fmt.miles(d))" }
+            if let d = distanceM(to: originId) { s += " · \(Fmt.miles(d)) away" }
             return s
         case .atStation: return "At \(originName)"
         case .riding:

@@ -592,9 +592,11 @@ func walkLineText(_ w: NearbyStation, originId: String, placeName: String?, plac
     let tight = left.map { walkSec > $0 } ?? false
     let reach = pm.walkSpeedMPerMin * max(0, (left ?? 0) - access) / 60
     var text = placeName.map { "\($0): " } ?? ""
-    text += placeUsualSec != nil ? "usually \(mins) min" : "\(Fmt.miles(w.meters)) - \(mins) min"
+    // distances are the rider's own: how far they are from the station, and, when the train comes first, how far
+    // short of it they would still be then (it said "0.2 mi - 4 min · 300 ft", the 300 ft being the reach, unlabelled)
+    text += placeUsualSec != nil ? "usually \(mins) min" : "\(Fmt.miles(w.meters)) away · \(mins) min walk"
     if placeUsualSec == nil, access >= 30 { text += " · \(Int((access / 60).rounded())) min to platform" }
-    if tight { text += " · \(Fmt.miles(reach))" }
+    if tight { text += " · you'd be \(Fmt.miles(max(0, w.meters - reach))) short" }
     return (text, tight)
 }
 
