@@ -456,7 +456,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
         "id": o.get("id"), "day": _day(created), "createdTs": created, "endedTs": ended, "endedBy": o.get("endedBy"), "startedBy": o.get("startedBy"),
         "routeLabel": o.get("routeLabel"), "offline": bool(o.get("offline")), "rideAssumed": o.get("rideAssumed"),
         "predictedBoardTs": o.get("predictedBoardTs"), "predictedArriveTs": o.get("predictedArriveTs"), "expectedSec": o.get("expectedSec"),
-        "schedSec": o.get("schedSec"), "extraMin": o.get("extraMin"), "trainLateSec": o.get("trainLateSec"), "trainHeld": o.get("trainHeld"),
+        "schedSec": o.get("schedSec"), "extraMin": o.get("extraMin"), "trainLateSec": o.get("trainLateSec"), "trainGapSec": o.get("trainGapSec"), "trainHeld": o.get("trainHeld"),
         "transferStation": o.get("transferStation"), "transferWalkSec": o.get("transferWalkSec"), "measuredTransferSec": o.get("measuredTransferSec"),
         "accessSec": o.get("accessSec"), "walkSpeedMPerMin": o.get("walkSpeedMPerMin"), "startDistanceM": o.get("startDistanceM"),
         "nDeparts": len(departs), "nAlights": len(alights), "legs": [],

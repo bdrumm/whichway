@@ -219,15 +219,17 @@ struct DelayModel: Decodable {
         let staleMin = phases?.staleMin ?? 10
 
         // the feed now: the trains within three stops of the named station on the boards, in the direction named,
-        // else the whole line
+        // else the whole line; each judged by the extra wait it makes (its gap over the scheduled headway) when the
+        // boards can tell, so a line slid evenly off its timetable after a hold reads normal (the calibration's signal)
         var lates: [Double] = [], near: [Double] = []
         var held = 0, heldNear = 0
         let want = station.map(DelayModel.normName)
         for b in boards {
             if (direction == "N" && b.direction == "S") || (direction == "S" && b.direction == "N") { continue }
             let idx: Int? = want.flatMap { w in lines[b.key]?.names.firstIndex { DelayModel.normName($0) == w } }
+            let gaps = b.trains.filter { $0.started && $0.practicalLatenessSec != nil }.count >= 2
             for t in b.trains where t.started {
-                guard let l = t.effectiveLatenessSec else { continue }
+                guard let l = gaps ? t.practicalLatenessSec : t.effectiveLatenessSec else { continue }
                 lates.append(l)
                 let stuck = t.position?.holding == true || t.position?.stalled == true
                 if stuck { held += 1 }

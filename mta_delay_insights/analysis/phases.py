@@ -1,9 +1,13 @@
 """The phases of a delay alert as the feed tells them: starting, in effect, waning, stale.
 
-An alert is a message; the trains are the fact. For each unplanned delay alert the feed gives a trajectory: the
-lateness of arrivals, per five minutes, at the stops around the station it names (the whole line when it names
-none), as excess over the hour before the alert. Read along that trajectory with only what was knowable at each
-moment, the alert is
+An alert is a message; the trains are the fact. For each unplanned delay alert the feed gives a trajectory: per five
+minutes, at the stops around the station it names (the whole line when it names none), the worst extra wait riders
+there faced (`stop_gap_bins`: the gap behind the train before over the scheduled headway, or the wait still open), as
+excess over the hour before the alert. The gap, not the minutes behind the timetable: after a hold the whole line
+runs late by the timetable for an hour or more at even spacing, and riders wait as usual (Oct 12 over 547 alerts: on
+timetable lateness, "in effect" and "stale" foresaw the same worst wait in the next 30 min, 5.4 and 6.1 min; on gaps
+13.3 and 4.0 min). `signal="lateness"` keeps the old reading. Read along that trajectory with only what was knowable
+at each moment, the alert is
 
 - starting: posted, nothing over the margin in the feed yet, and not yet past the time by which alerts that will
   show in the feed have shown (`never_min`, the upper quartile of the lag from posting to first evidence);
@@ -37,6 +41,60 @@ PHASES = ("starting", "in effect", "waning", "stale", "unconfirmed")
 PRIORITY = {"in effect": 0, "starting": 1, "waning": 2, "unconfirmed": 3, "stale": 4}
 DEFAULT_START_MIN = 10.0
 DEFAULT_NEVER_MIN = 30.0
+SIGNAL = "gap"            # what a bin measures: "gap" (the worst extra wait) or "lateness" (vs the timetable)
+GAP_SPAN_MIN = 60         # the scheduled headway: the median scheduled spacing of the trips in this window around a train
+MAX_GAP_SEC = 5400.0      # a longer gap is the line's service day starting or ending, not a wait
+
+
+def stop_gap_bins(matched: pd.DataFrame, bin_min: int = BIN_MIN) -> pd.DataFrame:
+    """Per route, stop and bin, the worst extra wait riders there faced, as `lateness_sec` (so the trajectories take
+    either signal): each arrival's gap behind the one before less the scheduled headway (the median scheduled spacing
+    of the trips around it, so a dropped trip shows as a whole extra headway), or, at the bin's end, the wait still
+    open since the last train when that already exceeds the headway (a hold shows while it lasts, not only once the
+    train arrives). `n`: the arrivals in the bin, at least MIN_TRAINS for an open wait, which is a reading in itself."""
+    bw = bin_min * 60
+    out: list[tuple] = []
+    m = matched.dropna(subset=["sched_arrival_ts"]).sort_values("arrival_ts")
+    for (route, stop), g in m.groupby([m["route_id"].astype(str), "stop_id"]):
+        if len(g) < 4:
+            continue
+        ts = g["arrival_ts"].to_numpy(float)
+        sc = np.sort(g["sched_arrival_ts"].to_numpy(float))
+        sgap, sgap_ts = np.diff(sc), sc[1:]
+        half = GAP_SPAN_MIN * 30
+
+        def headway(t: float) -> float | None:
+            v = sgap[np.searchsorted(sgap_ts, t - half):np.searchsorted(sgap_ts, t + half)]
+            v = v[(v > 0) & (v <= 1800)]
+            return float(np.median(v)) if len(v) >= 2 else None
+
+        j = 0
+        for b in range(int(ts[0] // bw) + 1, int(ts[-1] // bw) + 1):
+            end = (b + 1) * bw
+            worst, n = None, 0
+            while j < len(ts) and ts[j] < end:
+                if j > 0 and ts[j] >= b * bw:
+                    h = headway(ts[j - 1])
+                    if h is not None and ts[j] - ts[j - 1] <= MAX_GAP_SEC:
+                        e = ts[j] - ts[j - 1] - h
+                        worst = e if worst is None else max(worst, e)
+                    n += 1
+                j += 1
+            if j > 0:
+                last = ts[j - 1]
+                h = headway(last)
+                if h is not None and h < end - last <= MAX_GAP_SEC:
+                    e = end - last - h
+                    worst = e if worst is None else max(worst, e)
+                    n = max(n, MIN_TRAINS)
+            if worst is not None:
+                out.append((route, stop, b, worst, n))
+    return pd.DataFrame(out, columns=["route_id", "stop_id", "bin", "lateness_sec", "n"])
+
+
+def signal_bins(matched: pd.DataFrame, signal: str = SIGNAL, bin_min: int = BIN_MIN) -> pd.DataFrame:
+    """The bins a trajectory reads: the worst extra wait (`gap`) or the median lateness vs the timetable."""
+    return stop_gap_bins(matched, bin_min) if signal == "gap" else stop_lateness_bins(matched, bin_min)
 
 
 # ------------------------------------------------------------------ trajectories
@@ -65,9 +123,10 @@ def trajectory(bins: pd.DataFrame, start_ts: float, end_ts: float, routes: list[
     return per[["bin", "ts", "age_min", "lateness_sec", "excess_sec", "n"]]
 
 
-def trajectories(events: pd.DataFrame, matched: pd.DataFrame, lines: dict, reach: int = 3, bin_min: int = BIN_MIN) -> dict[str, pd.DataFrame]:
+def trajectories(events: pd.DataFrame, matched: pd.DataFrame, lines: dict, reach: int = 3, bin_min: int = BIN_MIN,
+                 signal: str = SIGNAL) -> dict[str, pd.DataFrame]:
     """One trajectory per alert the arrivals can follow, station-local where the schedule knows the station."""
-    bins = stop_lateness_bins(matched, bin_min)
+    bins = signal_bins(matched, signal, bin_min)
     bins["route_id"] = bins["route_id"].astype(str)
     out: dict[str, pd.DataFrame] = {}
     for ev in events.itertuples(index=False):
@@ -127,14 +186,18 @@ def _q(s: pd.Series, p: float) -> float | None:
 
 
 def calibrate(events: pd.DataFrame, matched: pd.DataFrame, lines: dict, windows: list[tuple[float, float]],
-              reach: int = 3, min_n: int = 8) -> dict:
+              reach: int = 3, min_n: int = 8, signal: str = SIGNAL) -> dict:
     """The tables: when the feed first shows an alert's delay (which sets `start_min` and `never_min`), the peak
     and the recovery, each phase's share of alert-minutes and the chance the alert is gone 15, 30 and 60 minutes
     later, by cause, and the baseline for a new alert by what the trains showed at posting."""
-    trajs = trajectories(events, matched, lines, reach)
-    out: dict = {"bin_min": BIN_MIN, "margin_sec": MARGIN_SEC, "recede": RECEDE, "stale_min": STALE_BINS * BIN_MIN, "n_followed": len(trajs)}
+    trajs = trajectories(events, matched, lines, reach, signal=signal)
+    out: dict = {"bin_min": BIN_MIN, "margin_sec": MARGIN_SEC, "recede": RECEDE, "stale_min": STALE_BINS * BIN_MIN, "n_followed": len(trajs),
+                 "signal": signal}
     if not trajs:
         return out
+    # the reading before alerts, which the trajectories take as zero: the phone, with no hour before to go by, adds it
+    bases = [float(t.attrs.get("baseline_sec", 0.0)) for t in trajs.values()]
+    out["baseline_sec_p50"] = float(np.median(bases))
     ev_by_id = {r.event_id: r for r in events.itertuples(index=False)}
 
     # first evidence, the peak and the recovery, per alert

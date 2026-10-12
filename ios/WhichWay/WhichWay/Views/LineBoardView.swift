@@ -138,7 +138,8 @@ struct LineBoardView: View {
                         HStack(spacing: 8) {
                             Tile(title: "Trains", value: "\(b.trains.count)", sub: "started, in the feed")
                             Tile(title: "Held / overdue", value: "\(b.nHolding) / \(b.nStalled)", sub: "≥ \(Int(sched.constants.holdSec)) s at a stop / late between stops")
-                            Tile(title: "Late ≥ 3 min", value: "\(b.trains.filter { ($0.effectiveLatenessSec ?? 0) >= 180 }.count)", sub: "vs the timetable")
+                            Tile(title: "Gaps ≥ 3 min", value: "\(b.trains.filter { ($0.concernSec ?? 0) >= 180 }.count)",
+                                 sub: "over the usual spacing · \(b.trains.filter { ($0.effectiveLatenessSec ?? 0) >= 180 }.count) late by the timetable")
                         }
                         if let lp = data.predictions[lineKey]?[data.scenario] ?? data.predictions[lineKey]?["baseline"] {
                             if let raw = data.boards[lineKey], !raw.trains.isEmpty {
@@ -177,8 +178,7 @@ struct LineBoardView: View {
         let focus = focusedTrainId
         return b.trains.map { t in
             let p = trainProgress(t, age: age, line: line)
-            var sub = ""
-            if let e = t.effectiveLatenessSec, abs(e) >= 60 { sub = Fmt.late(e) }
+            let sub = t.lateNote ?? ""
             return DiagramTrain(id: t.id, idx: p.idx, state: p.state, route: t.route, label: shortLabel(t), sub: sub, emphasis: t.id == focus ? "origin" : nil)
         }
     }
@@ -204,7 +204,7 @@ struct TrainRow: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         if focused { Flag("your train", Color.green) }
-                        Text(Fmt.late(train.effectiveLatenessSec) + (train.schedMethod == "nearest" ? " ~" : ""))
+                        Text(train.lateLabel + (train.practicalLatenessSec == nil && train.schedMethod == "nearest" ? " ~" : ""))
                             .font(.caption2).foregroundStyle(latenessColor)
                         if train.corroboration == "feed_optimistic" { Flag("feed optimistic", Color.orange) }
                         if let p = train.position, p.holding { Flag("held \(Fmt.mmss(p.sinceSec))", Color.orange) }
@@ -232,7 +232,7 @@ struct TrainRow: View {
     }
 
     private var latenessColor: Color {
-        guard let e = train.effectiveLatenessSec else { return Color.secondary }
+        guard let e = train.concernSec else { return Color.secondary }
         if e >= 300 { return Color.red }
         if e >= 120 { return Color.orange }
         return Color.secondary

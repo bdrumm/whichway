@@ -722,7 +722,9 @@ struct PlannerView: View {
             predictedBoardTs: it?.boardTs, predictedArriveTs: it?.arriveTs, expectedSec: p.expectedSec, schedSec: p.schedSec,
             extraMin: h.extraSec >= 90 ? h.minutes : 0, trainLateSec: l0?.effectiveLatenessSec, trainHeld: l0?.isHeld ?? false,
             offline: data.offline, startedBy: startedBy)
-        return base
+        var o = base
+        o.trainGapSec = l0?.practicalLatenessSec
+        return o
     }
 
     private func updateTelemetry() {
@@ -731,7 +733,7 @@ struct PlannerView: View {
         let l0 = p.live?.legs.first?.train
         Telemetry.shared.updatePrediction(boardTs: p.live?.boardTs, arriveTs: p.live?.arriveTs, expectedSec: p.expectedSec,
                                           extraMin: h.extraSec >= 90 ? h.minutes : 0, trainLateSec: l0?.effectiveLatenessSec,
-                                          held: l0?.isHeld ?? false, offline: data.offline, departed: trip.phase == .riding)
+                                          trainGapSec: l0?.practicalLatenessSec, held: l0?.isHeld ?? false, offline: data.offline, departed: trip.phase == .riding)
     }
 
     // MARK: - the Live Activity
@@ -748,7 +750,8 @@ struct PlannerView: View {
         if let l0 = l0 {
             var bits: [String] = []
             if let pos = l0.train.position { bits.append("train now \(pos.text)") }
-            if let e = l0.train.effectiveLatenessSec, abs(e) >= 60 { bits.append(Fmt.late(e)) }
+            if let n = l0.train.lateNote { bits.append(n) }
+            else if l0.train.practicalLatenessSec != nil, let e = l0.train.effectiveLatenessSec, e >= 180 { bits.append(l0.train.lateLabel) }
             status = bits.joined(separator: " · ")
         } else {
             status = data.predictedBoards.isEmpty ? "waiting for the live feeds" : "no train for this path in the feeds yet"
@@ -1737,8 +1740,7 @@ struct LegDiagram: View {
                 if let l = option.live, l.legs.indices.contains(legNo - 1), l.legs[legNo - 1].train.id == t.id {
                     emphasis = legNo == 1 ? "origin" : "connection"
                 }
-                var sub = ""
-                if let e = t.effectiveLatenessSec, abs(e) >= 60 { sub = Fmt.late(e) }
+                var sub = t.lateNote ?? ""
                 if sub.isEmpty, let lr = t.lastRun, let sp = lr.speedKmh { sub = Fmt.mph(sp) }
                 out.append(DiagramTrain(id: t.id, idx: idx, state: p.state, route: t.route, label: shortLabel(t), sub: sub, emphasis: emphasis))
             }
@@ -1778,8 +1780,8 @@ struct ItineraryRow: View {
                     Text(shortLabel(leg.train)).font(.caption.monospaced())
                     Text(positionText(leg)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
-                    if let e = leg.train.effectiveLatenessSec {
-                        Text(Fmt.late(e)).font(.caption2).foregroundStyle(abs(e) >= 180 ? Color.orange : Color.secondary)
+                    if let e = leg.train.concernSec {
+                        Text(leg.train.lateLabel).font(.caption2).foregroundStyle(e >= 180 ? Color.orange : Color.secondary)
                     }
                 }
                 if i == 0, let m = itinerary.connectionMarginSec {

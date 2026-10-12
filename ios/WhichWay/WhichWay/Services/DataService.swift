@@ -445,11 +445,14 @@ final class DataService {
             if let b = lineBoard(schedule: sched, lineSched: lineSched[k] ?? [], feeds: feeds, key: k, now: t) { out[k] = b }
         }
         boards = out
-        // the lines' lateness at this poll, for the delay alerts' trajectories
+        // the lines' lateness at this poll, for the delay alerts' trajectories: the extra wait the trains make (their gap
+        // over the scheduled headway) where the board can tell, as the delay model is calibrated on
         var perRoute: [String: (lates: [Double], held: Int)] = [:]
         for b in out.values {
             var e = perRoute[b.route] ?? ([], 0)
-            e.lates += b.trains.filter { $0.started }.compactMap { $0.effectiveLatenessSec }
+            let started = b.trains.filter { $0.started }
+            let gaps = started.compactMap { $0.practicalLatenessSec }
+            e.lates += gaps.count >= 2 ? gaps : started.compactMap { $0.effectiveLatenessSec }
             e.held += b.nHolding + b.nStalled
             perRoute[b.route] = e
         }

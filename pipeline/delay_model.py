@@ -296,8 +296,8 @@ def main() -> int:
         if not matched.empty:
             bins = dl.stop_lateness_bins(matched)
             rec = dl.recovery_lag(ev, bins, windows, lines=lines)
-            phases = ph.calibrate(ev, matched, lines, windows)
-            print(f"phases: {phases.get('n_followed', 0)} alerts followed at {ph.BIN_MIN}-min bins", flush=True)
+            phases = ph.calibrate(ev, matched, lines, windows, signal=ph.SIGNAL)
+            print(f"phases: {phases.get('n_followed', 0)} alerts followed at {ph.BIN_MIN}-min bins on the {ph.SIGNAL} signal", flush=True)
             stale = dl.stale_tables(rec)
     sources = {"store": args.store, "windows": len(windows), "polling_hours": sum(b - a for a, b in windows) / 3600,
                "first_day": time.strftime("%Y-%m-%d", time.localtime(ev["start_ts"].min())) if len(ev) else None,

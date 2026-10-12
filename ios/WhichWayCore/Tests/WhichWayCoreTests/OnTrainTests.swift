@@ -143,6 +143,27 @@ final class OnTrainTests: XCTestCase {
         XCTAssertTrue(own.departureCheck(at: 0).left)
     }
 
+    func testPracticalLatenessIsTheGapBehindTheTrainBeforeOverTheHeadway() {
+        // three C trains 15 min behind their timetable: the first two at the scheduled 8 min spacing, the third 10 min
+        // behind the second (a dropped trip would be 16). A rider waits as usual for the second, 2 min extra for the third.
+        var lead = train("c1", key: "C_N", points: [(5, 60), (6, 180)]); lead.latenessSec = 900; lead.effectiveLatenessSec = 900
+        var even = train("c2", key: "C_N", points: [(4, 420), (5, 540), (6, 660)]); even.latenessSec = 900; even.effectiveLatenessSec = 900
+        var gap = train("c3", key: "C_N", points: [(4, 1020), (5, 1140), (6, 1260)]); gap.latenessSec = 900; gap.effectiveLatenessSec = 900
+        var far = train("c4", key: "C_N", points: [(4, 1900), (5, 2020)])
+        var ts = [lead, even, gap, far]
+        practicalLateness(&ts, headway: { _, _ in 480 }, now: 0)
+        XCTAssertNil(ts[0].practicalLatenessSec, "nothing ahead of it")
+        XCTAssertEqual(ts[1].practicalLatenessSec ?? -1, 0, accuracy: 0.1, "judged at stop 5, where the train before is still due")
+        XCTAssertEqual(ts[2].practicalLatenessSec ?? -1, 120, accuracy: 0.1)
+        XCTAssertNil(ts[3].practicalLatenessSec, "due past the 20 min the feed's times are good for")
+        XCTAssertEqual(ts[1].lateLabel, "regular · 15 min late by the timetable")
+        XCTAssertEqual(ts[2].lateLabel, "2 min gap")
+        XCTAssertNil(ts[1].lateNote)
+        XCTAssertEqual(ts[0].lateLabel, "15 min late", "no gap to judge by: the timetable's figure")
+        XCTAssertEqual(ts[1].concernSec, 0)
+        lead = ts[0]; even = ts[1]; gap = ts[2]; far = ts[3]
+    }
+
     func testTheLogTakesUpATrainItNeverSawAtThePlatform() {
         var log = DepartureLog()
         let c = BoardingCandidate(trainId: "G_N|g1", key: "G_N", route: "G", boardTs: 900, alightTs: 1260, stopsToAlight: 3, chosen: false, onLeg: true,

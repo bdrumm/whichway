@@ -32,9 +32,15 @@ struct LineHealth {
     let route = String(key.split(separator: "_").first ?? "")
     let trains = b.trains
     guard !trains.isEmpty else { return LineHealth(level: .minor, reason: "no started train in the feed") }
-    let lates = trains.compactMap { $0.effectiveLatenessSec }.map { max(0, $0) }.sorted()
+    // judged by the extra wait the trains make (the gap over the scheduled headway) where the board can tell: a line
+    // running behind its timetable at even spacing is no delay to a rider at the platform
+    let gaps = trains.filter { $0.practicalLatenessSec != nil }.count >= 2
+    let by: (LiveTrain) -> Double? = { gaps ? $0.practicalLatenessSec : $0.effectiveLatenessSec }
+    let lates = trains.compactMap(by).map { max(0, $0) }.sorted()
     let median = lates.isEmpty ? 0 : lates[lates.count / 2]
-    let nLate = trains.filter { ($0.effectiveLatenessSec ?? 0) >= 180 }.count
+    let nLate = trains.filter { (by($0) ?? 0) >= 180 }.count
+    let behind = trains.compactMap { $0.effectiveLatenessSec }.sorted()
+    let behindMedian = behind.isEmpty ? 0 : behind[behind.count / 2]
     let lateShare = Double(nLate) / Double(trains.count)
     let held = b.nHolding + b.nStalled
     let delayAlerts = data.alertsFor(routes: [route]).filter { $0.kind == "delay" }
@@ -53,8 +59,14 @@ struct LineHealth {
     else if median >= 300 || lateShare >= 0.5 || gapRatio >= 2 || !delayAlerts.isEmpty { level = .delays }
     else if median >= 120 || lateShare >= 0.25 || gapRatio >= 1.5 || held >= 1 { level = .minor }
     var parts: [String] = []
-    parts.append(nLate == 0 ? "no train 3+ min late" : "\(nLate) of \(trains.count) trains 3+ min late")
-    if median >= 60 { parts.append("typically \(Fmt.minTxt(median)) behind") }
+    if gaps {
+        parts.append(nLate == 0 ? "trains at their usual spacing" : "\(nLate) of \(trains.count) trains 3+ min behind the usual spacing")
+        if median >= 60 { parts.append("typically \(Fmt.minTxt(median)) extra wait") }
+        if behindMedian >= 180, median < 60 { parts.append("\(Fmt.minTxt(behindMedian)) behind the timetable, which no longer matters at the platform") }
+    } else {
+        parts.append(nLate == 0 ? "no train 3+ min late" : "\(nLate) of \(trains.count) trains 3+ min late")
+        if median >= 60 { parts.append("typically \(Fmt.minTxt(median)) behind") }
+    }
     if held > 0 { parts.append("\(held) held or overdue") }
     if gapRatio >= 1.5, !gapText.isEmpty { parts.append(gapText) }
     if !delayAlerts.isEmpty { parts.append("delay alert active") }

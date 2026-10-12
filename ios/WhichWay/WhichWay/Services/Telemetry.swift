@@ -20,6 +20,7 @@ struct TripObservation: Codable, Identifiable {
     var schedSec: Int
     var extraMin: Int
     var trainLateSec: Double?
+    var trainGapSec: Double? = nil        // the first train's gap behind the one before over the scheduled headway (practical lateness)
     var trainHeld: Bool
     var offline: Bool
     var startedBy: String                 // "gps" | "hand"
@@ -125,10 +126,11 @@ final class Telemetry {
 
     /// The forecast as it stands; frozen once the sensors have seen a departure, so the record keeps the
     /// forecast the rider acted on.
-    func updatePrediction(boardTs: Double?, arriveTs: Double?, expectedSec: Double, extraMin: Int, trainLateSec: Double?, held: Bool, offline: Bool, departed: Bool) {
+    func updatePrediction(boardTs: Double?, arriveTs: Double?, expectedSec: Double, extraMin: Int, trainLateSec: Double?, trainGapSec: Double? = nil,
+                          held: Bool, offline: Bool, departed: Bool) {
         guard var o = current, !departed else { return }
         o.predictedBoardTs = boardTs; o.predictedArriveTs = arriveTs; o.expectedSec = expectedSec; o.extraMin = extraMin
-        o.trainLateSec = trainLateSec; o.trainHeld = held; o.offline = offline
+        o.trainLateSec = trainLateSec; o.trainGapSec = trainGapSec; o.trainHeld = held; o.offline = offline
         current = o
     }
 

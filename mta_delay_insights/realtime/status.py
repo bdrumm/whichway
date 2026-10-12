@@ -60,6 +60,10 @@ class LiveTrain:
     at_origin: bool = False                # stopped at a terminal of the route: waiting to depart or relay is not a hold
     position_lateness_sec: float | None = None   # lateness implied by the position alone
     corroboration: str | None = None       # feed ETA vs position: agree | feed_optimistic | position_unknown
+    # practical lateness: the gap this train leaves behind the one before it on the line, over the scheduled headway.
+    # A line running 15 minutes behind its timetable at even spacing reads 0 (the schedule has moved, riders wait as
+    # usual); a dropped trip or a held train reads the extra wait. Set by annotate_practical.
+    practical_lateness_sec: float | None = None
 
     @property
     def effective_lateness_sec(self) -> float | None:
@@ -88,7 +92,7 @@ class LiveTrain:
                 "position": {"status": self.pos_status, "stop_id": self.pos_stop_id, "stop_name": name(self.pos_stop_id), "since_sec": self.since_update_sec,
                              "expected_run_sec": self.expected_run_sec, "holding": self.holding, "stalled": self.stalled,
                              "position_lateness_sec": self.position_lateness_sec, "corroboration": self.corroboration} if self.pos_status else None,
-                "effective_lateness_sec": self.effective_lateness_sec}
+                "effective_lateness_sec": self.effective_lateness_sec, "practical_lateness_sec": self.practical_lateness_sec}
 
 
 def _service_date(start_date: str | None, now: float) -> date:
@@ -236,6 +240,43 @@ def _sched_headway(static: StaticGTFS, route: str, direction: str, ref_stop: str
     return float(hw.median()) if len(hw) else None
 
 
+def annotate_practical(trains: list[LiveTrain], static: StaticGTFS, now: float, cache: dict | None = None, max_stops: int = 15,
+                       horizon_sec: float = 1200.0) -> None:
+    """Each started train's practical lateness: at the first stop on its way where another train of its line and
+    direction is due before it, the gap behind that train less the scheduled headway (the store, Sep 26 - Oct 12: of
+    trains 5+ min behind the timetable, 53% left a gap within 2 min of the scheduled one). Only gaps the feed puts
+    within `horizon_sec` count, as for the line's largest gap: its times further out are rough."""
+    cache = {} if cache is None else cache
+    by_rd: dict[tuple[str, str], list[LiveTrain]] = {}
+    for t in trains:
+        if t.direction:
+            by_rd.setdefault((t.route_id, t.direction), []).append(t)
+    for (route, direction), ts in by_rd.items():
+        at: dict[str, list[tuple[float, str]]] = {}
+        for t in ts:
+            for sid, eta in t.stops:
+                at.setdefault(sid, []).append((float(eta), t.trip_id))
+        if not at:
+            continue
+        ref = max(at, key=lambda x: len(at[x]))
+        hw = _sched_headway(static, route, direction, ref, now, cache)
+        if not hw:
+            continue
+        for t in ts:
+            t.practical_lateness_sec = None
+            if not t.started:
+                continue
+            for sid, eta in t.stops[:max_stops]:
+                if float(eta) > now + horizon_sec:
+                    break
+                ahead = [e for e, trip in at.get(sid, []) if trip != t.trip_id and e < float(eta) - 1]
+                if ahead:
+                    gap = float(eta) - max(ahead)
+                    if gap <= 5400:
+                        t.practical_lateness_sec = gap - hw
+                    break
+
+
 def active_alerts(alerts_df: pd.DataFrame | None, now: float) -> pd.DataFrame:
     if alerts_df is None or alerts_df.empty:
         return pd.DataFrame(columns=["alert_id", "alert_type", "planned", "cause_category", "routes", "header", "kind", "active_start", "active_end"])
@@ -255,6 +296,7 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
     out would be artificially long.
     """
     cache: dict = {}
+    annotate_practical(trains, static, now, cache)
     out = []
     by_rd: dict[tuple[str, str], list[LiveTrain]] = {}
     for t in trains:
@@ -284,6 +326,8 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
         lat = [t.effective_lateness_sec for t in started if t.effective_lateness_sec is not None]
         med_late = float(np.median(lat)) if lat else None
         p90_late = float(np.quantile(lat, 0.9)) if lat else None
+        prac = [t.practical_lateness_sec for t in started if t.practical_lateness_sec is not None]
+        worst_prac = float(max(prac)) if prac else None
         n_holding = sum(1 for t in started if t.holding)
         n_stalled = sum(1 for t in started if t.stalled)
         n_pos = sum(1 for t in started if t.pos_status)
@@ -293,9 +337,14 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
         disruptive = [h for t, h in zip(unplanned.get("alert_type", []), unplanned.get("header", []))
                       if str(t).lower().startswith(DISRUPTION_TYPES)]
         gap_ratio = (best_gap / sched_hw) if (sched_hw and best_gap) else None
-        if disruptive or (gap_ratio and gap_ratio >= GAP_DISRUPTED) or (med_late is not None and med_late >= LATE_DISRUPTED_SEC) or n_stalled >= 2:
+        # lateness counts as the extra wait it makes, which the largest gap over the scheduled headway already judges:
+        # minutes behind a timetable the whole line has slid from are no concern for a rider at the platform. Only where
+        # no gap could be measured does the timetable's median stand in (Oct 12, live: 6 lines disrupted and 19 degraded
+        # by the old rule against 7 and 20 with the worst gap added as well, so the gap check alone is the rule)
+        late_now = None if prac else med_late
+        if disruptive or (gap_ratio and gap_ratio >= GAP_DISRUPTED) or (late_now is not None and late_now >= LATE_DISRUPTED_SEC) or n_stalled >= 2:
             status = "disrupted"
-        elif len(unplanned) or (gap_ratio and gap_ratio >= GAP_DEGRADED) or (med_late is not None and med_late >= LATE_DEGRADED_SEC) or n_stalled or n_holding >= 2:
+        elif len(unplanned) or (gap_ratio and gap_ratio >= GAP_DEGRADED) or (late_now is not None and late_now >= LATE_DEGRADED_SEC) or n_stalled or n_holding >= 2:
             status = "degraded"
         else:
             status = "good"
@@ -303,6 +352,7 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
             "route_id": route, "direction": direction, "trains": len(started), "scheduled_not_started": len(ts) - len(started),
             "matched": sum(1 for t in started if t.sched_matched),
             "median_lateness_sec": med_late, "p90_lateness_sec": p90_late,
+            "worst_practical_sec": worst_prac, "median_practical_sec": float(np.median(prac)) if prac else None, "n_practical": len(prac),
             "positions": {"n": n_pos, "holding": n_holding, "stalled": n_stalled, "feed_optimistic": n_optimistic,
                           "stalled_trains": [{"trip_id": t.trip_id, "train_id": t.train_id, "toward": static.stop_name(t.pos_stop_id), "since_sec": t.since_update_sec, "expected_run_sec": t.expected_run_sec} for t in started if t.stalled][:5],
                           "holding_trains": [{"trip_id": t.trip_id, "train_id": t.train_id, "at": static.stop_name(t.pos_stop_id), "since_sec": t.since_update_sec} for t in started if t.holding][:5]},

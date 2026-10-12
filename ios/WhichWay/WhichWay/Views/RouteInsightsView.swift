@@ -84,6 +84,8 @@ struct RouteInsightsView: View {
             Section(it.legs.count > 1 ? "Leg \(i + 1): your \(tc.train.route) train" : "Your \(tc.train.route) train") {
                 row("Train", "\(shortLabel(tc.train))", tc.train.trainId != nil ? "the MTA's own train id" : "trip id from the feed")
                 row("Now", tc.train.position?.text ?? "position unknown", positionNote(tc.train))
+                row("Vs the train before", tc.train.practicalLatenessSec != nil ? tc.train.lateLabel : "–",
+                    "its gap behind the train ahead over the scheduled headway: what a rider at the platform waits beyond the usual")
                 row("Vs timetable", Fmt.late(tc.train.effectiveLatenessSec), latenessNote(tc.train))
                 row("Boards \(i == 0 ? originName : (option.transfer?.station ?? ""))", Fmt.hhmm(tc.boardTs), "\(tc.stopsToOrigin) stop\(tc.stopsToOrigin == 1 ? "" : "s") away")
                 row("Arrives", Fmt.hhmm(tc.arriveTs), arrivalNote(tc))

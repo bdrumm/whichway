@@ -239,7 +239,7 @@ def assess_alert(a: dict, model: dict, now: float, feed: dict | None = None, his
         bits.append(f"MTA's end {time.strftime('%-H:%M', time.localtime(stated_end))}" + (" passed" if now > stated_end else ""))
     bits.append(f"{probs[30]:.0%} gone within 30 min")
     if seen:
-        bits.append("trains on time now" if late < NORMAL_LATENESS_SEC else f"trains {late / 60:.0f} min late" + (f", {int(held)} held" if held else ""))
+        bits.append("trains at normal spacing now" if late < NORMAL_LATENESS_SEC else f"gaps {late / 60:.0f} min over the timetable's" + (f", {int(held)} held" if held else ""))
     return {
         "alert_id": a.get("alert_id"), "routes": routes, "cause": cause, "kind": alert_kind(a.get("alert_type"), header),
         "station": station, "direction": direction, "where": where, "posted_ts": created, "age_min": round(age, 1),
@@ -291,7 +291,7 @@ def alert_histories(store, static, lines: dict, alerts_now: list[dict], model: d
             if arr is None or arr.empty:
                 continue
             m = match_arrivals(arr, static)
-            bins = ph.stop_lateness_bins(m, ph.BIN_MIN)
+            bins = ph.signal_bins(m, str((model.get("phases") or {}).get("signal") or "lateness"), ph.BIN_MIN)
             stops = ph.station_stops(extract_station(header), routes, extract_direction(header), lines or {}, reach)
             t = ph.trajectory(bins, created, now, routes, stops or None)
             if t.empty:
@@ -352,12 +352,16 @@ def prewarnings(matched_recent: pd.DataFrame, alerts_now: pd.DataFrame | list[di
 
 def feed_from_routes(routes: list[dict]) -> dict:
     """`feed` for assess_alerts from the live snapshot's per-route summaries (realtime.status.route_status): both
-    directions of a route pooled, the median lateness weighted by trains, held and stalled counted together."""
+    directions of a route pooled, the median practical lateness (the gap over the scheduled headway; the timetable's
+    median where no gap was measured) weighted by trains, held and stalled counted together. A line-wide worst gap
+    reads 2-6 min on an ordinary afternoon (Oct 12), too noisy to call a delay; one big gap shows in the store's bins."""
     per: dict[str, dict] = {}
     for r in routes or []:
         route = str(r.get("route_id") or "")
         n = int(r.get("trains") or 0)
-        late = r.get("median_lateness_sec")
+        # the trains' median practical lateness (the gap over the scheduled headway: a line slid evenly off its timetable
+        # reads normal), else the timetable's median when no gap was measured
+        late = r.get("median_practical_sec") if r.get("median_practical_sec") is not None else r.get("median_lateness_sec")
         pos = r.get("positions") or {}
         d = per.setdefault(route, {"late_w": 0.0, "w": 0, "n_trains": 0, "n_held": 0})
         if late is not None and n > 0:
@@ -370,16 +374,21 @@ def feed_from_routes(routes: list[dict]) -> dict:
 
 def feed_from_boards(boards: dict) -> dict:
     """`feed` for assess_alerts from the live boards (realtime.status / build_live): per route, the median effective
-    lateness of trains in service and the held or overdue count."""
+    lateness of trains in service (the median practical lateness: the gap over the scheduled headway; the median
+    timetable lateness when no train has one) and the held or overdue count."""
     per: dict[str, dict] = {}
     for key, b in (boards or {}).items():
         route = str(b.get("route") or key.split("_")[0])
         trains = b.get("trains") or []
-        lat = [float(t.get("effective_lateness_sec") or t.get("lateness_sec") or 0) for t in trains if t.get("started", True)]
+        live = [t for t in trains if t.get("started", True)]
+        lat = [float(t.get("effective_lateness_sec") or t.get("lateness_sec") or 0) for t in live]
+        prac = [float(t["practical_lateness_sec"]) for t in live if t.get("practical_lateness_sec") is not None]
         held = sum(1 for t in trains if (t.get("position") or {}).get("holding") or (t.get("position") or {}).get("stalled"))
-        d = per.setdefault(route, {"lateness": [], "n_trains": 0, "n_held": 0})
+        d = per.setdefault(route, {"lateness": [], "practical": [], "n_trains": 0, "n_held": 0})
         d["lateness"].extend(lat)
+        d["practical"].extend(prac)
         d["n_trains"] += len(lat)
         d["n_held"] += held
-    return {r: {"lateness_sec": float(np.median(d["lateness"])) if d["lateness"] else 0.0, "n_trains": d["n_trains"], "n_held": d["n_held"]}
+    return {r: {"lateness_sec": float(np.median(d["practical"])) if d["practical"] else (float(np.median(d["lateness"])) if d["lateness"] else 0.0),
+                "n_trains": d["n_trains"], "n_held": d["n_held"]}
             for r, d in per.items()}

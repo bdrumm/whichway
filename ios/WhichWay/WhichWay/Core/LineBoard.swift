@@ -85,6 +85,10 @@ struct LiveTrain: Identifiable {
     var schedMethod: String?
     var latenessSec: Double?
     var effectiveLatenessSec: Double?
+    /// Practical lateness: the gap this train leaves behind the one before it on the line, over the scheduled headway
+    /// (`practicalLateness`). A line running 15 min behind its timetable at even spacing reads 0, a dropped trip or a
+    /// held train reads the extra wait; nil for the train at the front of the board, or one due too far out to say.
+    var practicalLatenessSec: Double? = nil
     var position: TrainPosition?
     var corroboration: String
     var trackChanged: Bool
@@ -97,6 +101,50 @@ struct LiveTrain: Identifiable {
 
     var label: String { (trainId ?? tripId).trimmingCharacters(in: .whitespaces) }
     var isHeld: Bool { position?.holding == true || position?.stalled == true }
+
+    /// The lateness to judge this train by: the extra wait it makes when the board can tell, else the timetable's.
+    var concernSec: Double? { practicalLatenessSec ?? effectiveLatenessSec }
+
+    /// How late it is for a rider: "4 min gap" (the extra wait behind the train before), "regular spacing" (with how
+    /// far the whole line runs behind its timetable, when that is 3 min or more), "bunched"; the timetable's figure
+    /// when no gap could be measured.
+    var lateLabel: String {
+        guard let p = practicalLatenessSec else { return Fmt.late(effectiveLatenessSec) }
+        if p >= 60 { return "\(Int((p / 60).rounded())) min gap" }
+        if p <= -120 { return "bunched" }
+        if let e = effectiveLatenessSec, abs(e) >= 180 { return "regular · \(Fmt.late(e)) by the timetable" }
+        return "regular spacing"
+    }
+
+    /// A short note for a train on a diagram: only what a rider should notice (a gap, or the timetable's figure when
+    /// no gap could be measured), nil otherwise.
+    var lateNote: String? {
+        if let p = practicalLatenessSec { return p >= 60 ? "\(Int((p / 60).rounded())) min gap" : nil }
+        if let e = effectiveLatenessSec, abs(e) >= 60 { return Fmt.late(e) }
+        return nil
+    }
+}
+
+/// Each started train's practical lateness on a board: at the first stop on its way where another train of the line
+/// is due before it (within `horizonSec`: the feed's times further out are rough), the gap behind that train less the
+/// scheduled headway there. The store, Sep 26 - Oct 12: of trains 5+ min behind the timetable, 53% left a gap within
+/// 2 min of the scheduled one; 2.6% of gaps were a whole headway over with the trains level on lateness (a dropped trip).
+func practicalLateness(_ trains: inout [LiveTrain], headway: (Int, Double) -> Double?, now: Double, horizonSec: Double = 1200, maxStops: Int = 15) {
+    var at: [Int: [(ts: Double, id: String)]] = [:]
+    for t in trains { for p in t.points { at[p.idx, default: []].append((p.ts, t.id)) } }
+    for i in trains.indices {
+        trains[i].practicalLatenessSec = nil
+        guard trains[i].started else { continue }
+        let id = trains[i].id
+        for p in trains[i].points.sorted(by: { $0.idx < $1.idx }).prefix(maxStops) {
+            if p.ts > now + horizonSec { break }
+            let ahead = (at[p.idx] ?? []).filter { $0.id != id && $0.ts < p.ts - 1 }.map(\.ts)
+            guard let lead = ahead.max() else { continue }
+            let gap = p.ts - lead
+            if gap <= 5400, let h = headway(p.idx, lead), h > 0 { trains[i].practicalLatenessSec = gap - h }
+            break
+        }
+    }
 }
 
 struct LineBoard {
@@ -271,6 +319,10 @@ func lineBoard(schedule: ClientSchedule, lineSched: [LineSchedEntry], feeds: [St
         }
     }
     trains.sort { a, b in a.nextIdx != b.nextIdx ? a.nextIdx > b.nextIdx : a.etaTs < b.etaTs }
+    let lines = [key: lineSched]
+    practicalLateness(&trains, headway: { idx, ts in
+        idx < line.stops.count ? schedHeadwayAt(schedule: schedule, lineSched: lines, keys: [key], stop: line.stops[idx], now: ts) : nil
+    }, now: now)
     return LineBoard(key: key, route: route, direction: direction, now: now, trains: trains,
                      nHolding: trains.filter { $0.position?.holding == true }.count,
                      nStalled: trains.filter { $0.position?.stalled == true }.count,

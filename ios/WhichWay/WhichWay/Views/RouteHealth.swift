@@ -68,8 +68,11 @@ func alertEvidence(_ a: RouteAlert, data: DataService) -> AlertEvidence {
     guard !boards.isEmpty else { return AlertEvidence(corroborated: false, text: "no \(routes) feed loaded yet") }
     var lates: [Double] = []
     var held = 0, knock = 0
+    var gaps = true
+    for b in boards { if b.trains.filter({ $0.practicalLatenessSec != nil }).count < 2 { gaps = false } }
     for b in boards {
-        lates += b.trains.compactMap { $0.effectiveLatenessSec }
+        // the extra wait the trains make (gap over the scheduled headway) where every board can tell, else the timetable
+        lates += b.trains.compactMap { gaps ? $0.practicalLatenessSec : $0.effectiveLatenessSec }
         held += b.nHolding + b.nStalled
         if let lp = data.predictions[b.key]?[data.scenario] ?? data.predictions[b.key]?["baseline"] { knock += lp.nKnockOn }
     }
@@ -77,10 +80,14 @@ func alertEvidence(_ a: RouteAlert, data: DataService) -> AlertEvidence {
     let median = lates.sorted()[lates.count / 2]
     let nLate = lates.filter { $0 >= 180 }.count
     var bits: [String] = []
-    if median >= 180 { bits.append("trains \(Fmt.late(median)) on average") } else if nLate >= 2 { bits.append("\(nLate) trains 3+ min late") }
+    if gaps {
+        if median >= 180 { bits.append("gaps \(Fmt.minTxt(median)) over the usual") } else if nLate >= 2 { bits.append("\(nLate) gaps 3+ min over the usual") }
+    } else {
+        if median >= 180 { bits.append("trains \(Fmt.late(median)) on average") } else if nLate >= 2 { bits.append("\(nLate) trains 3+ min late") }
+    }
     if held > 0 { bits.append("\(held) held or overdue") }
     if knock > 0 { bits.append("\(knock) held back by the train ahead") }
-    if bits.isEmpty { return AlertEvidence(corroborated: false, text: "not seen in the feeds right now: trains \(Fmt.late(median))") }
+    if bits.isEmpty { return AlertEvidence(corroborated: false, text: "not seen in the feeds right now: trains " + (gaps ? "at their usual spacing" : Fmt.late(median))) }
     return AlertEvidence(corroborated: true, text: "seen in the feeds: " + bits.joined(separator: ", "))
 }
 
