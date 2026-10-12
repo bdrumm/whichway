@@ -42,6 +42,8 @@ struct TripObservation: Codable, Identifiable {
     var boarded: [BoardedLeg]?
     /// Station stops felt on each ride, the alighting stop included.
     var rideStops: [Int]?
+    var stopSpans: [FeltStop]? = nil      // ultra training mode: each station stop felt, for the training corpus
+    var ultraTraining: Bool? = nil
     /// Pull-aways felt that no train made, withdrawn (the platform shaking).
     var withdrawnDepartures: [Double]?
     var uploaded: Bool?
@@ -109,6 +111,7 @@ final class Telemetry {
         UserDefaults.standard.set(on, forKey: Telemetry.optInKey)
         if !on {
             current = nil
+            UserDefaults.standard.set(false, forKey: UltraTraining.key)     // ultra training rides on sharing
             deleteAll()
             installId = UUID().uuidString
             UserDefaults.standard.set(installId, forKey: Telemetry.installKey)
@@ -156,6 +159,15 @@ final class Telemetry {
             o.walkSpeedMPerMin = tl.walkSpeedMPerMin; o.rideAssumed = tl.rideAssumed
             o.boarded = tl.boarded.isEmpty ? nil : tl.boarded
             o.rideStops = tl.rideStops.isEmpty ? nil : tl.rideStops
+            if UltraTraining.enabled {
+                o.ultraTraining = true
+                o.stopSpans = tl.stopSpans.map { sp in
+                    var r = sp
+                    r.start = (sp.start * 10).rounded() / 10
+                    r.end = sp.end.map { ($0 * 10).rounded() / 10 }
+                    return r
+                }
+            }
             o.withdrawnDepartures = tl.withdrawnDepartures
             if o.predictedBoardTs == nil { o.predictedBoardTs = tl.forecastBoardTs; o.predictedArriveTs = tl.forecastArriveTs }
         }

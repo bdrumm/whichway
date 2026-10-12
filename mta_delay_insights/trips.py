@@ -485,7 +485,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
                 else:
                     from_stops = xs
         leg: dict = {
-            "leg": i, "plan": lg.get("line"), "from": lg.get("from"), "to": lg.get("to"),
+            "leg": i, "ride": kept[i] if i < len(kept) else None, "plan": lg.get("line"), "from": lg.get("from"), "to": lg.get("to"),
             "fromName": static.stop_name(lg.get("from", "")) if lg.get("from") else "", "toName": static.stop_name(lg.get("to", "")) if lg.get("to") else "",
             "departedTs": departs[i] if i < len(departs) else None, "alightedTs": alights[i] if i < len(alights) else None,
             "stopsFelt": ride_stops[i] if i < len(ride_stops) else None,

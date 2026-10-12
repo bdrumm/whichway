@@ -62,7 +62,15 @@ struct SharingSection: View {
                     .disabled(tele.observations.isEmpty)
             }
         }
+        Section("Ultra training mode") {
+            Toggle("Ultra training mode", isOn: Binding(get: { ultra }, set: { UltraTraining.enabled = $0; ultra = UltraTraining.enabled }))
+                .disabled(!tele.optIn)
+            Text(UltraTraining.explanation).font(.caption).foregroundStyle(.secondary)
+            if !tele.optIn { Text("Needs Share my trips.").font(.caption).foregroundStyle(.secondary) }
+        }
+        .onAppear { ultra = UltraTraining.enabled }
     }
+    @State private var ultra = false
 
     static let explanation = "On unless you turn it off. While a route is in progress the phone's motion is summarised once a second to notice when your train pulls away and when you walk off it, so the predictions can be checked against real boardings and changes. Shared: the route's stations and lines, the predicted and observed times, the train's lateness, those moments, and the trip's own measurements (walking pace, time to the platform, time changing trains). Never shared: your location, your places, raw sensor data, or anything that identifies you. A random id groups this phone's trips; switching this off deletes what was collected and resets the id."
 }

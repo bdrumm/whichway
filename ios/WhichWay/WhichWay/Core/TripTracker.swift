@@ -32,6 +32,7 @@ struct TripTimeline: Codable, Equatable {
     var rideStops: [Int] = []             // station stops felt on each ride, the alighting stop included
     var boarded: [BoardedLeg] = []        // the train and line each leg was ridden on, as far as the phone could tell
     var withdrawnDepartures: [Double]? = nil   // pull-aways felt that no train made (the platform shaking), withdrawn
+    var stopSpans: [FeltStop] = []        // every station stop felt on each ride: the train at rest, then moving again
 
     /// Legs ridden so far: the number of alightings the sensors saw.
     var legsRidden: Int { events.filter { $0.kind == .alighted }.count }
@@ -56,6 +57,17 @@ struct TripTimeline: Codable, Equatable {
     }
 
     var walkSpeedMPerMin: Double? { walkMeters >= 150 && walkSeconds >= 60 ? walkMeters / walkSeconds * 60 : nil }
+}
+
+/// One station stop the sensors felt on a ride: the train came to rest at `start` (quiet: no push, no shake, no
+/// steps, for the tracker's `stopQuietSec`) and moved again at `end` (nil while it stands, or when the rider walked
+/// off there: the alighting stop, `alighting`). `ride` counts the rides on the record, 0 the first. The training
+/// corpus names the station of each from the train's own times (`make corpus`).
+struct FeltStop: Codable, Equatable {
+    var ride: Int
+    var start: Double
+    var end: Double?
+    var alighting: Bool = false
 }
 
 /// Follows a route in progress from location fixes, summarised motion and the clock, and decides when it is
@@ -257,6 +269,7 @@ struct TripTracker {
             case .alighted:
                 afterAlight = true
                 if quietRun >= stopQuietSec { stopsFelt += 1 }    // the stop the rider got off at
+                markAlighting(at: e.ts)
                 timeline.rideStops.append(stopsFelt)
                 lastRideStopTimes = stopTimes
                 stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
@@ -272,9 +285,10 @@ struct TripTracker {
                     let start = m.ts - Double(stopQuietSec - 1)
                     quietStartTs = start
                     stopTimes.append(start)
+                    timeline.stopSpans.append(FeltStop(ride: max(0, rideCount - 1), start: start))
                 }
             } else {
-                if quietRun >= stopQuietSec { stopsFelt += 1 }
+                if quietRun >= stopQuietSec { stopsFelt += 1; closeSpan(at: m.ts) }
                 quietRun = 0; quietStartTs = nil
             }
         }
@@ -333,7 +347,8 @@ struct TripTracker {
     /// alighting at `ts`; the next push or vibration the sensors feel is the next train leaving.
     mutating func alightStanding(at ts: Double) {
         guard phase == .riding else { return }
-        if quietRun >= stopQuietSec { stopsFelt += 1 }
+        if quietRun >= stopQuietSec { stopsFelt += 1; closeSpan(at: nil) }
+        markAlighting(at: ts)
         timeline.rideStops.append(stopsFelt)
         lastRideStopTimes = stopTimes
         stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
@@ -350,7 +365,8 @@ struct TripTracker {
     /// as an alighting at `ts`; the walk goes on as the change, and the next pull-away is the next train.
     mutating func alightWalking(at ts: Double) {
         guard phase == .riding else { return }
-        if quietRun >= stopQuietSec { stopsFelt += 1 }
+        if quietRun >= stopQuietSec { stopsFelt += 1; closeSpan(at: ts) }
+        markAlighting(at: ts)
         timeline.rideStops.append(stopsFelt)
         lastRideStopTimes = stopTimes
         stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
@@ -366,7 +382,9 @@ struct TripTracker {
     /// station waiting, and the next pull-away counts afresh.
     mutating func notOnTrain() {
         guard phase == .riding, let last = timeline.events.last, last.kind == .departed else { return }
+        let ride = rideCount - 1
         timeline.events.removeLast()
+        timeline.stopSpans.removeAll { $0.ride == ride }
         if !walkAtDeparture.isEmpty { walkAtDeparture.removeLast() }
         alightedAll = timeline.legsRidden >= timeline.legs     // as it stood before the pull-away that was not one
         phase = .atStation
@@ -423,6 +441,23 @@ struct TripTracker {
         timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [last.ts]
     }
 
+    /// Rides on the record so far (felt, named or assumed pull-aways).
+    private var rideCount: Int { timeline.events.filter { $0.kind == .departed }.count }
+
+    /// The station stop in hand is over: the train moved again at `ts`, or the rider got off there.
+    private mutating func closeSpan(at ts: Double?) {
+        guard let i = timeline.stopSpans.indices.last, timeline.stopSpans[i].end == nil, timeline.stopSpans[i].ride == max(0, rideCount - 1) else { return }
+        timeline.stopSpans[i].end = ts
+    }
+
+    /// The walk-off at `ts` was at the ride's last felt stop when that stop ended (the steps began) about then; the
+    /// stop the rider left the train at. The walk that ends the quiet spell closes it before the alighting is told.
+    private mutating func markAlighting(at ts: Double) {
+        guard let i = timeline.stopSpans.indices.last, timeline.stopSpans[i].ride == max(0, rideCount - 1) else { return }
+        // an open span is a change on the same platform: the rider stood on as the train left, so its end is unknown
+        if timeline.stopSpans[i].end.map({ abs(ts - $0) <= 20 }) ?? true { timeline.stopSpans[i].alighting = true }
+    }
+
     /// The departure and walk-off of ride `k` (0 the first), as the record holds them.
     func ride(_ k: Int) -> (departedTs: Double, alightedTs: Double?)? {
         let deps = timeline.events.filter { $0.kind == .departed }, alis = timeline.events.filter { $0.kind == .alighted }
@@ -452,6 +487,7 @@ struct TripTracker {
         timeline.events.remove(at: deps[k])
         if walkAtDeparture.indices.contains(k) { walkAtDeparture.remove(at: k) }
         if timeline.rideStops.indices.contains(k) { timeline.rideStops.remove(at: k) }
+        timeline.stopSpans = timeline.stopSpans.filter { $0.ride != k }.map { var sp = $0; if sp.ride > k { sp.ride -= 1 }; return sp }
         timeline.boarded = timeline.boarded.filter { $0.leg != k }.map { var b = $0; if b.leg > k { b.leg -= 1 }; return b }
         timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [depTs]
         alightedAll = timeline.legsRidden >= timeline.legs && timeline.events.last?.kind == .alighted

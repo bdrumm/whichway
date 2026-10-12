@@ -39,6 +39,9 @@ model: gtfs data-branch ## Train the arrival model on the archive + collected hi
 trips: ## Pull the phone's trips (when it is connected), merge them with the uploads, review them against the trains → data/trips/trip_review.md (IMPORT=file.json takes an export from the app)
 	$(PYTHON) -m pipeline.trip_review --pull $(if $(IMPORT),--import "$(IMPORT)") --db data/mta.sqlite --out data/trips
 
+corpus: ## The station-stop training corpus: every station stop the phone felt (ultra training mode, else the motion traces) named from the matched train → data/corpus (run make trips first)
+	$(PYTHON) -m pipeline.corpus --db data/mta.sqlite --trips data/trips --out data/corpus
+
 relay-test: ## The trip relay's tests (relay/, a Cloudflare Worker; Node's own test runner)
 	cd relay && node --test
 

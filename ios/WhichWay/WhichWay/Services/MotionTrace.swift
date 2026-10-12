@@ -9,9 +9,11 @@ import Foundation
 final class MotionTrace {
     static let shared = MotionTrace()
     static let key = "keepMotionTraces"
-    /// On by default in Debug builds (the developer's own phone, tuning the detector); off in Release.
+    /// On by default in Debug builds (the developer's own phone, tuning the detector); in Release only in ultra
+    /// training mode (a tester's own choice, Settings › Ultra training mode).
     var enabled: Bool {
         get {
+            if UltraTraining.enabled { return true }
             #if DEBUG
             return UserDefaults.standard.object(forKey: MotionTrace.key) as? Bool ?? true
             #else

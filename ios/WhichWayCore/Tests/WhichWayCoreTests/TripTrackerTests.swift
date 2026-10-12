@@ -130,6 +130,33 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertEqual(t.timeline.endedBy, "alighted")
     }
 
+    func testEveryStationStopFeltIsKeptWithWhenTheTrainStoodAndMovedOn() {
+        // the training corpus: each quiet spell on a ride is a station stop, from the train at rest to it moving again;
+        // the one the rider walks off at is marked; a ride withdrawn takes its stops with it, the next ride's move up
+        var t = TripTracker(start(legs: 2, transfer: "X"), distanceToOriginM: 20)
+        t.updateForecast(boardTs: 1030, arriveTs: 3000, now: 1000)
+        var ts = 1000.0
+        func ride(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false, shake: 0.04)); ts += 1 } }
+        func depart() { for _ in 0..<6 { t.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 } }
+        func walk(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: true)); ts += 1 } }
+        func stand(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false)); ts += 1 } }
+        stand(30); depart(); ride(90); stand(10); walk(10); stand(30)      // a phantom: no stop felt, a shuffle
+        depart(); ride(100)
+        let s1 = ts; stand(30); ride(100)                                  // a station stop, 30 s
+        let s2 = ts; stand(25); walk(20)                                   // the change: off at the second stop
+        XCTAssertEqual(t.timeline.stopSpans.count, 2)
+        XCTAssertEqual(t.timeline.stopSpans[0], FeltStop(ride: 1, start: s1, end: s1 + 30))
+        XCTAssertEqual(t.timeline.stopSpans[1].start, s2)
+        XCTAssertEqual(t.timeline.stopSpans[1].end, s2 + 25)
+        XCTAssertTrue(t.timeline.stopSpans[1].alighting)
+        XCTAssertFalse(t.timeline.stopSpans[0].alighting)
+        t.withdrawRide(0)
+        XCTAssertEqual(t.timeline.stopSpans.map(\.ride), [0, 0], "the F's stops are the first ride's now")
+        stand(20); depart(); ride(80)
+        let s3 = ts; stand(15); ride(10)
+        XCTAssertEqual(t.timeline.stopSpans.last, FeltStop(ride: 1, start: s3, end: s3 + 15))
+    }
+
     func testAPullAwayAfterEveryLegIsRiddenKeepsTheTripOpen() {
         // the count ran a ride ahead and the rider is on a train again: not over at the clock, but at the next walk-off
         var t = TripTracker(start(legs: 1), distanceToOriginM: 20)
