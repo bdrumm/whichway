@@ -229,10 +229,10 @@ struct PlannerView: View {
                                  walk: walkToOrigin.map { walkLineText($0, originId: originId, placeName: here?.name, placeUsualSec: placeUsualSec, boardTs: it?.boardTs, now: now) },
                                  alternatives: Array(others.prefix(3)), moreCount: max(0, others.count - 3),
                                  onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } },
-                                 confidence: routeConfidence(p, itinerary: it, outlook: outlook, data: data))
+                                 confidence: routeConfidence(p, itinerary: it, outlook: outlook, data: data),
+                                 tripControls: AnyView(tripBar(originName: originName.isEmpty ? "the station" : originName)))
                     }
                     .padding(.top, 10)
-                    tripBar(originName: originName.isEmpty ? "the station" : originName).padding(.top, 8)
                 } else if !originId.isEmpty && !destId.isEmpty {
                     Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
                 }

@@ -26,6 +26,9 @@ struct HomeCard: View {
     var onMore: () -> Void
     /// How far the model trusts this arrival, shown under it.
     var confidence: RouteConfidence? = nil
+    /// The route's own controls (starts by itself / On a train? / Start route; on the way, Train and End route),
+    /// right under the journey bar.
+    var tripControls: AnyView? = nil
 
     private let countdownFont = Font.system(size: 112, weight: .heavy)
     private let rule = Color.primary.opacity(0.1)
@@ -45,6 +48,7 @@ struct HomeCard: View {
                     .lineLimit(1).padding(.top, 6)
             }
             JourneyBar(option: option).padding(.top, 14)
+            if let c = tripControls { c.padding(.top, 12) }
             Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
             arrive
             if let c = confidence {
