@@ -1317,6 +1317,7 @@ struct PlannerView: View {
             plan.idx.compactMap { k, r in data.schedule?.lines[k].flatMap { r.from < $0.runSec.count ? $0.runSec[r.from] : nil }.map(Double.init) }.min()
         }
         withAnimation { trip.begin(tl, distanceToOriginM: d, observation: obs, legs: plans, now: data.now, firstRunSec: firstRun) }
+        seedStandingTrains(plans.first)
         data.requestGeometry()
         loc.startTracking()
         startActivity()
@@ -1324,6 +1325,22 @@ struct PlannerView: View {
         // started by hand well away from the origin while moving at a vehicle's pace (on a sure fix): the rider is
         // most likely on a train already. A start from home, far but still, is a walk to come.
         if by == "hand", let d = d, d > 400, let l = loc.fix(maxAgeSec: 20, maxAccuracyM: 65), l.speed >= 5 { openOnTrain() }
+    }
+
+    /// A train already standing at the first platform (or just gone) when the route starts is one the departure log
+    /// never saw there: the feed drops a stop from a train's list once it is at the platform, and the log only takes up
+    /// trains that still list it. Oct 12 at 14 St: the route started at 17:05:27 by GPS with the E standing there since
+    /// about 17:04:51; its pull-away at 17:05:42 was felt, matched no train the log knew, and was withdrawn, and the
+    /// first leg went to an A and an L. The trains of the leg's lines, and of the other lines at the same platform, that
+    /// passed the platform in the last five minutes are handed to the log at the start.
+    private func seedStandingTrains(_ plan: LegPlan?) {
+        guard let plan, let sched = data.schedule else { return }
+        var boardIdx: [String: Int] = [:], alightIdx: [String: Int] = [:]
+        for (k, r) in plan.idx { boardIdx[k] = r.from; alightIdx[k] = r.to }
+        for (k, bi) in plan.platformKeys where boardIdx[k] == nil && !plan.otherPlatformKeys.contains(k) { boardIdx[k] = bi }
+        let gone = trainsAhead(boards: data.boards, schedule: sched, boardIdx: boardIdx, alightIdx: alightIdx, onLegKeys: Set(plan.keys),
+                               now: data.now, maxAgoSec: 300)
+        if !gone.isEmpty { trip.seedCurrentLeg(gone, now: data.now) }
     }
 
     /// The plan's legs for the line inference: each leg's lines and stop spans, the train and line the itinerary
