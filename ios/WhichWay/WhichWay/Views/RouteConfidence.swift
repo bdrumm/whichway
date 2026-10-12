@@ -75,9 +75,13 @@ func routeConfidence(_ option: PathOption, itinerary: Itinerary?, outlook: HoldO
     else if l0.corroboration == "position_unknown" { take(0.1, "no position report for your train") }
 
     // the change
+    // tight by the kind of change: a few seconds are enough to step across the platform, not to walk between platforms
     if it.legs.count > 1, let m = it.connectionMarginSec {
-        if m < 60 { take(0.25, "a tight change, \(Fmt.mmss(m)) margin") }
-        else if m < 120 { take(0.1, "a close change, \(Fmt.mmss(m)) margin") }
+        let tight = option.transfer?.tightSec ?? 60
+        let across = option.transfer?.acrossPlatform == true ? " across the platform" : ""
+        if it.catchesStanding { take(m < tight ? 0.25 : 0.1, "the connection is standing\(across), \(Fmt.mmss(m)) to board") }
+        else if m < tight { take(0.25, "a tight change\(across), \(Fmt.mmss(m)) margin") }
+        else if m < 2 * tight { take(0.1, "a close change\(across), \(Fmt.mmss(m)) margin") }
     }
 
     // a hold ahead: how far the arrival moves between the hold clearing now and dragging on

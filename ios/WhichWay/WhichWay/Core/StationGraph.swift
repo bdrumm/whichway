@@ -194,6 +194,32 @@ struct PathTransfer {
     var stop2: String
     var station: String
     var walkSec: Int
+
+    /// The two lines call at the very same stop: the same platform, or the one across it (the F and the A/C at Jay
+    /// St, the 2 and the 3 at Wall St). The kind of change, whatever time the rider's own changes have taught.
+    var acrossPlatform: Bool { stop == stop2 }
+
+    /// The time to plan the change on: across the platform at least the step across (the feed lists 0 s; the rider's
+    /// own steps across measured 11-17 s, Oct 6 and 8), else the walk.
+    var plannedSec: Double { acrossPlatform ? max(Double(walkSec), TransferTiming.stepAcrossSec) : Double(walkSec) }
+
+    /// Under this margin the change is tight: a few seconds across the platform, a minute (or a quarter of a long walk,
+    /// stairs and crowds) between platforms.
+    var tightSec: Double { acrossPlatform ? TransferTiming.tightAcrossSec : max(60, 0.25 * Double(walkSec)) }
+
+    /// "across the platform" or "3:00 walk".
+    var kindText: String { acrossPlatform ? "across the platform" : "\(Fmt.mmss(Double(walkSec))) walk" }
+}
+
+/// How a change is timed.
+enum TransferTiming {
+    /// Stepping off one train and onto the one across the platform.
+    static let stepAcrossSec = 15.0
+    /// A change across the platform with less than this to spare is tight.
+    static let tightAcrossSec = 20.0
+    /// A train already standing across the platform when the rider steps off is still catchable this long after it
+    /// pulled in: a cautious part of the dwell (the corpus: about 17 s on the F, 45 s at Jay St for the C).
+    static let standingCatchSec = 20.0
 }
 
 struct PathOption: Identifiable {
@@ -281,7 +307,7 @@ func enumeratePaths(schedule: ClientSchedule, index: StationIndex, from oId: Str
             opt.legs[i].schedRideSec = best
             opt.legs[i].nStops = nStops == Int.max ? 0 : nStops
         }
-        opt.schedSec = opt.legs.reduce(0) { $0 + ($1.schedRideSec ?? 0) } + (opt.transfer?.walkSec ?? 0)
+        opt.schedSec = opt.legs.reduce(0) { $0 + ($1.schedRideSec ?? 0) } + Int((opt.transfer?.plannedSec ?? 0).rounded())
         opt.label = opt.legs.map { $0.routesLabel }.joined(separator: " → ") + (opt.transfer.map { " at \($0.station)" } ?? " direct")
         out.append(opt)
     }

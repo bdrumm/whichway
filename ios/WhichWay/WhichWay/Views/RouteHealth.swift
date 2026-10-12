@@ -106,7 +106,10 @@ func routeHealth(_ option: PathOption, data: DataService) -> RouteHealth {
         if it.legs.count > 1, let m = it.connectionMarginSec {
             let transferExtra = m - 2 * option.wait2Sec
             if transferExtra >= 60 { extra += transferExtra; add(2, "\(Fmt.minTxt(transferExtra)) extra at the change") }
-            if m < 60, let n = it.nextIfMissedSec { extra += n / 2; add(2, "tight change, \(Fmt.mmss(m)) margin: +\(Fmt.minTxt(n)) if missed") }
+            if m < (option.transfer?.tightSec ?? 60), let n = it.nextIfMissedSec {
+                extra += n / 2
+                add(2, "tight change\(option.transfer?.acrossPlatform == true ? " across the platform" : ""), \(Fmt.mmss(m)) margin: +\(Fmt.minTxt(n)) if missed")
+            }
         }
         if let hi = it.legs.last?.arriveHiTs {
             slip = max(0, hi - it.arriveTs)

@@ -718,7 +718,7 @@ struct PlannerView: View {
         let base = TripObservation(
             id: "", installId: "", appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "", createdTs: 0,
             routeLabel: p.label, legs: p.legs.map { TripObservation.Leg(line: $0.primaryKey, from: $0.from, to: $0.to) },
-            transferStation: p.transfer?.station, transferWalkSec: p.transfer?.walkSec,
+            transferStation: p.transfer?.station, transferWalkSec: p.transfer.map { Int($0.plannedSec.rounded()) },
             predictedBoardTs: it?.boardTs, predictedArriveTs: it?.arriveTs, expectedSec: p.expectedSec, schedSec: p.schedSec,
             extraMin: h.extraSec >= 90 ? h.minutes : 0, trainLateSec: l0?.effectiveLatenessSec, trainHeld: l0?.isHeld ?? false,
             offline: data.offline, startedBy: startedBy)
@@ -994,7 +994,7 @@ struct PlannerView: View {
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
         trip.replan(legs: plans, transferStation: p.transfer?.station)
         Telemetry.shared.updateRoute(label: p.label, legs: p.legs.map { TripObservation.Leg(line: $0.primaryKey, from: $0.from, to: $0.to) },
-                                     transferStation: p.transfer?.station, transferWalkSec: p.transfer?.walkSec)
+                                     transferStation: p.transfer?.station, transferWalkSec: p.transfer.map { Int($0.plannedSec.rounded()) })
         refreshRideArrival()
         updateActivity()
         updateFocus()
@@ -1353,7 +1353,8 @@ struct PlannerView: View {
             let preferred = preferredKeys[i].flatMap { leg.keys.contains($0) ? $0 : nil }
             var plan = LegPlan(keys: leg.keys, idx: leg.idx, chosenKey: preferred ?? tc?.key ?? leg.primaryKey,
                                chosenTrainId: preferred == nil || preferred == tc?.key ? tc?.train.id : nil, origin: originId, dest: destId)
-            plan.walkSec = i == 0 ? 0 : (p.live?.walkSec ?? Double(p.transfer?.walkSec ?? 0))
+            // 0 marks a change made standing (across the platform): the recorder then watches for the train moving on
+            plan.walkSec = i == 0 || p.transfer?.acrossPlatform == true ? 0 : (p.live?.walkSec ?? Double(p.transfer?.walkSec ?? 0))
             let dir = String((plan.chosenKey ?? "").split(separator: "_").last ?? "")
             if let st = index.stations[index.stationOf(leg.from)] {
                 for m in st.members where m.dir == dir && !leg.keys.contains(m.key) {
@@ -1461,7 +1462,7 @@ struct PlannerView: View {
             var spans: [String: StopSpan] = [:]
             for (k, v) in leg.idx { spans[k] = StopSpan(from: v.from, to: v.to) }
             let tc: TripCandidate? = (it?.legs.indices.contains(i) ?? false) ? it?.legs[i] : nil
-            let walk = i == 0 ? 0.0 : (it?.walkSec ?? Double(sel.transfer?.walkSec ?? 0))
+            let walk = i == 0 ? 0.0 : (it?.walkSec ?? (sel.transfer?.plannedSec ?? 0))
             legs.append(FocusLeg(key: tc?.key ?? leg.primaryKey, keys: leg.keys, idx: spans, trainId: tc?.train.id, walkSec: walk))
         }
         // once the sensors and the feeds agree on the train the rider is actually on, the Line tab follows that one
@@ -1492,7 +1493,7 @@ func journeySegments(_ option: PathOption) -> [BarSeg] {
     out.append(BarSeg(sec: Double(l0.schedRideSec ?? 0) + (l0.typicalSec ?? 0) + l0.holdRiskSec, color: RouteStyle.color(l0.primaryRoute)))
     if option.legs.count > 1, let tr = option.transfer {
         let l1 = option.legs[1]
-        if tr.walkSec > 0 { out.append(BarSeg(sec: Double(tr.walkSec), color: Color.primary.opacity(0.7))) }
+        if tr.plannedSec > 0 { out.append(BarSeg(sec: tr.plannedSec, color: Color.primary.opacity(0.7))) }
         out.append(BarSeg(sec: option.wait2Sec, color: Color.primary.opacity(0.22)))
         out.append(BarSeg(sec: Double(l1.schedRideSec ?? 0) + (l1.typicalSec ?? 0) + l1.holdRiskSec, color: RouteStyle.color(l1.primaryRoute)))
     }

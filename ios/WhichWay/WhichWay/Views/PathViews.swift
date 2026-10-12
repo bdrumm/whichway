@@ -244,17 +244,17 @@ struct NowCard: View {
                         // the connection the train in hand makes
                         let b = it.legs[1]
                         let m = it.connectionMarginSec ?? 0
-                        Text("\(b.train.route) at \(Fmt.hhmm(b.boardTs)) · \(Fmt.mmss(m)) margin" + (tr.walkSec > 0 ? " · \(Fmt.mmss(Double(tr.walkSec))) walk" : " · same platform")
+                        Text("\(b.train.route) at \(Fmt.hhmm(b.boardTs)) · " + (it.catchesStanding ? "across the platform, doors open · \(Fmt.mmss(m)) to board" : "\(Fmt.mmss(m)) margin · \(tr.kindText)")
                              + (it.nextIfMissedSec.map { " · +\(Fmt.mmss($0)) if missed" } ?? ""))
-                            .foregroundStyle(m < 60 ? Color.red : Color.secondary)
+                            .foregroundStyle(m < tr.tightSec ? Color.red : Color.secondary)
                     } else if onTrain {
-                        Text("connection not in the feeds yet · " + (tr.walkSec > 0 ? "\(Fmt.mmss(Double(tr.walkSec))) walk between platforms" : "same platform")).foregroundStyle(.secondary)
+                        Text("connection not in the feeds yet · " + (tr.acrossPlatform ? "across the platform" : "\(tr.kindText) between platforms")).foregroundStyle(.secondary)
                     } else if let it = it, let m = it.connectionMarginSec {
-                        Text("\(Fmt.mmss(m)) margin" + (tr.walkSec > 0 ? " · \(Fmt.mmss(Double(tr.walkSec))) walk" : " · same platform")
+                        Text((it.catchesStanding ? "across the platform, doors open · \(Fmt.mmss(m)) to board" : "\(Fmt.mmss(m)) margin · \(tr.kindText)")
                              + (it.nextIfMissedSec.map { " · +\(Fmt.mmss($0)) if missed" } ?? ""))
-                            .foregroundStyle(m < 60 ? Color.red : Color.secondary)
+                            .foregroundStyle(m < tr.tightSec ? Color.red : Color.secondary)
                     } else {
-                        Text(tr.walkSec > 0 ? "\(Fmt.mmss(Double(tr.walkSec))) walk between platforms" : "same platform").foregroundStyle(.secondary)
+                        Text(tr.acrossPlatform ? "across the platform" : "\(tr.kindText) between platforms").foregroundStyle(.secondary)
                     }
                 } else {
                     Text("\(Fmt.minTxt(p.legs[0].schedRideSec.map(Double.init))) scheduled ride" + (p.legs[0].typicalSec.map { abs($0) >= 30 ? " · typically \(Fmt.signed($0))" : "" } ?? ""))
@@ -465,7 +465,7 @@ struct DepartureRow: View {
     private var subline: String? {
         var bits: [String] = []
         if itinerary.legs.count > 1, let m = itinerary.connectionMarginSec, let tr = option.transfer {
-            bits.append("change at \(tr.station): \(m < 120 ? "tight, " : "")\(Fmt.mmss(m)) margin")
+            bits.append("change at \(tr.station)\(tr.acrossPlatform ? " across the platform" : ""): \(m < 2 * tr.tightSec ? "tight, " : "")\(Fmt.mmss(m)) margin")
         }
         if abs(itinerary.rideVsSchedSec) >= 60 { bits.append("\(Fmt.signed(itinerary.rideVsSchedSec / 60, unit: "min")) vs schedule") }
         return bits.isEmpty ? nil : bits.joined(separator: " · ")

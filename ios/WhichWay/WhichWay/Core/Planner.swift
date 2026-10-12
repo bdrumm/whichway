@@ -39,6 +39,19 @@ struct Itinerary: Identifiable {
     var nextIfMissedSec: Double?
     var schedRideSec: Double
     var rideVsSchedSec: Double
+    /// The connection is a train already standing across the platform when the rider gets there; the margin is then
+    /// the time left before its doors close (TransferTiming.standingCatchSec after it pulled in).
+    var catchesStanding = false
+}
+
+/// The connection at a change for a rider ready to board at `ready`: the first train of the next leg that pulls in
+/// after then, or, across the platform, one already standing there with its doors still open. The margin is what is
+/// left to spare: until the train pulls in, or until a standing one's doors close.
+func connection(_ seconds: [TripCandidate], ready: Double, transfer: PathTransfer) -> (train: TripCandidate, marginSec: Double, standing: Bool)? {
+    let from = transfer.acrossPlatform ? ready - TransferTiming.standingCatchSec : ready
+    guard let b = seconds.first(where: { $0.boardTs >= from }) else { return nil }
+    let standing = b.boardTs < ready
+    return (b, standing ? b.boardTs + TransferTiming.standingCatchSec - ready : b.boardTs - ready, standing)
 }
 
 /// Trains of a line board that carry a rider from fromIdx to toIdx (feed ETAs at both stops). The times are the
@@ -84,18 +97,20 @@ func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: Pa
         return Array(its.sorted { $0.arriveTs < $1.arriveTs }.prefix(maxN))
     }
     guard let transfer = option.transfer, option.legs.count == 2 else { return [] }
-    let walk = Double(transfer.walkSec)
+    let walk = transfer.plannedSec
     let firsts = legTrips(boards: boards, schedule: schedule, leg: option.legs[0], now: now, maxN: maxN + 2)
     let seconds = legTrips(boards: boards, schedule: schedule, leg: option.legs[1], now: now, maxN: 40)
     var out: [Itinerary] = []
     var seen = Set<String>()
     for a in firsts {
-        guard let b = seconds.first(where: { $0.boardTs >= a.arriveTs + walk }), !seen.contains(b.train.tripId) else { continue }
+        guard let c = connection(seconds, ready: a.arriveTs + walk, transfer: transfer), !seen.contains(c.train.train.tripId) else { continue }
+        let b = c.train
         seen.insert(b.train.tripId)
         let next = seconds.first(where: { $0.boardTs > b.boardTs })
         out.append(Itinerary(legs: [a, b], boardTs: a.boardTs, arriveTs: b.arriveTs, totalSec: b.arriveTs - now, walkSec: walk,
-                             waitAtTransferSec: b.boardTs - a.arriveTs, connectionMarginSec: b.boardTs - a.arriveTs - walk,
-                             nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - a.boardTs) - sched))
+                             waitAtTransferSec: max(0, b.boardTs - a.arriveTs), connectionMarginSec: c.marginSec,
+                             nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - a.boardTs) - sched,
+                             catchesStanding: c.standing))
     }
     return Array(out.sorted { $0.arriveTs < $1.arriveTs }.prefix(maxN))
 }
@@ -123,17 +138,18 @@ func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, opti
                          nextIfMissedSec: nil, schedRideSec: sched, rideVsSchedSec: a.rideSec - sched)
     }
     guard leg == 0, option.legs.count == 2, let transfer = option.transfer else { return nil }
-    let walk = Double(transfer.walkSec)
-    // the connection: the first train at the transfer platform after the walk, or after now when the first leg is already behind
+    let walk = transfer.plannedSec
+    // the connection: the first train at the transfer platform after the walk, or after now when the first leg is already
+    // behind; across the platform, one still standing there when the rider steps off counts too (`connection`)
     let earliest = max(a.arriveTs + walk, now)
-    // trains still standing at the platform when the rider gets there are listed too; the connection is one that
-    // pulls in after the rider does
-    let seconds = legTrips(boards: boards, schedule: schedule, leg: option.legs[1], now: earliest, maxN: 40).filter { $0.boardTs >= earliest }
-    if let b = seconds.first {
+    let seconds = legTrips(boards: boards, schedule: schedule, leg: option.legs[1], now: earliest - TransferTiming.standingCatchSec, maxN: 40)
+    if let c = connection(seconds, ready: earliest, transfer: transfer) {
+        let b = c.train
         let next = seconds.first(where: { $0.boardTs > b.boardTs })
         return Itinerary(legs: [a, b], boardTs: board, arriveTs: b.arriveTs, totalSec: b.arriveTs - now, walkSec: walk,
-                         waitAtTransferSec: b.boardTs - a.arriveTs, connectionMarginSec: b.boardTs - a.arriveTs - walk,
-                         nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - board) - sched)
+                         waitAtTransferSec: max(0, b.boardTs - a.arriveTs), connectionMarginSec: c.marginSec,
+                         nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - board) - sched,
+                         catchesStanding: c.standing)
     }
     let ride2 = Double(option.legs[1].schedRideSec ?? 0)
     let arrive2 = earliest + option.wait2Sec + ride2

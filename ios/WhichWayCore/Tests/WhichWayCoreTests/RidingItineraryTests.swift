@@ -37,6 +37,36 @@ final class RidingItineraryTests: XCTestCase {
                           boardIdx: 0, alightIdx: 2, stopTs: [1: 1400, 2: 1690])
     }
 
+    func testAChangeAcrossThePlatformIsTimedAsOneAndCatchesATrainStandingThere() throws {
+        // the A to Jay St and the F from the same platform: the feed lists 0 s, the step across takes 15; an F that
+        // pulled in with the A is still there with its doors open (20 s of its stand counted), one 30 s before is gone
+        let across = PathTransfer(stop: "j", stop2: "j", station: "Jay St", walkSec: 0)
+        XCTAssertTrue(across.acrossPlatform)
+        XCTAssertEqual(across.plannedSec, TransferTiming.stepAcrossSec)
+        XCTAssertEqual(across.kindText, "across the platform")
+        XCTAssertEqual(across.tightSec, TransferTiming.tightAcrossSec)
+        let walk = PathTransfer(stop: "a", stop2: "b", station: "W 4 St", walkSec: 180)
+        XCTAssertFalse(walk.acrossPlatform)
+        XCTAssertEqual(walk.plannedSec, 180)
+        XCTAssertEqual(walk.tightSec, 60)
+        XCTAssertEqual(PathTransfer(stop: "a", stop2: "b", station: "x", walkSec: 400).tightSec, 100)
+        func cand(_ id: String, _ board: Double) -> TripCandidate {
+            TripCandidate(train: train(id, key: "F_N", points: [(0, board)]), key: "F_N", boardTs: board, arriveTs: board + 600, rideSec: 600, schedRideSec: nil, stopsToOrigin: 0)
+        }
+        let aOff = 1000.0, ready = aOff + across.plannedSec               // off the A at 1000, on the F side at 1015
+        let standing = try XCTUnwrap(connection([cand("f1", 1000), cand("f2", 1300)], ready: ready, transfer: across))
+        XCTAssertEqual(standing.train.train.tripId, "f1")
+        XCTAssertTrue(standing.standing)
+        XCTAssertEqual(standing.marginSec, 5)                             // its doors close 20 s after it pulled in
+        let gone = try XCTUnwrap(connection([cand("f1", 970), cand("f2", 1300)], ready: ready, transfer: across))
+        XCTAssertEqual(gone.train.train.tripId, "f2")
+        XCTAssertFalse(gone.standing)
+        XCTAssertEqual(gone.marginSec, 285)
+        // between platforms a train already in is never the connection
+        let walking = try XCTUnwrap(connection([cand("f1", 1170), cand("f2", 1300)], ready: aOff + 180, transfer: walk))
+        XCTAssertEqual(walking.train.train.tripId, "f2")
+    }
+
     func testTheBoardedTrainAndTheFirstConnectionItMakes() throws {
         let sched = try schedule()
         // the G has passed g0 and g1: the feed lists only Hoyt now; one C leaves Hoyt too soon for the walk, the next makes it

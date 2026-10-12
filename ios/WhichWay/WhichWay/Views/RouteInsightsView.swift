@@ -65,12 +65,13 @@ struct RouteInsightsView: View {
                     row("Hold risk", Fmt.signed(leg.holdRiskSec), "holds per day at these stops × their median length ÷ trips per day, from the hold log")
                 }
                 if i == 0, option.legs.count > 1, let tr = option.transfer {
-                    if tr.walkSec > 0 {
-                        let mine = PersonalModelStore.shared.model.transfer[tr.station]
-                        row("Walk at \(tr.station)", Fmt.mmss(Double(tr.walkSec)),
-                            (mine?.n ?? 0) >= 2 && Int(mine!.mean.rounded()) >= tr.walkSec ? "your usual change here, from \(mine!.n) trips" : "the MTA's minimum transfer time between these platforms")
+                    let mine = PersonalModelStore.shared.model.transfer[tr.station]
+                    let yours = (mine?.n ?? 0) >= 2 ? "your usual change here, from \(mine!.n) trips" : nil
+                    if tr.acrossPlatform {
+                        row("Change at \(tr.station)", "across the platform · \(Fmt.mmss(tr.plannedSec))",
+                            yours ?? "both lines stop at this platform: the step across, as measured on real changes (11-17 s); a train already standing there counts for \(Int(TransferTiming.standingCatchSec)) s")
                     } else {
-                        row("Change at \(tr.station)", "same platform", "no walk: the MTA lists this change as 0 s")
+                        row("Walk at \(tr.station)", Fmt.mmss(Double(tr.walkSec)), yours ?? "the MTA's minimum transfer time between these platforms")
                     }
                     row("Wait for the \(option.legs[1].routesLabel)", Fmt.minTxt(option.wait2Sec), "half its scheduled headway")
                 }

@@ -178,16 +178,16 @@ struct HomeCard: View {
         }
     }
 
-    private var changeTight: Bool { rideLeg == 0 && (itinerary?.connectionMarginSec ?? 999) < 60 }
+    private var changeTight: Bool { rideLeg == 0 && (itinerary?.connectionMarginSec ?? 999) < (option.transfer?.tightSec ?? 60) }
 
     private func changeDetail(_ tr: PathTransfer) -> String {
-        let walk = tr.walkSec > 0 ? "\(Fmt.mmss(Double(tr.walkSec))) walk" : "same platform"
         if rideLeg > 0, let l = itinerary?.legs.first { return "on the \(l.train.route) · \(Fmt.minTxt(l.rideSec)) ride" }
         if let it = itinerary, it.legs.count > 1, let m = it.connectionMarginSec {
-            return "\(Fmt.mmss(m)) margin · \(walk)" + (it.nextIfMissedSec.map { " · +\(Fmt.mmss($0)) if missed" } ?? "")
+            if it.catchesStanding { return "across the platform, doors open · \(Fmt.mmss(m)) to board" }
+            return "\(Fmt.mmss(m)) margin · \(tr.kindText)" + (it.nextIfMissedSec.map { " · +\(Fmt.mmss($0)) if missed" } ?? "")
         }
-        if onTrain { return "connection not in the feeds yet · \(walk)" }
-        return walk + " between platforms"
+        if onTrain { return "connection not in the feeds yet · \(tr.kindText)" }
+        return tr.acrossPlatform ? "across the platform" : "\(tr.kindText) between platforms"
     }
 
     // MARK: the other ways
@@ -381,9 +381,9 @@ struct StrandView: View {
 
     private var changeOff: some View {
         let tr = option.transfer
-        let walk = (tr?.walkSec ?? 0) > 0 ? "\(Fmt.mmss(Double(tr!.walkSec))) walk" : "same platform"
+        let walk = tr?.kindText ?? "the change"
         let margin = rideLeg == 0 ? itinerary?.connectionMarginSec : nil
-        let tight = (margin ?? 999) < 60
+        let tight = (margin ?? 999) < (tr?.tightSec ?? 60)
         return row(node: c0, line: Color.secondary.opacity(0.8), dotted: true, minHeight: 58) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
