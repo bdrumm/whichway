@@ -67,6 +67,20 @@ final class RidingItineraryTests: XCTestCase {
         XCTAssertEqual(walking.train.train.tripId, "f2")
     }
 
+    func testATrainTheRiderCannotReachIsSkippedForTheNextRealisticOne() throws {
+        // the G pulls in at 1060 and 1500 (platform moments); the rider is 0.2 mi out, 5 min at their pace: on the
+        // platform at 1300, so the first G is gone and the route offers the second; at 1075 the first is still caught
+        let sched = try schedule()
+        let one = PathOption(id: "G", legs: [PathLeg(from: "g0", to: "g2", keys: ["G_N"], routes: ["G"], idx: ["G_N": (0, 2)], schedRideSec: 240, nStops: 2)],
+                             transfer: nil)
+        let boards = ["G_N": board("G_N", [train("g1", key: "G_N", points: [(0, 1060 + lagG), (2, 1300 + lagG)]),
+                                           train("g2", key: "G_N", points: [(0, 1500 + lagG), (2, 1740 + lagG)])])]
+        XCTAssertEqual(pathTrips(boards: boards, schedule: sched, option: one, now: 1000, maxN: 1).first?.legs[0].train.tripId, "g1")
+        XCTAssertEqual(pathTrips(boards: boards, schedule: sched, option: one, now: 1000, maxN: 1, reachTs: 1300).first?.legs[0].train.tripId, "g2")
+        XCTAssertEqual(pathTrips(boards: boards, schedule: sched, option: one, now: 1000, maxN: 1, reachTs: 1060 + reachDoorsSec).first?.legs[0].train.tripId, "g1",
+                       "pulling in as the rider reaches the platform, its doors still open")
+    }
+
     func testTheBoardedTrainAndTheFirstConnectionItMakes() throws {
         let sched = try schedule()
         // the G has passed g0 and g1: the feed lists only Hoyt now; one C leaves Hoyt too soon for the walk, the next makes it

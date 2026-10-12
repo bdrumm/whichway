@@ -392,6 +392,23 @@ struct PlannerView: View {
         return boardingUrgency(secondsLeft: left, walkSec: walkSec)
     }
 
+    /// When the rider can be on the origin's platform, from where the phone is, at their own pace (their usual time from
+    /// the place they are at, else the distance at their street pace plus their time from the entrance to this platform,
+    /// all learned from their trips): the first train of a route must not have pulled in and gone by then. Only on the
+    /// way (no route yet, or approaching), on a fix under two minutes old and good to 100 m, and not at the station.
+    private var reachTs: Double? {
+        guard trip.phase == nil || trip.phase == .approaching, !originId.isEmpty, let l = loc.fix(maxAgeSec: 120, maxAccuracyM: 100),
+              let sched = data.schedule, let index = data.index, let geo = data.geometry,
+              let c = stationCoordinates(schedule: sched, index: index, geometry: geo)[originId] else { return nil }
+        let meters = haversineM((l.coordinate.latitude, l.coordinate.longitude), c)
+        guard meters > 150 else { return nil }                    // at the station: every train on the board is in reach
+        let pm = PersonalModelStore.shared.model
+        let usual = nearbyPlace().flatMap { pm.placeToStationSec(place: $0.id.uuidString, station: originId) }
+        let walk = usual ?? (meters / pm.walkSpeedMPerMin * 60 + (pm.accessSec(station: originId) ?? 0))
+        // the fix is as old as it is: the rider has been walking since
+        return l.timestamp.timeIntervalSince1970 + walk
+    }
+
     /// The walk from the phone to the origin station, when the phone's position and the station's are known.
     private var walkToOrigin: NearbyStation? {
         guard !originId.isEmpty, let l = loc.location, let sched = data.schedule, let index = data.index, let geo = data.geometry,
@@ -649,8 +666,9 @@ struct PlannerView: View {
         let now = data.now
         // the countdown on screen reached zero since the last refresh (timer, poll, or coming back to this tab)
         let departed = shownBoardTs.map { $0 <= now } ?? false
+        let reach = reachTs
         for i in paths.indices {
-            paths[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: paths[i], now: now, maxN: 1).first
+            paths[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: paths[i], now: now, maxN: 1, reachTs: reach).first
         }
         // a departed train hands over to the best route, or to the next train on this route once it is in progress
         if departed, !routeStarted, let best = ranked.first?.id { selectedPath = best }
@@ -758,7 +776,7 @@ struct PlannerView: View {
         }
         var next: Itinerary? = nil
         if !onTrain, let it = it, let sched = data.schedule {
-            next = leg == 0 ? pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
+            next = leg == 0 ? pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3, reachTs: reachTs).first { $0.boardTs > it.boardTs + 30 }
                             : it.nextIfMissedSec.map { s in var n = it; n.boardTs = it.boardTs + s; return n }
         }
         // on the train: the line the rider is on leads, and the countdown runs to the connection (or the arrival)
@@ -805,7 +823,7 @@ struct PlannerView: View {
         guard data.anyHeld, let p = headline else { return nil }
         let now = data.now
         func arrive(_ scenario: String) -> Double? {
-            pathTrips(boards: data.predictedBoards(for: scenario), schedule: sched, option: p, now: now, maxN: 1).first?.arriveTs
+            pathTrips(boards: data.predictedBoards(for: scenario), schedule: sched, option: p, now: now, maxN: 1, reachTs: reachTs).first?.arriveTs
         }
         let u = arrive("baseline"), d = arrive("hold_persists"), c = arrive("clears_now")
         let vals = [u, d, c].compactMap { $0 }
@@ -963,7 +981,7 @@ struct PlannerView: View {
             let now = data.now, hour = nyHour(now)
             for i in more.indices {
                 evaluate(&more[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour)
-                more[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: more[i], now: now, maxN: 1).first
+                more[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: more[i], now: now, maxN: 1, reachTs: reachTs).first
             }
             if let p = more.min(by: { $0.expectedSec < $1.expectedSec }) {
                 extraPaths.append(p); paths.append(p); alt = p
@@ -1132,7 +1150,7 @@ struct PlannerView: View {
         let now = data.now, hour = nyHour(now)
         for i in more.indices {
             evaluate(&more[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour)
-            more[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: more[i], now: now, maxN: 1).first
+            more[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: more[i], now: now, maxN: 1, reachTs: reachTs).first
         }
         more.sort { $0.expectedSec < $1.expectedSec }
         let p = more[0]
@@ -1189,7 +1207,7 @@ struct PlannerView: View {
         let now = data.now, hour = nyHour(now)
         for i in more.indices {
             evaluate(&more[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour)
-            more[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: more[i], now: now, maxN: 1).first
+            more[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: more[i], now: now, maxN: 1, reachTs: reachTs).first
         }
         options += more
         // the option the train in hand gets the rider to the destination soonest on
