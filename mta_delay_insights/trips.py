@@ -31,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
@@ -535,6 +536,20 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
             if leg["departedTs"]:
                 leg["departureErrSec"] = leg["departedTs"] - _pick_time(match)
             arr = matcher.by_trip(to_stops, str(match.get("trip_id")), near_ts=float(match["arrival_ts"]))
+            # the rider walked off somewhere else (Oct 13: off the F at Carroll St, the plan's stop 4 Av-9 St): the train's
+            # own stop whose platform moment best fits the walk-off, when it fits much better than the plan's
+            if leg["alightedTs"]:
+                own = matcher.arr[(matcher.arr["trip_id"] == match.get("trip_id"))] if not matcher.arr.empty else matcher.arr
+                if not own.empty:
+                    own = own[(own["arrival_ts"].astype(float) > float(match["arrival_ts"])) & ((own["arrival_ts"].astype(float) - float(match["arrival_ts"])).abs() < 3 * 3600)]
+                if own is not None and not own.empty:
+                    errs = [abs(leg["alightedTs"] - (at_platform(float(x), match.get("route_id")) + 20)) for x in own["arrival_ts"]]
+                    best = own.iloc[int(np.argmin(errs))]
+                    plan_err = abs(leg["alightedTs"] - (at_platform(float(arr["arrival_ts"]), arr.get("route_id")) + 20)) if arr is not None else float("inf")
+                    if min(errs) <= 150 and min(errs) + 60 < plan_err and str(best["stop_id"]) != (str(arr["stop_id"]) if arr is not None else ""):
+                        leg["alightedAt"] = str(best["stop_id"])
+                        leg["alightedAtName"] = static.stop_name(str(best["stop_id"])) if static is not None else str(best["stop_id"])
+                        arr = best.to_dict()
             if arr is not None:
                 leg["arriveTs"] = at_platform(float(arr["arrival_ts"]), arr.get("route_id"))
                 if leg["alightedTs"]:
@@ -551,7 +566,8 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
     r["falseStart"] = bool(dur is not None and dur < 300 and o.get("endedBy") not in ENDED_AT_DESTINATION)
     r["ranItsCourse"] = (not r["falseStart"]) and (o.get("endedBy") in ENDED_AT_DESTINATION
                                                   or (dur is not None and o.get("expectedSec") and dur >= 0.5 * float(o["expectedSec"])))
-    if r["actualArriveTs"] is not None and o.get("predictedArriveTs") and r["ranItsCourse"]:
+    r["offPlanAlighting"] = r["legs"][-1].get("alightedAtName") if r["legs"] else None
+    if r["actualArriveTs"] is not None and o.get("predictedArriveTs") and r["ranItsCourse"] and not r["offPlanAlighting"]:
         r["forecastErrSec"] = r["actualArriveTs"] - float(o["predictedArriveTs"])
     if ended and o.get("endedBy") in ENDED_AT_DESTINATION and o.get("expectedSec") is not None and created:
         r["measuredSec"] = float(ended) - created
@@ -833,10 +849,16 @@ def arrivals_for(store, static, obs: list[dict]) -> pd.DataFrame:
     for o in obs:
         stops: set[str] = set()
         for lg in o.get("legs") or []:
-            d = _split_line(lg.get("line", ""))[1]
+            route, d = _split_line(lg.get("line", ""))
             for s in (lg.get("from"), lg.get("to")):
                 if s:
                     stops.update(_platforms(static, s, d) + _platforms(static, s, "S" if d == "N" else "N"))
+            # every stop of the leg's line in its direction: the rider may walk off before or after the plan's stop
+            # (Oct 13: off the F at Carroll St, two stops before 4 Av-9 St)
+            try:
+                stops.update(static.canonical_stop_sequence(route, d))
+            except Exception:
+                pass
         if not stops or not o.get("createdTs"):
             continue
         t0 = float(o["createdTs"]) - 1800

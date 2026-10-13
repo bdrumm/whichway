@@ -126,6 +126,25 @@ struct TripTracker {
     private(set) var lastRideStopTimes: [Double] = []
     private var quietStartTs: Double?
     private var walkStartTs: Double?
+    /// The last few seconds, to tell whether a departure was the train's own push or only shaking.
+    private var recent: [MotionSecond] = []
+    /// A departure called from shaking alone (people boarding a standing train jostle the phone): until this moment
+    /// the train's own pull-away, a sustained push, may still come, and the departure moves to it.
+    private var refineUntil: Double?
+    private var refinePush = 0
+    /// How long after a departure called from shaking the train's own push is looked for, and how long it must last.
+    var refineWindowSec = 45.0
+    var refinePushSec = 3
+    /// Steps after such a departure say the rider was still boarding: the window runs on from them, to this long after it.
+    var refineMaxSec = 120.0
+    /// The pull-away starts from rest: the 10 s before the push hold a median push under this (Oct 13: 0.011 and 0.004 g
+    /// before the F's pull-aways at W 4 St and 4 Av-9 St; 0.019 g cruising before the F braked into Smith-9 Sts, Oct 12).
+    var restPushG = 0.015
+    private var refineFrom: Double?
+    /// A departure moved to the train's own push: the ride (0 the first) whose pull-away changed, for the recorder to
+    /// read the trains again. Cleared by `takeAmendedRide`.
+    private(set) var amendedRide: Int?
+    mutating func takeAmendedRide() -> Int? { defer { amendedRide = nil }; return amendedRide }
     /// The walking between trains counted so far, as it stood at each departure on the record (in order): what a
     /// withdrawn first ride's shuffle added to it can be taken back out.
     private var walkAtDeparture: [Double] = []
@@ -227,6 +246,9 @@ struct TripTracker {
         guard phase != .arrived else { return }
         hasMotion = true
         if firstMotionTs == nil { firstMotionTs = m.ts }
+        recent.append(m)
+        if recent.count > 16 { recent.removeFirst(recent.count - 16) }
+        refineDeparture(m)
         timeline.motionSeconds += 1
         let walking = m.stepEnergy > detector.stepThreshold
         if walking {
@@ -268,6 +290,12 @@ struct TripTracker {
             switch e.kind {
             case .departed:
                 walkAtDeparture.append(timeline.walkingSecondsBetweenTrains)
+                // called from shaking, not the train's push: watch for the push (Oct 13 at W 4 St: the jostle of boarding
+                // at 17:50:23, the F's own pull-away at 17:50:52, its feed time 17:50:53)
+                let pushed = recent.filter { $0.ts >= e.ts && $0.ts < e.ts + Double(refinePushSec) }
+                refineUntil = pushed.count >= refinePushSec && pushed.allSatisfy({ $0.pushG >= detector.pushThreshold }) ? nil : e.ts + refineWindowSec
+                refineFrom = e.ts
+                refinePush = 0
                 // every leg was ridden and the rider is on a train again: the count was off (a ride that was not one, or a
                 // change the plan did not have), so the trip is not over at the clock; the next walk-off says so again
                 alightedAll = false
@@ -401,7 +429,14 @@ struct TripTracker {
         timeline.stopSpans.removeAll { $0.ride == ride }
         if !walkAtDeparture.isEmpty { walkAtDeparture.removeLast() }
         alightedAll = timeline.legsRidden >= timeline.legs     // as it stood before the pull-away that was not one
-        phase = .atStation
+        refineUntil = nil
+        if timeline.events.last?.kind == .alighted {
+            // after a change: back between trains at the transfer platform, not at the origin (Oct 13 at W 4 St the phone
+            // then assumed a ride on a later F from the timetable while the rider was on the earlier one)
+            afterAlight = true
+        } else {
+            phase = .atStation
+        }
         if timeline.arrivedStationTs == nil { timeline.arrivedStationTs = last.ts }
         stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
         timeline.rideAssumed = false
@@ -470,6 +505,33 @@ struct TripTracker {
         guard let i = timeline.stopSpans.indices.last, timeline.stopSpans[i].ride == max(0, rideCount - 1) else { return }
         // an open span is a change on the same platform: the rider stood on as the train left, so its end is unknown
         if timeline.stopSpans[i].end.map({ abs(ts - $0) <= 20 }) ?? true { timeline.stopSpans[i].alighting = true }
+    }
+
+    /// A departure called from shaking moves to the train's own pull-away when that comes within `refineWindowSec`: a
+    /// push held for `refinePushSec` seconds with no steps. The stop spans, stop times and walking marks of the ride
+    /// start from the departure, so nothing else moves.
+    private mutating func refineDeparture(_ m: MotionSecond) {
+        guard let until = refineUntil, let from = refineFrom else { return }
+        guard m.ts <= until, phase == .riding, let i = timeline.events.indices.last, timeline.events[i].kind == .departed else { refineUntil = nil; return }
+        if m.stepEnergy > detector.stepThreshold {
+            // still walking: boarding, so the train has not left yet; the window runs on from here
+            refinePush = 0
+            refineUntil = min(from + refineMaxSec, max(until, m.ts + refineWindowSec))
+            return
+        }
+        if m.pushG >= detector.pushThreshold { refinePush += 1 } else { refinePush = 0 }
+        guard refinePush >= refinePushSec else { return }
+        let start = m.ts - Double(refinePushSec - 1)
+        // from rest, not from cruising: a push that follows a run is the train braking for the next station
+        let before = recent.filter { $0.ts >= start - 10 && $0.ts < start }.map(\.pushG).sorted()
+        guard before.count >= 5, before[before.count / 2] <= restPushG else { refinePush = 0; return }
+        refineUntil = nil
+        guard start - timeline.events[i].ts >= 5 else { return }
+        timeline.events[i].ts = start
+        let ride = rideCount - 1
+        stopTimes = stopTimes.filter { $0 >= start }
+        timeline.stopSpans.removeAll { $0.ride == ride && $0.start < start }
+        amendedRide = ride
     }
 
     /// The departure and walk-off of ride `k` (0 the first), as the record holds them.

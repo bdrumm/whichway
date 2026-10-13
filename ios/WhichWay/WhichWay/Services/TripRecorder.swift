@@ -167,7 +167,30 @@ final class TripRecorder {
         tracker?.motion(m)
         checkQuickChange()
         handleEvents()
+        if let k = tracker?.takeAmendedRide() { departureMoved(ride: k) }
         publish()
+    }
+
+    /// The departure of ride `k` moved to the train's own pull-away: the trains are read again against it (the rider's
+    /// word stands; only its train is looked up again).
+    private func departureMoved(ride k: Int) {
+        guard let t = tracker, let r = t.ride(k), k < legs.count else { return }
+        departureChecked.remove(k)
+        departedTs[k] = r.departedTs
+        reread(k)
+    }
+
+    /// A departure that matched no train in the feed (the route started a few seconds before it, before any poll; Oct 13
+    /// at 14 St, 14 s), or a line named by hand with no train to it: read again once the polls bring trains in.
+    private func rereadUnmatched() {
+        guard let t = tracker, t.phase == .riding else { return }
+        let leg = t.timeline.legsRidden
+        guard leg < legs.count, let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, let b = belief(leg: leg),
+              (b.evidence == ["plan"]) || (b.byHand && b.bestTrain == nil) else { return }
+        let cands = log.candidates(departedTs: dep, windowSec: inference.departureWindowSec, chosenTrainId: legs[leg].chosenTrainId)
+        guard !cands.isEmpty else { return }
+        departedTs[leg] = dep
+        reread(leg)
     }
 
     /// A walk that began while the train the phone believes the rider is on stood at a station, by the feed's
@@ -249,6 +272,7 @@ final class TripRecorder {
         observe(legs[leg], boards: boards, into: &log, now: now)
         if leg + 1 < legs.count { observe(legs[leg + 1], boards: boards, into: &transferLog, now: now) }
         if leg >= 1 { observe(legs[leg - 1], boards: boards, into: &prevLog, now: now) }
+        rereadUnmatched()
         rideEvidence(now: now)
         checkDepartureMade(now: now)
         checkSamePlatformChange(now: now)

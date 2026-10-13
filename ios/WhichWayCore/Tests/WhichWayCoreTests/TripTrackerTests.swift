@@ -157,6 +157,64 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertEqual(t.timeline.stopSpans.last, FeltStop(ride: 1, start: s3, end: s3 + 15))
     }
 
+    func testADepartureCalledFromTheJostleOfBoardingMovesToTheTrainsOwnPush() {
+        // Oct 13 at W 4 St: steps onto the standing F, then shaking with no push (people boarding) called a departure at
+        // 17:50:23; the F's own pull-away, a push held for 8 s, came at 17:50:52 (its feed time 17:50:53)
+        var t = TripTracker(start(), distanceToOriginM: 20)
+        t.updateForecast(boardTs: 1100, arriveTs: 2000, now: 1000)
+        var ts = 1000.0
+        func stand(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false)); ts += 1 } }
+        func walk(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: true)); ts += 1 } }
+        func jostle(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false, push: 0.02, shake: 0.06)); ts += 1 } }
+        func pull(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false, push: 0.09, shake: 0.02)); ts += 1 } }
+        stand(30); walk(8)
+        let called = ts
+        jostle(15); walk(5); jostle(4)                        // still boarding: steps after the "departure"
+        XCTAssertEqual(t.timeline.events.first?.ts, called, "the shaking calls the departure")
+        stand(25)                                             // standing with the doors open
+        let pullAway = ts
+        pull(8)
+        XCTAssertEqual(t.timeline.events.first?.ts, pullAway, "moved to the train's own push")
+        XCTAssertEqual(t.takeAmendedRide(), 0)
+        XCTAssertNil(t.takeAmendedRide())
+        // a departure the train's push called itself is left as it is
+        var u = TripTracker(start(), distanceToOriginM: 20)
+        ts = 1000
+        for _ in 0..<30 { u.motion(sec(ts, walking: false)); ts += 1 }
+        let pushed = ts
+        for _ in 0..<6 { u.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 }
+        for _ in 0..<30 { u.motion(sec(ts, walking: false, shake: 0.04)); ts += 1 }
+        for _ in 0..<6 { u.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 }
+        XCTAssertEqual(u.timeline.events.first?.ts, pushed)
+        XCTAssertNil(u.takeAmendedRide())
+        // a departure from shaking whose next push follows a run (braking for the next station) is left as it is
+        var w = TripTracker(start(), distanceToOriginM: 20)
+        ts = 1000
+        for _ in 0..<30 { w.motion(sec(ts, walking: false)); ts += 1 }
+        let shaken = ts
+        for _ in 0..<30 { w.motion(sec(ts, walking: false, push: 0.03, shake: 0.05)); ts += 1 }   // cruising
+        for _ in 0..<6 { w.motion(sec(ts, walking: false, push: 0.09, shake: 0.03)); ts += 1 }    // braking
+        XCTAssertEqual(w.timeline.events.first?.ts, shaken)
+        XCTAssertNil(w.takeAmendedRide())
+    }
+
+    func testAPullAwayWithdrawnAfterAChangeLeavesTheRiderBetweenTrains() {
+        var t = TripTracker(start(legs: 2, transfer: "W 4 St"), distanceToOriginM: 20)
+        t.updateForecast(boardTs: 1030, arriveTs: 3000, now: 1000)
+        var ts = 1000.0
+        func depart() { for _ in 0..<6 { t.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 } }
+        func ride(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false, shake: 0.04)); ts += 1 } }
+        func walk(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: true)); ts += 1 } }
+        func stand(_ n: Int) { for _ in 0..<n { t.motion(sec(ts, walking: false)); ts += 1 } }
+        stand(30); depart(); ride(120); stand(15); walk(40); stand(20); depart(); ride(20)
+        XCTAssertEqual(t.timeline.legsRidden, 1)
+        t.withdrawDeparture()
+        XCTAssertEqual(t.phase, .riding, "between trains at the change, not back at the origin")
+        XCTAssertFalse(t.onTrain)
+        t.tick(now: ts + 600)
+        XCTAssertFalse(t.timeline.rideAssumed, "no ride assumed from the first leg's timetable")
+    }
+
     func testAPullAwayAfterEveryLegIsRiddenKeepsTheTripOpen() {
         // the count ran a ride ahead and the rider is on a train again: not over at the clock, but at the next walk-off
         var t = TripTracker(start(legs: 1), distanceToOriginM: 20)

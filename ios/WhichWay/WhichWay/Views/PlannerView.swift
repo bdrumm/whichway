@@ -1337,6 +1337,9 @@ struct PlannerView: View {
             plan.idx.compactMap { k, r in data.schedule?.lines[k].flatMap { r.from < $0.runSec.count ? $0.runSec[r.from] : nil }.map(Double.init) }.min()
         }
         withAnimation { trip.begin(tl, distanceToOriginM: d, observation: obs, legs: plans, now: data.now, firstRunSec: firstRun) }
+        // the feeds as they are now, at once: a train pulling away seconds after the route starts is matched against them
+        // rather than against nothing until the next poll (Oct 13 at 14 St: 14 s)
+        trip.observeBoards(data.boards, now: data.now)
         seedStandingTrains(plans.first)
         data.requestGeometry()
         loc.startTracking()
