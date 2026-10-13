@@ -79,6 +79,12 @@ final class RidingItineraryTests: XCTestCase {
         XCTAssertEqual(pathTrips(boards: boards, schedule: sched, option: one, now: 1000, maxN: 1, reachTs: 1300).first?.legs[0].train.tripId, "g2")
         XCTAssertEqual(pathTrips(boards: boards, schedule: sched, option: one, now: 1000, maxN: 1, reachTs: 1060 + reachDoorsSec).first?.legs[0].train.tripId, "g1",
                        "pulling in as the rider reaches the platform, its doors still open")
+        // nothing in the feed is in reach (the rider far from the station): the next train anyway, not an empty route
+        XCTAssertEqual(pathTrips(boards: boards, schedule: sched, option: one, now: 1000, maxN: 1, reachTs: 5000).first?.legs[0].train.tripId, "g1")
+        // a reachable train beyond the first several is still found (the filter runs before the count)
+        var many = (0..<12).map { i in train("m\(i)", key: "G_N", points: [(0, 1100 + Double(i) * 120 + lagG), (2, 1340 + Double(i) * 120 + lagG)]) }
+        many.append(train("late", key: "G_N", points: [(0, 3000 + lagG), (2, 3240 + lagG)]))
+        XCTAssertEqual(pathTrips(boards: ["G_N": board("G_N", many)], schedule: sched, option: one, now: 1000, maxN: 1, reachTs: 2900).first?.legs[0].train.tripId, "late")
     }
 
     func testTheBoardedTrainAndTheFirstConnectionItMakes() throws {

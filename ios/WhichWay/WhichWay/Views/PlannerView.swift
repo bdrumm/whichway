@@ -405,6 +405,8 @@ struct PlannerView: View {
         let pm = PersonalModelStore.shared.model
         let usual = nearbyPlace().flatMap { pm.placeToStationSec(place: $0.id.uuidString, station: originId) }
         let walk = usual ?? (meters / pm.walkSpeedMPerMin * 60 + (pm.accessSec(station: originId) ?? 0))
+        // further than this from the station the rider is not heading for a particular train yet: nothing is skipped
+        guard walk <= 25 * 60 else { return nil }
         // the fix is as old as it is: the rider has been walking since
         return l.timestamp.timeIntervalSince1970 + walk
     }

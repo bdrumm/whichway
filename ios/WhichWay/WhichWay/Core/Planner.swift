@@ -95,9 +95,17 @@ let reachDoorsSec = 20.0
 /// realistic one. Nil: the rider is at the station, or where they are is not known.
 func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: PathOption, now: Double, maxN: Int = 5, reachTs: Double? = nil) -> [Itinerary] {
     let sched = Double(option.schedSec)
-    let makeable = { (t: TripCandidate) in reachTs.map { t.boardTs + reachDoorsSec >= $0 } ?? true }
+    // the trains the rider can make, out of all the feed has (filtered before counting: the next few trains of a
+    // two-line leg cover only about 20 min); none in reach in the feed, the next ones anyway rather than nothing
+    // (Oct 13: every route read "no train in the feeds yet" for a rider far from the station)
+    func firstLeg(_ n: Int) -> [TripCandidate] {
+        guard let r = reachTs else { return legTrips(boards: boards, schedule: schedule, leg: option.legs[0], now: now, maxN: n) }
+        let all = legTrips(boards: boards, schedule: schedule, leg: option.legs[0], now: now, maxN: 60)
+        let ok = all.filter { $0.boardTs + reachDoorsSec >= r }
+        return Array((ok.isEmpty ? all : ok).prefix(n))
+    }
     if option.legs.count == 1 {
-        let its = legTrips(boards: boards, schedule: schedule, leg: option.legs[0], now: now, maxN: maxN + 8).filter(makeable).map { t in
+        let its = firstLeg(maxN + 8).map { t in
             Itinerary(legs: [t], boardTs: t.boardTs, arriveTs: t.arriveTs, totalSec: t.arriveTs - now, walkSec: 0, waitAtTransferSec: nil, connectionMarginSec: nil,
                       nextIfMissedSec: nil, schedRideSec: sched, rideVsSchedSec: t.rideSec - sched)
         }
@@ -105,7 +113,7 @@ func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: Pa
     }
     guard let transfer = option.transfer, option.legs.count == 2 else { return [] }
     let walk = transfer.plannedSec
-    let firsts = legTrips(boards: boards, schedule: schedule, leg: option.legs[0], now: now, maxN: maxN + 6).filter(makeable)
+    let firsts = firstLeg(maxN + 6)
     let seconds = legTrips(boards: boards, schedule: schedule, leg: option.legs[1], now: now, maxN: 40)
     var out: [Itinerary] = []
     var seen = Set<String>()
