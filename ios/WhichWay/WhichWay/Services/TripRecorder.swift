@@ -528,7 +528,7 @@ final class TripRecorder {
 
     private func store(_ b: LineBelief) {
         if let i = beliefs.firstIndex(where: { $0.leg == b.leg }) { beliefs[i] = b } else { beliefs.append(b) }
-        if let bl = b.boarded { tracker?.setBoarded(bl) }
+        if let bl = b.boarded { tracker?.setBoarded(bl, now: lastNow) }
     }
 
     /// The ride the tracker assumed from the schedule (boarding time past, no departure felt) is the plan's
@@ -669,10 +669,22 @@ final class TripRecorder {
     }
 
     func tick(now: Double) {
+        lastNow = now
         tracker?.tick(now: now)
         checkAssumed()
         publish()
+        // the trip in hand to disk every half minute: an app killed mid-route (a reinstall, a crash, the system
+        // reclaiming memory) loses nothing; the next launch closes it as interrupted and sends it (Oct 13)
+        if let t = tracker, now - lastCheckpoint >= checkpointSec {
+            lastCheckpoint = now
+            Telemetry.shared.checkpoint(timeline: t.timeline, now: now)
+            MotionTrace.shared.checkpoint(t.timeline)
+        }
     }
+    @ObservationIgnored private var lastNow: Double? = nil
+    @ObservationIgnored private var lastCheckpoint = 0.0
+    /// How often a route in progress is written to disk.
+    var checkpointSec = 30.0
 
     private func publish() {
         guard let t = tracker else { return }

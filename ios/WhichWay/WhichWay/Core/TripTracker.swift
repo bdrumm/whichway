@@ -33,6 +33,7 @@ struct TripTimeline: Codable, Equatable {
     var boarded: [BoardedLeg] = []        // the train and line each leg was ridden on, as far as the phone could tell
     var withdrawnDepartures: [Double]? = nil   // pull-aways felt that no train made (the platform shaking), withdrawn
     var stopSpans: [FeltStop] = []        // every station stop felt on each ride: the train at rest, then moving again
+    var beliefLog: [BeliefNote] = []      // each change in the train the phone believes the rider is on, as it happened
 
     /// Legs ridden so far: the number of alightings the sensors saw.
     var legsRidden: Int { events.filter { $0.kind == .alighted }.count }
@@ -57,6 +58,19 @@ struct TripTimeline: Codable, Equatable {
     }
 
     var walkSpeedMPerMin: Double? { walkMeters >= 150 && walkSeconds >= 60 ? walkMeters / walkSeconds * 60 : nil }
+}
+
+/// A change in what the phone believes about one leg's train: when, the line and train it now names, how sure, and on
+/// what evidence. Kept so a trip can be read back afterwards (Oct 13: the right F named, then a later train asked about,
+/// and nothing on the record to say when or why).
+struct BeliefNote: Codable, Equatable {
+    var ts: Double
+    var leg: Int
+    var key: String
+    var trainId: String?
+    var confidence: Double
+    var verdict: String
+    var evidence: [String]
 }
 
 /// One station stop the sensors felt on a ride: the train came to rest at `start` (quiet: no push, no shake, no
@@ -505,8 +519,14 @@ struct TripTracker {
     }
 
     /// What the line inference concluded about a leg, kept with the trip (the latest word per leg).
-    mutating func setBoarded(_ b: BoardedLeg) {
+    mutating func setBoarded(_ b: BoardedLeg, now: Double? = nil) {
+        let before = timeline.boarded.first { $0.leg == b.leg }
         if let i = timeline.boarded.firstIndex(where: { $0.leg == b.leg }) { timeline.boarded[i] = b } else { timeline.boarded.append(b) }
+        // the log keeps the changes of mind (another train or line, a verdict turning, new evidence), not every poll
+        if before?.trainId != b.trainId || before?.key != b.key || before?.verdict != b.verdict || before?.evidence != b.evidence, timeline.beliefLog.count < 200 {
+            timeline.beliefLog.append(BeliefNote(ts: now ?? timeline.events.last?.ts ?? timeline.startTs, leg: b.leg, key: b.key, trainId: b.trainId,
+                                                 confidence: (b.confidence * 100).rounded() / 100, verdict: b.verdict.rawValue, evidence: b.evidence))
+        }
     }
 
     mutating func end(now: Double, by: String) -> TripTimeline {

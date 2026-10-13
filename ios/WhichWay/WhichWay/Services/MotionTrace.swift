@@ -42,9 +42,25 @@ final class MotionTrace {
         samples.append([r(m.ts, 10), r(m.stepEnergy, 10000), r(m.pushG, 10000), r(m.shakeG, 10000)])
     }
 
-    /// The route is over: its seconds and what the tracker made of them go to a file named by its start.
-    func end(_ tl: TripTimeline?) {
-        guard let s = startTs, !samples.isEmpty else { startTs = nil; samples = []; return }
+    /// The route so far, to a partial file (not one the uploads pick up): what survives an app killed mid-route.
+    func checkpoint(_ tl: TripTimeline) {
+        guard let s = startTs, !samples.isEmpty else { return }
+        var doc = document(s, tl)
+        doc["endedBy"] = "interrupted"
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: doc) { try? data.write(to: dir.appendingPathComponent("partial-trace-\(Int(s)).json"), options: .atomic) }
+    }
+
+    /// At launch, the partial traces of routes the app was killed in are kept as finished ones, to be sent.
+    func recoverInterrupted() {
+        let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []).filter { $0.lastPathComponent.hasPrefix("partial-trace-") }
+        for f in files {
+            let done = dir.appendingPathComponent(String(f.lastPathComponent.dropFirst("partial-".count)))
+            if FileManager.default.fileExists(atPath: done.path) { try? FileManager.default.removeItem(at: f) } else { try? FileManager.default.moveItem(at: f, to: done) }
+        }
+    }
+
+    private func document(_ s: Double, _ tl: TripTimeline?) -> [String: Any] {
         var doc: [String: Any] = ["startTs": s, "columns": ["ts", "stepEnergy", "pushG", "shakeG"], "seconds": samples]
         if let tl = tl {
             doc["events"] = tl.events.map { ["kind": $0.kind.rawValue, "ts": $0.ts] }
@@ -53,6 +69,14 @@ final class MotionTrace {
             doc["origin"] = tl.originStation
             doc["dest"] = tl.destStation
         }
+        return doc
+    }
+
+    /// The route is over: its seconds and what the tracker made of them go to a file named by its start.
+    func end(_ tl: TripTimeline?) {
+        guard let s = startTs, !samples.isEmpty else { startTs = nil; samples = []; return }
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("partial-trace-\(Int(s)).json"))
+        let doc = document(s, tl)
         startTs = nil; samples = []
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("trace-\(Int(s)).json")

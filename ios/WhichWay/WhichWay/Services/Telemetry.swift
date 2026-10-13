@@ -43,6 +43,7 @@ struct TripObservation: Codable, Identifiable {
     /// Station stops felt on each ride, the alighting stop included.
     var rideStops: [Int]?
     var stopSpans: [FeltStop]? = nil      // ultra training mode: each station stop felt, for the training corpus
+    var beliefLog: [BeliefNote]? = nil    // each change in the train the phone believed the rider was on
     var ultraTraining: Bool? = nil
     /// Pull-aways felt that no train made, withdrawn (the platform shaking).
     var withdrawnDepartures: [Double]?
@@ -75,6 +76,9 @@ final class Telemetry {
     /// server, when that is one (the published site cannot receive).
     private(set) var server: String
     @ObservationIgnored private let file: URL
+    /// The trip in progress, written every half minute while it lasts and removed when it ends: what survives an app
+    /// killed mid-route.
+    @ObservationIgnored private let inProgressFile: URL
 
     var pendingUpload: Int { observations.filter { $0.uploaded != true }.count }
     var pendingGitHub: Int { observations.filter { $0.uploadedGitHub != true }.count }
@@ -97,7 +101,28 @@ final class Telemetry {
         installId = id
         server = d.string(forKey: Telemetry.serverKey) ?? Telemetry.defaultServer
         file = f
+        inProgressFile = dir.appendingPathComponent("in-progress.json")
         if let data = try? Data(contentsOf: f), let obs = try? JSONDecoder().decode([TripObservation].self, from: data) { observations = obs }
+        recoverInterrupted()
+    }
+
+    /// A trip the app was killed in the middle of (nothing runs at launch yet, so any trip on disk is one): kept as
+    /// interrupted, with what it had measured by its last checkpoint, and sent like any other.
+    private func recoverInterrupted() {
+        defer { try? FileManager.default.removeItem(at: inProgressFile) }
+        MotionTrace.shared.recoverInterrupted()
+        guard let data = try? Data(contentsOf: inProgressFile), let o = try? JSONDecoder().decode(TripObservation.self, from: data),
+              !observations.contains(where: { $0.id == o.id }), !o.events.isEmpty || o.motionSeconds >= 60 else { return }
+        observations.append(o); save()
+    }
+
+    /// The route so far, to disk: the record as it would end now, marked interrupted.
+    func checkpoint(timeline tl: TripTimeline, now: Double) {
+        guard optIn, let c = current else { return }
+        var o = merged(c, tl)
+        o.endedBy = "interrupted"
+        o.endedTs = now
+        if let d = try? JSONEncoder().encode(o) { try? d.write(to: inProgressFile, options: .atomic) }
     }
 
     private func save() {
@@ -125,6 +150,7 @@ final class Telemetry {
         var o = base
         o.id = UUID().uuidString; o.installId = installId; o.createdTs = Date().timeIntervalSince1970
         current = o
+        if let d = try? JSONEncoder().encode(o) { try? d.write(to: inProgressFile, options: .atomic) }
     }
 
     /// The forecast as it stands; frozen once the sensors have seen a departure, so the record keeps the
@@ -147,9 +173,22 @@ final class Telemetry {
 
     /// The trip is over: what the tracker measured joins the record, which is kept when it saw anything.
     func endTrip(timeline tl: TripTimeline?, api: URL?) {
+        try? FileManager.default.removeItem(at: inProgressFile)
         guard var o = current else { return }
         current = nil
-        if let tl = tl {
+        if let tl = tl { o = merged(o, tl) }
+        guard !o.events.isEmpty || o.motionSeconds >= 60 || o.accessSec != nil || o.walkSpeedMPerMin != nil else { return }
+        observations.append(o); save()
+        Task {
+            if let api = api { await upload(to: api) }
+            await uploadToGitHub()
+        }
+    }
+
+    /// The record with what the tracker has measured so far.
+    private func merged(_ base: TripObservation, _ tl: TripTimeline) -> TripObservation {
+        var o = base
+        do {
             o.events = tl.events; o.motionSeconds = tl.motionSeconds
             o.endedTs = tl.endedTs; o.endedBy = tl.endedBy
             o.corroboratedDepartureTs = tl.corroboratedDepartureTs
@@ -169,14 +208,10 @@ final class Telemetry {
                 }
             }
             o.withdrawnDepartures = tl.withdrawnDepartures
+            o.beliefLog = tl.beliefLog.isEmpty ? nil : tl.beliefLog
             if o.predictedBoardTs == nil { o.predictedBoardTs = tl.forecastBoardTs; o.predictedArriveTs = tl.forecastArriveTs }
         }
-        guard !o.events.isEmpty || o.motionSeconds >= 60 || o.accessSec != nil || o.walkSpeedMPerMin != nil else { return }
-        observations.append(o); save()
-        Task {
-            if let api = api { await upload(to: api) }
-            await uploadToGitHub()
-        }
+        return o
     }
 
     /// Every trip not yet in the private data repository, one file each, from any connection: through the relay
