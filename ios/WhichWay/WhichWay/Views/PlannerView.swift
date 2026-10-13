@@ -1468,12 +1468,14 @@ struct PlannerView: View {
         destId = d.id
     }
 
-    /// The Line tab follows the selected route: its legs, and the train it boards when the feeds have one.
+    /// The Route tab follows the selected route: its legs, and the train it boards when the feeds have one.
     private func updateFocus() {
         guard let sel = paths.first(where: { $0.id == selectedPath }), !sel.legs.isEmpty else {
+            data.focusOption = nil
             if data.focus != nil { data.focus = nil }
             return
         }
+        data.focusOption = sel
         let it = sel.live
         var legs: [FocusLeg] = []
         for (i, leg) in sel.legs.enumerated() {

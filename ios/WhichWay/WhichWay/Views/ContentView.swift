@@ -9,7 +9,7 @@ struct ContentView: View {
     var body: some View {
         TabView {
             PlannerView().tabItem { Label("Go", systemImage: "tram.fill") }
-            LineBoardView().tabItem { Label("Line", systemImage: "chart.xyaxis.line") }
+            LineBoardView().tabItem { Label("Route", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }
         }
         .sheet(isPresented: $welcome) { WelcomeView() }

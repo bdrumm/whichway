@@ -1,10 +1,17 @@
 import SwiftUI
 
-/// Line tab: one line direction with every started train on the track, then the train list with lateness,
-/// position, holds, stalls, track changes and the last measured segment speed.
+/// Route tab: the Go tab's route, one leg's line at a time. Summary (the default) is the line's health on the
+/// rider's stretch and the track with every train on it; End to end, the whole route as a time chart; Map, the route
+/// on the map; Insights & trains, the engine's figures, scenarios, alerts and every train on the line.
 struct LineBoardView: View {
     @Environment(DataService.self) private var data
     @AppStorage("lineKey") private var lineKey = ""
+    @AppStorage("routeSection") private var section: RouteSection = .summary
+
+    enum RouteSection: String, CaseIterable, Identifiable {
+        case summary = "Summary", endToEnd = "End to end", map = "Map", insights = "Insights"
+        var id: String { rawValue }
+    }
 
     var body: some View {
         NavigationStack {
@@ -15,7 +22,7 @@ struct LineBoardView: View {
                     ProgressView("Loading the schedule…")
                 }
             }
-            .navigationTitle("Line")
+            .navigationTitle("Route")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { StatusDot() } }
         }
         .onAppear { follow(); register() }
@@ -117,47 +124,26 @@ struct LineBoardView: View {
                 }
                 if let line = sched.lines[lineKey] {
                     let route = String(lineKey.split(separator: "_").first ?? "")
-                    if let h = lineHealth(key: lineKey, data: data, span: focusLeg?.idx[lineKey]) {
-                        LineHealthRow(health: h, route: route)
-                    }
-                    if let id = focusedTrainId, let b = data.boards[lineKey], let t = b.trains.first(where: { $0.id == id }) {
-                        Text("Your train: \(shortLabel(t)), \(t.position?.text ?? "position unknown"). From the route selected on the Go tab.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                     let span = focusLeg?.idx[lineKey]
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        TrackDiagramView(line: line, route: route, fromIdx: span?.from, toIdx: span?.to, trains: trains(line), colW: 52,
-                                         scrollTo: focusStop(line) ?? span.map { max(0, $0.from - 1) })
+                    Picker("View", selection: $section) {
+                        ForEach(RouteSection.allCases) { Text($0.rawValue).tag($0) }
                     }
-                    if let legs = data.focus?.legs, legs.count > 1, legs.allSatisfy({ data.boards[$0.key] != nil }) {
-                        var preds: [String: LinePrediction] = [:]
-                        let _ = legs.forEach { l in if let p = data.predictions[l.key]?[data.scenario] ?? data.predictions[l.key]?["baseline"] { preds[l.key] = p } }
-                        RouteChartCard(legs: legs, schedule: sched, boards: data.boards, predictions: preds)
-                    }
-                    if let b = data.predictedBoards[lineKey] ?? data.boards[lineKey] {
-                        HStack(spacing: 8) {
-                            Tile(title: "Trains", value: "\(b.trains.count)", sub: "started, in the feed")
-                            Tile(title: "Held / overdue", value: "\(b.nHolding) / \(b.nStalled)", sub: "≥ \(Int(sched.constants.holdSec)) s at a stop / late between stops")
-                            Tile(title: "Gaps ≥ 3 min", value: "\(b.trains.filter { ($0.concernSec ?? 0) >= 180 }.count)",
-                                 sub: "over the usual spacing · \(b.trains.filter { ($0.effectiveLatenessSec ?? 0) >= 180 }.count) late by the timetable")
+                    .pickerStyle(.segmented)
+                    .padding(.top, 2)
+                    switch section {
+                    case .summary:
+                        summary(sched, line: line, route: route, span: span)
+                    case .endToEnd:
+                        endToEnd(sched, line: line, route: route, span: span)
+                    case .map:
+                        if let p = data.focusOption, data.focus != nil {
+                            RouteMapView(option: p, schedule: sched).frame(height: 460).clipShape(RoundedRectangle(cornerRadius: 12))
+                            Text("\(p.label): the route's track, its stops, and the trains where they are now.").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("Choose a route on the Go tab to see it on the map.").font(.footnote).foregroundStyle(.secondary)
                         }
-                        if let lp = data.predictions[lineKey]?[data.scenario] ?? data.predictions[lineKey]?["baseline"] {
-                            if let raw = data.boards[lineKey], !raw.trains.isEmpty {
-                                PredictionCard(line: line, board: raw, prediction: lp, focusedTrainId: focusedTrainId, span: span, route: route)
-                            }
-                            EngineCards(prediction: lp, line: line)
-                        }
-                        ScenarioPicker()
-                        let directIds = Set((data.focus?.legs).map { data.alertsAffecting(legs: $0, schedule: sched).map { $0.alert.id } } ?? [])
-                        let alerts = data.rankedAlerts(routes: [route]).filter { !directIds.contains($0.alert.id) }
-                        if !alerts.isEmpty {
-                            Text(directIds.isEmpty ? "Alerts on the \(route)" : "Other alerts on the \(route)").font(.subheadline.bold()).padding(.top, 2)
-                            ForEach(alerts.prefix(4), id: \.alert.id) { x in AlertCard(alert: x.alert, evidence: alertEvidence(x.alert, data: data), assessment: x.assessment) }
-                        }
-                        ForEach(b.trains) { t in TrainRow(train: t, focused: t.id == focusedTrainId).id("train-\(t.id)") }
-                        if b.trains.isEmpty { Text("No started train on this line in the feed.").font(.caption).foregroundStyle(.secondary) }
-                    } else {
-                        Text("Waiting for the feed…").font(.caption).foregroundStyle(.secondary)
+                    case .insights:
+                        insights(sched, line: line, route: route, span: span)
                     }
                 }
                 if let err = data.lastError { Text(err).font(.caption2).foregroundStyle(Color.red) }
@@ -169,6 +155,66 @@ struct LineBoardView: View {
         .onChange(of: data.focus) { _, f in
             if let f = f, f.key == lineKey { withAnimation { proxy.scrollTo("train-\(f.trainId)", anchor: .center) } }
         }
+        }
+    }
+
+    /// The first view: how the line is doing on the rider's stretch, their train, and the track with every train on it.
+    @ViewBuilder private func summary(_ sched: ClientSchedule, line: LineTopology, route: String, span: StopSpan?) -> some View {
+        if let h = lineHealth(key: lineKey, data: data, span: span) {
+            LineHealthRow(health: h, route: route)
+        }
+        if let id = focusedTrainId, let b = data.boards[lineKey], let t = b.trains.first(where: { $0.id == id }) {
+            Text("Your train: \(shortLabel(t)), \(t.position?.text ?? "position unknown") · \(t.lateLabel). From the route selected on the Go tab.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            TrackDiagramView(line: line, route: route, fromIdx: span?.from, toIdx: span?.to, trains: trains(line), colW: 52,
+                             scrollTo: focusStop(line) ?? span.map { max(0, $0.from - 1) })
+        }
+        if data.boards[lineKey] == nil { Text("Waiting for the feed…").font(.caption).foregroundStyle(.secondary) }
+    }
+
+    /// The whole route as a time chart: every leg's trains and the change between them; on a direct route, this line's.
+    @ViewBuilder private func endToEnd(_ sched: ClientSchedule, line: LineTopology, route: String, span: StopSpan?) -> some View {
+        if let legs = data.focus?.legs, legs.count > 1, legs.allSatisfy({ data.boards[$0.key] != nil }) {
+            var preds: [String: LinePrediction] = [:]
+            let _ = legs.forEach { l in if let p = data.predictions[l.key]?[data.scenario] ?? data.predictions[l.key]?["baseline"] { preds[l.key] = p } }
+            RouteChartCard(legs: legs, schedule: sched, boards: data.boards, predictions: preds)
+        } else if let lp = data.predictions[lineKey]?[data.scenario] ?? data.predictions[lineKey]?["baseline"], let raw = data.boards[lineKey], !raw.trains.isEmpty {
+            PredictionCard(line: line, board: raw, prediction: lp, focusedTrainId: focusedTrainId, span: span, route: route)
+        } else {
+            Text("Waiting for the feed…").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// The figures behind it: the line's counts, the engine's projection and its scenarios, the other alerts, and every
+    /// train on the line with its lateness, position, holds and last run.
+    @ViewBuilder private func insights(_ sched: ClientSchedule, line: LineTopology, route: String, span: StopSpan?) -> some View {
+        if let b = data.predictedBoards[lineKey] ?? data.boards[lineKey] {
+            HStack(spacing: 8) {
+                Tile(title: "Trains", value: "\(b.trains.count)", sub: "started, in the feed")
+                Tile(title: "Held / overdue", value: "\(b.nHolding) / \(b.nStalled)", sub: "≥ \(Int(sched.constants.holdSec)) s at a stop / late between stops")
+                Tile(title: "Gaps ≥ 3 min", value: "\(b.trains.filter { ($0.concernSec ?? 0) >= 180 }.count)",
+                     sub: "over the usual spacing · \(b.trains.filter { ($0.effectiveLatenessSec ?? 0) >= 180 }.count) late by the timetable")
+            }
+            if let lp = data.predictions[lineKey]?[data.scenario] ?? data.predictions[lineKey]?["baseline"] {
+                if (data.focus?.legs.count ?? 0) > 1, let raw = data.boards[lineKey], !raw.trains.isEmpty {
+                    PredictionCard(line: line, board: raw, prediction: lp, focusedTrainId: focusedTrainId, span: span, route: route)
+                }
+                EngineCards(prediction: lp, line: line)
+            }
+            ScenarioPicker()
+            let directIds = Set((data.focus?.legs).map { data.alertsAffecting(legs: $0, schedule: sched).map { $0.alert.id } } ?? [])
+            let alerts = data.rankedAlerts(routes: [route]).filter { !directIds.contains($0.alert.id) }
+            if !alerts.isEmpty {
+                Text(directIds.isEmpty ? "Alerts on the \(route)" : "Other alerts on the \(route)").font(.subheadline.bold()).padding(.top, 2)
+                ForEach(alerts.prefix(4), id: \.alert.id) { x in AlertCard(alert: x.alert, evidence: alertEvidence(x.alert, data: data), assessment: x.assessment) }
+            }
+            Text("Trains on the line").font(.subheadline.bold()).padding(.top, 2)
+            ForEach(b.trains) { t in TrainRow(train: t, focused: t.id == focusedTrainId).id("train-\(t.id)") }
+            if b.trains.isEmpty { Text("No started train on this line in the feed.").font(.caption).foregroundStyle(.secondary) }
+        } else {
+            Text("Waiting for the feed…").font(.caption).foregroundStyle(.secondary)
         }
     }
 

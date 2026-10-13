@@ -107,8 +107,10 @@ final class DataService {
     private(set) var offline = false
     /// The last time a feed came from the network (older data is the copy on disk).
     private(set) var lastFeedFetch: Date?
-    /// The train the Go tab's selected itinerary boards; the Line tab follows it.
+    /// The train the Go tab's selected itinerary boards; the Route tab follows it.
     var focus: TrainFocus?
+    /// The Go tab's selected route itself, for the Route tab's map (set with `focus`, nil without a route).
+    @ObservationIgnored var focusOption: PathOption?
     /// The last successful fetch of every file, so the app keeps working without signal.
     @ObservationIgnored private var cache: DiskCache
 
