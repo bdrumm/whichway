@@ -128,6 +128,8 @@ struct DeveloperSettingsView: View {
                     .disabled(!tele.optIn || tele.uploadURL(fallback: data.apiBase) == nil || tele.pendingUpload == 0)
                 if let u = tele.exportURL() { ShareLink("Export as JSON", item: u) }
                 #if DEBUG
+                Toggle("Simulate offline (developer)", isOn: Binding(get: { UserDefaults.standard.bool(forKey: DataService.simulateOfflineKey) },
+                                                                     set: { UserDefaults.standard.set($0, forKey: DataService.simulateOfflineKey) }))
                 Toggle("Keep motion traces (developer)", isOn: Binding(get: { MotionTrace.shared.enabled }, set: { MotionTrace.shared.enabled = $0 }))
                 Text("Keeps each route's summarised motion, one line a second, on this phone (the last 30 routes), to tune when a train is felt pulling away. Copied off with make trips, and sent to the data repository with the trips.")
                     .font(.caption).foregroundStyle(.secondary)

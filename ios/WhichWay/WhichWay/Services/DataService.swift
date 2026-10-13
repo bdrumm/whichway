@@ -82,6 +82,24 @@ final class DataService {
     private(set) var predictions: [String: [String: LinePrediction]] = [:]
     /// Boards whose points are the engine's ETAs for the chosen scenario (the planner and diagrams read these).
     private(set) var predictedBoards: [String: LineBoard] = [:]
+    /// The engine's forecast for the selected route's lines as it stood at the last poll with signal: what the route
+    /// is shown from while the phone is offline, each train at the time it was predicted, so the countdown runs on
+    /// instead of the engine re-projecting a stale feed or the planner falling back to the timetable (Oct 13: offline,
+    /// "the schedule skips to a different time").
+    @ObservationIgnored private var lastGoodPredicted: [String: LineBoard] = [:]
+    /// When that forecast was made.
+    private(set) var lastGoodPredictedTs: Double?
+    /// The last poll fetched a train feed. Not `offline`, which a data file fetched while the feeds time out also
+    /// clears (a patchy connection); the forecast is kept only from a feed fetched just now (Oct 13, the Simulator: a
+    /// table fetched mid-outage cleared `offline` and the kept forecast was replaced by the stale feed re-projected).
+    private var feedsLive = true
+    /// The lines whose forecast is kept: every line of every route the Go tab offers to the destination (the selected
+    /// one's and its alternatives': when a train leaves the planner may hand over to another route, and offline that one
+    /// must run on the same forecast, not on a stale feed re-projected: Oct 13, a hand-over to the C showed "a hold
+    /// ahead, +7 min" the moment the phone went offline).
+    private var keptKeys: Set<String> { (wantedBy["planner"] ?? []).union((focusOption?.legs ?? []).flatMap { $0.keys }) }
+    /// Offline, and the route is shown from the forecast made at the last poll with signal.
+    var showingLastForecast: Bool { !feedsLive && !lastGoodPredicted.isEmpty && !keptKeys.isDisjoint(with: lastGoodPredicted.keys) }
     /// baseline | hold_persists | clears_now
     private(set) var scenario: String = "baseline"
     /// Newest feed timestamp seen; polls are aligned to the feeds' 30-second publication.
@@ -369,8 +387,19 @@ final class DataService {
 
     private func missingFeeds() -> Set<String> { neededFeedKeys().filter { feeds[$0] == nil } }
 
+    /// Debug builds: every feed fetch fails as it would without signal, to check what the app shows offline.
+    static let simulateOfflineKey = "simulateOffline"
+    var simulateOffline: Bool {
+        #if DEBUG
+        return UserDefaults.standard.bool(forKey: DataService.simulateOfflineKey)
+        #else
+        return false
+        #endif
+    }
+
     func poll() async {
         guard let sched = schedule else { return }
+        let noSignal = simulateOffline
         var jobs: [(String, URL)] = []
         for k in neededFeedKeys() {
             if let p = sched.feeds[k], let u = url(p) { jobs.append((k, u)) }
@@ -382,6 +411,7 @@ final class DataService {
         await withTaskGroup(of: (String, RTFeed?, Data?, String?).self) { group in
             for (k, u) in jobs {
                 group.addTask {
+                    if noSignal { return (k, nil, nil, "\(k): no signal (simulated)") }
                     do {
                         var req = URLRequest(url: u)
                         req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -404,8 +434,9 @@ final class DataService {
         for (k, _) in jobs where got[k] == nil && feeds[k] == nil {
             if let data = cache.read("feed/\(k)"), let f = try? GTFSRealtime.parse(data) { got[k] = f }
         }
-        if fetched > 0 { lastFeedFetch = Date(); offline = false } else if !jobs.isEmpty {
+        if fetched > 0 { lastFeedFetch = Date(); offline = false; feedsLive = true } else if !jobs.isEmpty {
             offline = true
+            feedsLive = false
             if lastFeedFetch == nil { lastFeedFetch = jobs.compactMap { cache.date("feed/\($0.0)") }.max() }
         }
         for (k, f) in got { feeds[k] = f }
@@ -432,7 +463,10 @@ final class DataService {
         rebuildBoards()
         lastUpdate = Date()
         if offline {
-            lastError = "No signal · trains as last seen \(lastFeedFetch.map { Fmt.hhmm($0.timeIntervalSince1970) } ?? "earlier"); times come from the timetable and the saved tables."
+            let seen = lastFeedFetch.map { Fmt.hhmm($0.timeIntervalSince1970) } ?? "earlier"
+            lastError = showingLastForecast
+                ? "No signal · your route runs on the forecast made at \(lastGoodPredictedTs.map { Fmt.hhmm($0) } ?? seen) with the last live feed; other lines on trains as last seen."
+                : "No signal · trains as last seen \(seen); times come from the timetable and the saved tables."
         } else {
             lastError = errs.isEmpty ? nil : errs.joined(separator: " · ")
         }
@@ -471,7 +505,20 @@ final class DataService {
     }
 
     /// Replace each train's points with the engine's ETAs for the current scenario, keeping the feed's own.
-    func rebuildPredicted() { predictedBoards = predictedBoards(for: scenario) }
+    func rebuildPredicted() {
+        var p = predictedBoards(for: scenario)
+        let keep = keptKeys
+        if !feedsLive {
+            // without signal the route's lines keep the forecast made with the last live feed, trains at their predicted times
+            for (k, b) in lastGoodPredicted where keep.contains(k) { p[k] = b }
+        } else if !keep.isEmpty {
+            // with signal: this forecast is the one to keep (the baseline's, the scenario a rider acts on)
+            let base = scenario == "baseline" ? p : predictedBoards(for: "baseline")
+            lastGoodPredicted = base.filter { keep.contains($0.key) }
+            lastGoodPredictedTs = now
+        }
+        predictedBoards = p
+    }
 
     /// The boards under one assumption about a held train (baseline | hold_persists | clears_now).
     func predictedBoards(for scenario: String) -> [String: LineBoard] {
