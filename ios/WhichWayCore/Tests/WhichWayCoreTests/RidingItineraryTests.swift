@@ -37,6 +37,28 @@ final class RidingItineraryTests: XCTestCase {
                           boardIdx: 0, alightIdx: 2, stopTs: [1: 1400, 2: 1690])
     }
 
+    func testStopsToTheChangeCountDownWithTheTrainsProgress() {
+        // the G from g0 to Hoyt (idx 2): two stops, Hoyt counted
+        func cand(next: Int, stoppedAt: Int? = nil) -> TripCandidate {
+            var t = train("g", key: "G_N", points: [(next, 1000)])
+            if let i = stoppedAt {
+                t.position = TrainPosition(status: "STOPPED_AT", stopId: "g\(i)", stopIdx: i, stopName: "", sinceSec: 10, holding: false, stalled: false,
+                                           atTerminal: false, expectedRunSec: nil, positionLatenessSec: nil)
+            }
+            return TripCandidate(train: t, key: "G_N", boardTs: 1000, arriveTs: 1240, rideSec: 240, schedRideSec: 240, stopsToOrigin: 0)
+        }
+        let p = option
+        XCTAssertEqual(rideStopsLeft(cand(next: 0), option: p, leg: 0)?.left, 2, "not yet at the boarding stop: the whole ride")
+        XCTAssertEqual(rideStopsLeft(cand(next: 1), option: p, leg: 0)?.left, 2, "pulled out of g0, next stop g1")
+        XCTAssertEqual(rideStopsLeft(cand(next: 2), option: p, leg: 0)?.left, 1, "Hoyt next")
+        let at = rideStopsLeft(cand(next: 2, stoppedAt: 2), option: p, leg: 0)
+        XCTAssertEqual(at?.left, 0)
+        XCTAssertEqual(at?.at, true)
+        XCTAssertEqual(rideStopsLeft(cand(next: 3), option: p, leg: 0)?.left, 0, "past Hoyt")
+        XCTAssertEqual(rideStopsLeft(cand(next: 0), option: p, leg: 0)?.total, 2)
+        XCTAssertNil(rideStopsLeft(cand(next: 0), option: p, leg: 1), "a G is not on the C's leg")
+    }
+
     func testAChangeAcrossThePlatformIsTimedAsOneAndCatchesATrainStandingThere() throws {
         // the A to Jay St and the F from the same platform: the feed lists 0 s, the step across takes 15; an F that
         // pulled in with the A is still there with its doors open (20 s of its stand counted), one 30 s before is gone

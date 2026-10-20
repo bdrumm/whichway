@@ -602,12 +602,10 @@ func walkLineText(_ w: NearbyStation, originId: String, placeName: String?, plac
 
 /// On the train: how many stops are left before the rider gets off at `offAt`, from the feed's progress.
 func stopsToGo(_ c: TripCandidate, option p: PathOption, leg: Int, offAt: String) -> (text: String, fraction: Double) {
-    guard p.legs.indices.contains(leg), let ix = p.legs[leg].idx[c.key] else { return ("", 0) }
-    let total = max(1, ix.to - ix.from)
-    if let pos = c.train.position, !pos.derived, pos.status == "STOPPED_AT", pos.stopIdx == ix.to { return ("At \(offAt)", 1) }
-    let n = ix.to - c.train.nextIdx + 1
-    if n <= 0 { return ("Arriving at \(offAt)", 0.95) }
-    return ("\(min(n, total)) stop\(n == 1 ? "" : "s") to go", max(0, 1 - Double(min(n, total)) / Double(total)))
+    guard let s = rideStopsLeft(c, option: p, leg: leg) else { return ("", 0) }
+    if s.at { return ("At \(offAt)", 1) }
+    if s.left == 0 { return ("Arriving at \(offAt)", 0.95) }
+    return ("\(s.left) stop\(s.left == 1 ? "" : "s") to go", max(0, 1 - Double(s.left) / Double(s.total)))
 }
 
 func stopsAway(_ c: TripCandidate, option: PathOption, leg: Int = 0) -> (text: String, fraction: Double) {

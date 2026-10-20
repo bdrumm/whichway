@@ -27,6 +27,10 @@ struct TripActivityAttributes: ActivityAttributes {
         var offAt: String? = nil
         var offTs: Double? = nil
         var presumed: Bool = false
+        /// Stops left before the change (the change's own stop counted), while one is ahead: the first leg's whole
+        /// ride before boarding, the train's progress on it once on board, 0 as it pulls in. Nil with no change ahead,
+        /// where the activity shows the estimated arrival instead.
+        var stopsToChange: Int? = nil
     }
     var originName: String
     var destName: String

@@ -173,6 +173,16 @@ func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, opti
                      nextIfMissedSec: nil, schedRideSec: sched, rideVsSchedSec: (arrive2 - board) - sched)
 }
 
+/// Stops left on leg `leg` before the rider gets off (the alighting stop counted), from the train's progress in the
+/// feed: the leg's whole count while the train has yet to reach the boarding stop, 0 once it is due at or past the
+/// alighting one. `at`: the train stands at the alighting stop now.
+func rideStopsLeft(_ c: TripCandidate, option p: PathOption, leg: Int) -> (left: Int, total: Int, at: Bool)? {
+    guard p.legs.indices.contains(leg), let ix = p.legs[leg].idx[c.key] else { return nil }
+    let total = max(1, ix.to - ix.from)
+    if let pos = c.train.position, !pos.derived, pos.status == "STOPPED_AT", pos.stopIdx == ix.to { return (0, total, true) }
+    return (max(0, min(ix.to - c.train.nextIdx + 1, total)), total, false)
+}
+
 /// The train the planner's itinerary boards on leg `leg` of `option`, as a boarding candidate the departure log
 /// could have made for it: the feed's time at the boarding stop (the itinerary's platform moment plus the line's
 /// lag), the leg's stops and the train's times at them. The ride the plan has the rider on, when the sensors have

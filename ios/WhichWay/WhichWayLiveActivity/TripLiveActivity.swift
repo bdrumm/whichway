@@ -33,7 +33,7 @@ struct TripLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
-                            Text("Arrive \(context.attributes.destName) \(Fmt.hhmm(context.state.arriveTs))").font(.subheadline.weight(.semibold))
+                            Text(aheadText(context.state, destName: context.attributes.destName)).font(.subheadline.weight(.semibold)).lineLimit(1)
                             Spacer()
                             ExtraBadge(state: context.state)
                         }
@@ -54,12 +54,20 @@ struct TripLiveActivity: Widget {
 
     private func subline(_ s: TripActivityAttributes.ContentState) -> String {
         var bits: [String] = []
+        if s.stopsToChange != nil { bits.append("ETA \(Fmt.hhmm(s.arriveTs))") }
         if s.riding, let c = s.changeAt, let r = s.changeRoutes { bits.append("then the \(r) at \(Fmt.hhmm(s.boardTs)) from \(c)") }
         if !s.status.isEmpty { bits.append(s.status) }
         if let n = s.nextBoardTs { bits.append("next at \(Fmt.hhmm(n))") }
         if s.offline { bits.append("offline") }
         return bits.joined(separator: " · ")
     }
+}
+
+/// What is ahead of the rider: the stops left to the change while one is ahead, else the estimated arrival.
+func aheadText(_ s: TripActivityAttributes.ContentState, destName: String) -> String {
+    guard let c = s.changeAt, let n = s.stopsToChange else { return "ETA \(Fmt.hhmm(s.arriveTs)) at \(destName)" }
+    if n == 0 { return s.riding ? "Arriving at \(c)" : "Change at \(c)" }
+    return "\(n) stop\(n == 1 ? "" : "s") to \(c)"
 }
 
 /// Counts down to the boarding time on its own, no updates needed; sits at 0:00 once it has passed.
@@ -128,8 +136,11 @@ struct LockScreenView: View {
                 }
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("Arrive \(attributes.destName) \(Fmt.hhmm(state.arriveTs))").font(.headline)
+                Text(aheadText(state, destName: attributes.destName)).font(.headline).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer()
+                if state.stopsToChange != nil {
+                    Text("ETA \(Fmt.hhmm(state.arriveTs))").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                }
                 ExtraBadge(state: state)
             }
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
