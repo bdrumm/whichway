@@ -177,7 +177,7 @@ struct PredictorLine: Decodable {
 
 // MARK: - output
 
-struct PredictedPoint {
+struct PredictedPoint: Codable {
     var idx: Int
     var feedTs: Double
     var etaTs: Double
@@ -186,7 +186,7 @@ struct PredictedPoint {
     var source: String
 }
 
-struct PredictedTrain {
+struct PredictedTrain: Codable {
     var tripId: String
     var points: [PredictedPoint]
     var holdExtraSec: Double
