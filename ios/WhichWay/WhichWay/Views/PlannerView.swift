@@ -138,6 +138,9 @@ struct PlannerView: View {
             }
         }
         .onChange(of: trip.beliefs) { _, _ in followBoarded() }
+        // off one train and onto the next: the card and the Live Activity follow at once, not at the next poll
+        .onChange(of: trip.currentLeg) { _, _ in followRide() }
+        .onChange(of: trip.onTrain) { _, _ in followRide() }
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
         .sheet(isPresented: $onTrainSheet) { onTrainSheetView }
@@ -795,19 +798,33 @@ struct PlannerView: View {
             status = status.isEmpty ? word : "\(word) · \(status)"
         }
         let changeAhead = p.legs.count > 1 && leg == 0
+        // the stops to the change while one is ahead: the train's progress on the first leg, else the leg's whole ride
+        var stopsToChange: Int? = nil
+        if changeAhead {
+            if let l0 = l0, let s = rideStopsLeft(l0, option: p, leg: 0) { stopsToChange = onTrain ? s.left : s.total }
+            else { stopsToChange = p.legs[0].nStops }
+        }
         return TripActivityAttributes.ContentState(
             route: route, trainLabel: l0.map { shortLabel($0.train) } ?? "",
             boardTs: boardTs, arriveTs: it?.arriveTs ?? (data.now + p.expectedSec),
             nextBoardTs: next?.boardTs, nextRoute: next?.legs.first?.train.route,
             changeAt: changeAhead ? p.transfer?.station : nil, changeRoutes: changeAhead ? p.legs[1].routesLabel : nil,
             extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline, routeLabel: p.label,
-            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed)
+            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, stopsToChange: stopsToChange)
     }
 
     private func startActivity() {
         guard let p = headline, let index = data.index else { return }
         let attrs = TripActivityAttributes(originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "", routeLabel: p.label)
         TripActivityService.shared.start(routeId: p.id, attributes: attrs, state: activityState(p))
+    }
+
+    /// The rider boarded, got off at the change or boarded the connection: the ride's arrival and the Live Activity
+    /// move to the leg in hand (between trains, the connection's train and countdown; on it, the stops it has left).
+    private func followRide() {
+        guard routeStarted, trip.phase != .arrived else { return }     // an arrival ends the activity instead
+        refreshRideArrival()
+        updateActivity()
     }
 
     /// Every refresh while the route is in progress. A route that changes on the way travels in the state (an
