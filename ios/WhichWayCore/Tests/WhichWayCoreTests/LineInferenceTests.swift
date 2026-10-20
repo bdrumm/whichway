@@ -22,6 +22,20 @@ final class LineInferenceTests: XCTestCase {
         XCTAssertEqual(b.evidence, ["departure"])
     }
 
+    func testAtASamePlatformChangeTheTrainJustLeftIsNotTheConnection() {
+        // Oct 20 at Hoyt: off the G, onto the A. The G stood at the platform until 1010, the A came at 1040, and the felt
+        // pull-away at 1045 sits between them; with the G among the candidates the change reads as the G again
+        let g = cand("g1", key: "G_N", board: 1010, onLeg: false), a = cand("a1", key: "A_N", board: 1040, chosen: true)
+        let withG = inf.fromDeparture([g, a], departedTs: 1045, leg: 1, chosenKey: "A_N")
+        XCTAssertGreaterThan(withG.byTrain["G_N|g1"] ?? 0, 0.05, "the G is a real contender while it is a candidate: \(withG.byTrain)")
+        let cands = excludingTrainLeft([g, a], leftTrainId: "G_N|g1")
+        XCTAssertEqual(cands.map(\.trainId), ["A_N|a1"])
+        let b = inf.fromDeparture(cands, departedTs: 1045, leg: 1, chosenKey: "A_N")
+        XCTAssertEqual(b.bestKey, "A_N")
+        XCTAssertEqual(b.verdict, .onPlan)
+        XCTAssertEqual(excludingTrainLeft([g, a], leftTrainId: nil).count, 2)
+    }
+
     func testADepartureThatMatchesTheOtherLineOverridesThePrior() {
         // the plan was the F, due at 1200; the G reached the platform at 1000 and the train left at 1030
         let c = [cand("f1", key: "F_N", board: 1200, chosen: true), cand("g1", key: "G_N", board: 1000)]

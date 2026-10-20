@@ -180,6 +180,14 @@ final class TripRecorder {
         reread(k)
     }
 
+    /// The trains in `lg` that could have made the pull-away felt on leg `leg`, less the one the rider walked off at the
+    /// change before it (`excludingTrainLeft`): the train the phone settled on for the leg before, once that ride ended.
+    private func legCandidates(_ lg: DepartureLog, leg: Int, departedTs: Double) -> [BoardingCandidate] {
+        let cands = lg.candidates(departedTs: departedTs, windowSec: inference.departureWindowSec, chosenTrainId: legs[leg].chosenTrainId)
+        guard leg >= 1, tracker?.ride(leg - 1)?.alightedTs != nil, let prev = belief(leg: leg - 1), prev.settled || prev.byHand else { return cands }
+        return excludingTrainLeft(cands, leftTrainId: prev.bestTrain)
+    }
+
     /// A departure that matched no train in the feed (the route started a few seconds before it, before any poll; Oct 13
     /// at 14 St, 14 s), or a line named by hand with no train to it: read again once the polls bring trains in.
     private func rereadUnmatched() {
@@ -187,7 +195,7 @@ final class TripRecorder {
         let leg = t.timeline.legsRidden
         guard leg < legs.count, let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, let b = belief(leg: leg),
               (b.evidence == ["plan"]) || (b.byHand && b.bestTrain == nil) else { return }
-        let cands = log.candidates(departedTs: dep, windowSec: inference.departureWindowSec, chosenTrainId: legs[leg].chosenTrainId)
+        let cands = legCandidates(log, leg: leg, departedTs: dep)
         guard !cands.isEmpty else { return }
         departedTs[leg] = dep
         reread(leg)
@@ -384,7 +392,7 @@ final class TripRecorder {
     private func reread(_ l: Int) {
         guard let t = tracker, let r = t.ride(l), let lg = platformLog(l) else { return }
         let plan = legs[l]
-        let cands = lg.candidates(departedTs: r.departedTs, windowSec: inference.departureWindowSec, chosenTrainId: plan.chosenTrainId)
+        let cands = legCandidates(lg, leg: l, departedTs: r.departedTs)
         candidates[l] = cands
         departedTs[l] = r.departedTs
         if handSet.contains(l) {
@@ -507,7 +515,7 @@ final class TripRecorder {
                 }
                 if t.departedByLocation { locationRides.insert(leg) }
                 let plan = legs[leg]
-                let cands = log.candidates(departedTs: e.ts, windowSec: inference.departureWindowSec, chosenTrainId: plan.chosenTrainId)
+                let cands = legCandidates(log, leg: leg, departedTs: e.ts)
                 candidates[leg] = cands
                 departedTs[leg] = e.ts
                 guard !handSet.contains(leg) else { continue }
@@ -663,7 +671,7 @@ final class TripRecorder {
         for c in cands { log.seed(c, now: now) }
         guard !handSet.contains(leg), let dep = departedTs[leg], t.phase == .riding else { return }
         let plan = legs[leg]
-        let cs = log.candidates(departedTs: dep, windowSec: inference.departureWindowSec, chosenTrainId: plan.chosenTrainId)
+        let cs = legCandidates(log, leg: leg, departedTs: dep)
         candidates[leg] = cs
         let b = inference.fromDeparture(cs, departedTs: dep, leg: leg, chosenKey: plan.chosenKey)
         if !b.byTrain.isEmpty { departureBeliefs[leg] = b; store(b) }
