@@ -7,6 +7,15 @@ import Foundation
 // against each train's arrival at the alighting stop corroborate it. The transfer leg runs the same way with a
 // stronger prior for the plan's line. Everything here is pure and runs in the package tests.
 
+/// The candidates for the leg after a change, less the train the rider walked off to make it. At a change on the same
+/// platform the train just left pulls out among the connecting trains, a few seconds from the rider's own pull-away,
+/// and matched it better (Oct 20 at Hoyt: off the G at 9:24:23, onto the A at 9:25:17, and the change read as the G
+/// again, "switched"). Stepping back onto the train just left is no change; staying on is read apart (`StayedOn`).
+func excludingTrainLeft(_ cands: [BoardingCandidate], leftTrainId: String?) -> [BoardingCandidate] {
+    guard let id = leftTrainId else { return cands }
+    return cands.filter { $0.trainId != id }
+}
+
 /// A train the rider could have boarded on one leg of the route: the line it runs, the feed's time at the
 /// boarding stop (the last one published before the train moved on), the station stops it makes to the alighting
 /// stop and the feed's time there.
