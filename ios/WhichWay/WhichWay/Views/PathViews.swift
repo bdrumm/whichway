@@ -137,10 +137,20 @@ struct NowCard: View {
     }
 
     /// Step 1, the most prominent: the train to take and the countdown to it. On the train: the line the rider is
-    /// on, where they get off it and the countdown to that.
+    /// on and the countdown to the next train, the connection at the change; with none ahead (or none in the feeds
+    /// yet), where they get off and the countdown to that.
     @ViewBuilder private func headerRow(_ p: PathOption, _ it: Itinerary?, now: Double) -> some View {
         HStack(alignment: .center, spacing: 8) {
-            if onTrain, let l0 = it?.legs.first {
+            if onTrain, let it = it, it.legs.count > 1, rideLeg == 0 {
+                let next = it.legs[1]
+                Text(ridePresumed ? "Presumably on the" : "On the").font(.subheadline).foregroundStyle(.secondary)
+                RouteBullet(route: ridingRoute ?? it.legs[0].train.route, size: 26)
+                Image(systemName: "arrow.right").font(.subheadline).foregroundStyle(.secondary)
+                RouteBullet(route: next.train.route, size: 26)
+                Text("at \(Fmt.hhmm(next.boardTs))").font(.title2.bold()).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer()
+                Text(Fmt.mmss(max(0, next.boardTs - now))).font(countdownFont).monospacedDigit()
+            } else if onTrain, let l0 = it?.legs.first {
                 Text(ridePresumed ? "Presumably on the" : "On the").font(.subheadline).foregroundStyle(.secondary)
                 RouteBullet(route: ridingRoute ?? l0.train.route, size: 26)
                 Text("off \(Fmt.hhmm(l0.arriveTs))").font(.title2.bold()).lineLimit(1).minimumScaleFactor(0.8)

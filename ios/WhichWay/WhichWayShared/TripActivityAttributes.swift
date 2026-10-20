@@ -31,6 +31,15 @@ struct TripActivityAttributes: ActivityAttributes {
         /// ride before boarding, the train's progress on it once on board, 0 as it pulls in. Nil with no change ahead,
         /// where the activity shows the estimated arrival instead.
         var stopsToChange: Int? = nil
+
+        /// On the train with a change ahead: when the connecting train leaves the change (the countdown runs to it).
+        /// Nil with no change ahead, or no connecting train in the feeds yet (`boardTs` is then the arrival at the change).
+        var connectionTs: Double? {
+            guard riding, changeAt != nil, let off = offTs, boardTs > off else { return nil }
+            return boardTs
+        }
+        /// What the countdown runs to: the train to board, on the train the connection, else getting off.
+        var countdownTs: Double { riding ? (connectionTs ?? offTs ?? boardTs) : boardTs }
     }
     var originName: String
     var destName: String
