@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -41,6 +42,7 @@ struct TripLiveActivity: Widget {
                             ExtraBadge(state: context.state)
                         }
                         Text(subline(context.state)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                        if context.state.riding { NotOnTrainButton() }
                     }
                     .padding(.horizontal, 6)
                 }
@@ -85,6 +87,16 @@ struct Countdown: View {
         } else {
             Text("0:00").monospacedDigit()
         }
+    }
+}
+
+/// On the train: the rider says the ride the phone detected is not one (`NotOnTrainIntent`, run by the app).
+struct NotOnTrainButton: View {
+    var body: some View {
+        Button(intent: NotOnTrainIntent()) {
+            Label("Not on the train", systemImage: "xmark.circle").font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.bordered).tint(.white)
     }
 }
 
@@ -148,6 +160,7 @@ struct LockScreenView: View {
                 ExtraBadge(state: state)
             }
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            if state.riding { NotOnTrainButton() }
         }
         .padding(14)
     }

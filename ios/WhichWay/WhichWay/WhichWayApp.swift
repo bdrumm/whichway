@@ -7,6 +7,11 @@ struct WhichWayApp: App {
     @State private var location = LocationService()
     @State private var places = PlaceStore()
 
+    init() {
+        // the Live Activity's "Not on the train" (it may launch the app in the background to run it)
+        NotOnTrainIntent.handler = { TripRecorder.shared.notOnTrain() }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

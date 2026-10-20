@@ -884,6 +884,12 @@ struct PlannerView: View {
                     Button { openOnTrain() } label: { Label("Train", systemImage: "tram.fill") }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                         .accessibilityLabel("Which train am I on")
+                    // a ride the phone detected, with no question up that already offers this
+                    if trip.onTrain, trip.prompt == nil {
+                        Button("Not on train") { trip.notOnTrain() }
+                            .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
+                            .accessibilityLabel("I'm not on the train")
+                    }
                     Button("End route") { endTrip(by: "hand") }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                 } else {
