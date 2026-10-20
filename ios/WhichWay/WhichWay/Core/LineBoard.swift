@@ -18,12 +18,12 @@ func tripStem(_ id: String) -> String {
     return String(s[..<dots.upperBound]) + String(first)
 }
 
-struct TrainPoint {
+struct TrainPoint: Codable {
     let idx: Int
     let ts: Double
 }
 
-struct TrainPosition {
+struct TrainPosition: Codable {
     var status: String
     var stopId: String
     var stopIdx: Int?
@@ -51,7 +51,7 @@ struct TrainPosition {
     }
 }
 
-struct SegmentInfo {
+struct SegmentInfo: Codable {
     var fromIdx: Int
     var toIdx: Int
     var distM: Double
@@ -61,7 +61,7 @@ struct SegmentInfo {
     var coveredM: Double?
 }
 
-struct LastRun {
+struct LastRun: Codable {
     var fromStop: String
     var toStop: String
     var runSec: Double
@@ -71,7 +71,7 @@ struct LastRun {
     var assumedFrom: Bool
 }
 
-struct LiveTrain: Identifiable {
+struct LiveTrain: Identifiable, Codable {
     var id: String { key + "|" + tripId }
     var key: String            // line key this board belongs to
     var tripId: String
@@ -147,7 +147,7 @@ func practicalLateness(_ trains: inout [LiveTrain], headway: (Int, Double) -> Do
     }
 }
 
-struct LineBoard {
+struct LineBoard: Codable {
     var key: String
     var route: String
     var direction: String

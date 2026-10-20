@@ -85,19 +85,28 @@ final class DataService {
     /// The engine's forecast for the selected route's lines as it stood at the last poll with signal: what the route
     /// is shown from while the phone is offline, each train at the time it was predicted, so the countdown runs on
     /// instead of the engine re-projecting a stale feed or the planner falling back to the timetable (Oct 13: offline,
-    /// "the schedule skips to a different time").
+    /// "the schedule skips to a different time"). Per line, each board as of its own last poll with signal: a line's
+    /// forecast is kept once the route has left its station behind (the forecast taken at each station departed from
+    /// lasts the trip), and it is saved, so the app relaunched underground runs on it rather than on the timetable.
     @ObservationIgnored private var lastGoodPredicted: [String: LineBoard] = [:]
+    /// A kept forecast older than this is no use to a ride.
+    static let keptForecastMaxAgeSec = 2 * 3600.0
     /// When that forecast was made.
     private(set) var lastGoodPredictedTs: Double?
     /// The last poll fetched a train feed. Not `offline`, which a data file fetched while the feeds time out also
     /// clears (a patchy connection); the forecast is kept only from a feed fetched just now (Oct 13, the Simulator: a
     /// table fetched mid-outage cleared `offline` and the kept forecast was replaced by the stale feed re-projected).
     private var feedsLive = true
+    /// A train feed has been fetched since launch: before then the boards come from the snapshots on disk, which must
+    /// not replace the forecast saved with signal.
+    @ObservationIgnored private var feedFetched = false
     /// The lines whose forecast is kept: every line of every route the Go tab offers to the destination (the selected
     /// one's and its alternatives': when a train leaves the planner may hand over to another route, and offline that one
     /// must run on the same forecast, not on a stale feed re-projected: Oct 13, a hand-over to the C showed "a hold
     /// ahead, +7 min" the moment the phone went offline).
-    private var keptKeys: Set<String> { (wantedBy["planner"] ?? []).union((focusOption?.legs ?? []).flatMap { $0.keys }) }
+    private var keptKeys: Set<String> {
+        (wantedBy["planner"] ?? []).union(wantedBy["trip"] ?? []).union((focusOption?.legs ?? []).flatMap { $0.keys })
+    }
     /// Offline, and the route is shown from the forecast made at the last poll with signal.
     var showingLastForecast: Bool { !feedsLive && !lastGoodPredicted.isEmpty && !keptKeys.isDisjoint(with: lastGoodPredicted.keys) }
     /// baseline | hold_persists | clears_now
@@ -434,7 +443,7 @@ final class DataService {
         for (k, _) in jobs where got[k] == nil && feeds[k] == nil {
             if let data = cache.read("feed/\(k)"), let f = try? GTFSRealtime.parse(data) { got[k] = f }
         }
-        if fetched > 0 { lastFeedFetch = Date(); offline = false; feedsLive = true } else if !jobs.isEmpty {
+        if fetched > 0 { lastFeedFetch = Date(); offline = false; feedsLive = true; feedFetched = true } else if !jobs.isEmpty {
             offline = true
             feedsLive = false
             if lastFeedFetch == nil { lastFeedFetch = jobs.compactMap { cache.date("feed/\($0.0)") }.max() }
@@ -510,14 +519,35 @@ final class DataService {
         let keep = keptKeys
         if !feedsLive {
             // without signal the route's lines keep the forecast made with the last live feed, trains at their predicted times
+            if lastGoodPredicted.isEmpty { loadKeptForecast() }
             for (k, b) in lastGoodPredicted where keep.contains(k) { p[k] = b }
-        } else if !keep.isEmpty {
-            // with signal: this forecast is the one to keep (the baseline's, the scenario a rider acts on)
+        } else if feedFetched, !keep.isEmpty {
+            // with signal: this forecast is the one to keep (the baseline's, the scenario a rider acts on), line by line;
+            // lines no longer in view (a station the route has left) keep theirs until they are too old to matter
             let base = scenario == "baseline" ? p : predictedBoards(for: "baseline")
-            lastGoodPredicted = base.filter { keep.contains($0.key) }
-            lastGoodPredictedTs = now
+            for (k, b) in base where keep.contains(k) { lastGoodPredicted[k] = b }
+            let t = now
+            lastGoodPredicted = lastGoodPredicted.filter { t - $0.value.now <= DataService.keptForecastMaxAgeSec }
+            lastGoodPredictedTs = t
+            saveKeptForecast()
         }
         predictedBoards = p
+    }
+
+    private func saveKeptForecast() {
+        let e = JSONEncoder()
+        e.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        if let d = try? e.encode(lastGoodPredicted) { cache.write("forecast/kept", d) }
+    }
+
+    /// The forecast saved before the app was last stopped (relaunched without signal, it is all there is).
+    private func loadKeptForecast() {
+        let dec = JSONDecoder()
+        dec.nonConformingFloatDecodingStrategy = .convertFromString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        guard let d = cache.read("forecast/kept"), let kept = try? dec.decode([String: LineBoard].self, from: d) else { return }
+        let t = now
+        lastGoodPredicted = kept.filter { t - $0.value.now <= DataService.keptForecastMaxAgeSec }
+        lastGoodPredictedTs = lastGoodPredicted.values.map(\.now).max()
     }
 
     /// The boards under one assumption about a held train (baseline | hold_persists | clears_now).
