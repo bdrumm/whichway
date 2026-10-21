@@ -98,11 +98,6 @@ struct TripTracker {
     var walkOffSec = 180                  // walking this long near the end of the ride: off the train
     var lateGraceSec = 600.0              // this long past the expected arrival with no sign: over
     var assumeRideAfterSec = 120.0        // riding once the boarding time is this far past with no departure felt
-    /// With the sensors on, the timetable alone never puts the rider on a train: some train-like motion after the boarding
-    /// time must back it (Oct 21: the A stood at 14 St past its time and the phone had the rider riding it). A run of this
-    /// many seconds of push, or `assumeShakeRunSec` of shaking, with no steps, weaker than a felt pull-away.
-    var assumePushRunSec = 2
-    var assumeShakeRunSec = 4
     var stopQuietSec = 12                 // riding, no push and no shake this long: the train is standing at a station
     var startGraceSec = 15.0              // a "departure" this soon after sensing began is the phone being put away
     var destFarRadiusM = 800.0            // this close to the destination once the expected arrival is well past: over
@@ -161,8 +156,6 @@ struct TripTracker {
     /// The ride in hand began from the phone's movement (moving away from the station at a train's pace), not
     /// from a felt pull-away at the platform.
     private(set) var departedByLocation = false
-    private var assumeRun = (push: 0, shake: 0)
-    private var assumeMotionTs: Double?       // the start of the motion after the boarding time that backs an assumed ride
     private var declinedBoardTs: Double?  // the forecast train the rider said they did not take: not assumed again
 
     /// Riding and standing at a station since this moment (nil while moving).
@@ -271,12 +264,6 @@ struct TripTracker {
         }
         if afterAlight, walking { timeline.walkingSecondsBetweenTrains += 1 }
         if phase == .riding, !walking, m.pushG >= detector.pushThreshold || m.shakeG >= detector.shakeThreshold { lastMovingTs = m.ts }
-        if phase == .atStation, assumeMotionTs == nil, let pb = timeline.forecastBoardTs, m.ts >= pb {
-            assumeRun.push = !walking && m.pushG >= detector.pushThreshold ? assumeRun.push + 1 : 0
-            assumeRun.shake = !walking && m.shakeG >= detector.shakeThreshold ? assumeRun.shake + 1 : 0
-            if assumeRun.push >= assumePushRunSec { assumeMotionTs = m.ts - Double(assumeRun.push - 1) }
-            else if assumeRun.shake >= assumeShakeRunSec { assumeMotionTs = m.ts - Double(assumeRun.shake - 1) }
-        }
         if phase == .atStation, timeline.platformTs == nil, stillRun >= platformStillSec {
             timeline.platformTs = m.ts - Double(platformStillSec - 1)
             timeline.platformObserved = true
@@ -362,34 +349,20 @@ struct TripTracker {
     /// The clock: confirms an arrival the sensors saw, assumes the ride from the schedule when no departure was
     /// felt, and gives up well past the expected arrival.
     ///
-    /// The assumption: a chosen route is taken as planned. At the station, once the boarding time of the train
-    /// the rider was waiting for is two minutes past, they are on it, whether the sensors are off or just missed
-    /// the pull-away (a phone deep in a bag). With sensors the rider must have reached the platform (stood still
-    /// after arriving) first, so someone still on the stairs is not put on a train. A departure felt later turns
-    /// the assumed ride into a measured one, and the line inference re-reads which train it was.
+    /// The assumption, with the sensors off only: a chosen route is taken as planned. At the station, once the boarding
+    /// time of the train the rider was waiting for is two minutes past, they are on it. With the sensors on, the ride
+    /// starts from the felt pull-away, however late the train leaves.
     mutating func tick(now: Double) {
         guard phase != .arrived else { return }
         let pa = timeline.liveArriveTs
         if alightedAll, pa == nil || now >= pa! - 120 { finish(now, by: "alighted"); return }
-        if phase == .atStation, let pb = timeline.forecastBoardTs, pb != declinedBoardTs, now >= pb + assumeRideAfterSec {
-            if !hasMotion {
-                phase = .riding
-                timeline.rideAssumed = true
-                if timeline.platformTs == nil { timeline.platformTs = pb }
-            } else if timeline.platformTs != nil, let mt = assumeMotionTs {
-                // the sensors felt the train move, if not as a full pull-away: the ride goes on the record from then, and
-                // the detector rides with it, so the walk-off at the change or the end closes it (Oct 21: an assumed A with
-                // no departure on the record was never left, and the F's wait never came up at W 4 St)
-                timeline.events.append(MotionEvent(kind: .departed, ts: mt))
-                walkAtDeparture.append(timeline.walkingSecondsBetweenTrains)
-                phase = .riding
-                timeline.rideAssumed = true
-                afterAlight = false
-                alightedAll = false
-                stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
-                detector.assumeRiding(since: mt)
-                motionState = detector.state
-            }
+        // with the sensors on, the timetable alone never puts the rider on a train: the felt pull-away (or the phone moving
+        // off at a train's pace) starts the ride, at the moment it was felt (Oct 21: the A stood at 14 St past its time and
+        // the phone assumed the ride five times over from the timetable before the train left)
+        if phase == .atStation, !hasMotion, let pb = timeline.forecastBoardTs, pb != declinedBoardTs, now >= pb + assumeRideAfterSec {
+            phase = .riding
+            timeline.rideAssumed = true
+            if timeline.platformTs == nil { timeline.platformTs = pb }
         }
         checkDestination(now: now)
         if phase != .arrived, let pa = pa, now >= pa + lateGraceSec { finish(now, by: "timeout") }
@@ -402,7 +375,6 @@ struct TripTracker {
         guard phase != .riding, phase != .arrived else { return }
         if phase == .atStation, let b = timeline.forecastBoardTs, now >= b, b != declinedBoardTs { return }
         timeline.liveArriveTs = arriveTs ?? timeline.liveArriveTs
-        if boardTs != timeline.forecastBoardTs { assumeMotionTs = nil; assumeRun = (0, 0) }
         timeline.forecastBoardTs = boardTs
         timeline.forecastArriveTs = arriveTs
     }
@@ -467,8 +439,6 @@ struct TripTracker {
             return
         }
         guard let last = timeline.events.last, last.kind == .departed else { return }
-        if timeline.rideAssumed { declinedBoardTs = timeline.forecastBoardTs }   // that train is let go, as above
-        assumeMotionTs = nil; assumeRun = (0, 0)
         let ride = rideCount - 1
         timeline.events.removeLast()
         timeline.stopSpans.removeAll { $0.ride == ride }

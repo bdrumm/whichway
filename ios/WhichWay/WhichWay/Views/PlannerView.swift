@@ -819,9 +819,10 @@ struct PlannerView: View {
         let h = routeHealth(p, data: data)
         // on the train, the ride in progress (its own arrival and connection); between trains, the connection;
         // before the route is under way, the planner's next itinerary
-        let it = rideItinerary ?? p.live
-        let l0 = it?.legs.first
         let leg = trip.currentLeg
+        // past the first leg the planner's own itinerary (from the origin) says nothing of the leg in hand
+        let it = rideItinerary ?? (routeStarted && leg > 0 ? nil : p.live)
+        let l0 = it?.legs.first
         let onTrain = trip.onTrain
         var status: String
         if let l0 = l0 {
@@ -840,7 +841,7 @@ struct PlannerView: View {
         }
         // on the train: the line the rider is on leads, and the countdown runs to the connection (or the arrival)
         var route = l0?.train.route ?? p.legs[leg].primaryRoute
-        var boardTs = it?.boardTs ?? (data.now + p.wait1Sec)
+        var boardTs = it?.boardTs ?? (data.now + (leg > 0 ? p.wait2Sec : p.wait1Sec))
         var offAt: String? = nil, offTs: Double? = nil
         if onTrain, let l0 = l0 {
             route = ridingRoute ?? l0.train.route
@@ -1250,16 +1251,26 @@ struct PlannerView: View {
         let leg = trip.currentLeg
         if trip.onTrain {
             guard let c = trip.boardedCandidate ?? plannedTrains[leg],
-                  let it = ridingItinerary(boards: data.predictedBoards, schedule: sched, option: sel, leg: leg, boarded: c, now: data.now) else { return }
+                  let it = ridingItinerary(boards: data.predictedBoards, schedule: sched, option: sel, leg: leg, boarded: c, now: data.now,
+                                           departedTs: trip.rideDepartedTs(leg: leg)) else { dropOtherLegsRide(sel, leg: leg); return }
             rideItinerary = it
             trip.setLiveArrival(it.arriveTs)
         } else if leg > 0 {
-            guard let it = connectionItinerary(boards: data.predictedBoards, schedule: sched, option: sel, leg: leg, now: data.now) else { return }
+            guard let it = connectionItinerary(boards: data.predictedBoards, schedule: sched, option: sel, leg: leg, now: data.now) else {
+                dropOtherLegsRide(sel, leg: leg); return
+            }
             rideItinerary = it
             trip.setLiveArrival(it.arriveTs)
         } else {
             rideItinerary = nil
         }
+    }
+
+    /// The itinerary kept from the leg before, once the rider is on (or waiting for) another leg's train: gone, so the card and
+    /// the Live Activity never show the last train for this one (Oct 21: "On the A" at W 4 St and on the F, offline).
+    private func dropOtherLegsRide(_ sel: PathOption, leg: Int) {
+        guard let k = rideItinerary?.legs.first?.key, sel.legs.indices.contains(leg), !sel.legs[leg].keys.contains(k) else { return }
+        rideItinerary = nil
     }
 
     /// The rider stayed on past the stop where the route had them leave the train: the route becomes the one that
