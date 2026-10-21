@@ -134,17 +134,28 @@ func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: Pa
 /// platform, the feed's latest time at the leg's last stop), and the leg after it, if any, the first train that
 /// makes the connection, as for a fresh itinerary. The planner's own itineraries moved on to the next train when
 /// this one left, so they no longer say when this ride ends; this does. Nil when the train is gone from the feed
-/// with no time kept for the alighting stop. Without a connecting train in the feeds yet, the arrival is the
-/// schedule's (half a headway's wait and the scheduled ride) and the itinerary carries only the leg in hand.
-func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, option: PathOption, leg: Int, boarded c: BoardingCandidate, now: Double) -> Itinerary? {
-    guard option.legs.indices.contains(leg), let ix = option.legs[leg].idx[c.key], let lb = boards[c.key],
-          let t = lb.trains.first(where: { $0.id == c.trainId }) else { return nil }
-    guard let arriveF = t.points.first(where: { $0.idx == ix.to })?.ts ?? c.stopTs[ix.to] else { return nil }
+/// with no time kept for the alighting stop and no scheduled run to fall back on. Without a connecting train in the
+/// feeds yet, the arrival is the schedule's (half a headway's wait and the scheduled ride) and the itinerary carries
+/// only the leg in hand.
+///
+/// `departedTs`, the pull-away the phone felt: a train felt leaving well after the feed's time at the platform (held
+/// there, or no feed to say) rides on from then, the scheduled run at least (Oct 21: the A at 14 St). A train gone from
+/// the feed (offline underground) is followed from what the departure log kept of it, so the leg in hand is never left
+/// showing the train of the leg before (Oct 21: "On the A" on the F from W 4 St).
+func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, option: PathOption, leg: Int, boarded c: BoardingCandidate, now: Double,
+                     departedTs: Double? = nil) -> Itinerary? {
+    guard option.legs.indices.contains(leg), let ix = option.legs[leg].idx[c.key] else { return nil }
+    let run = schedule.lines[c.key]?.runBetween(ix.from, ix.to).map(Double.init)
+    let t = boards[c.key]?.trains.first(where: { $0.id == c.trainId }) ?? keptTrain(c)
     let at = { (ts: Double) in PlatformTiming.atPlatform(ts, route: t.route) }
-    let board = at(c.boardTs)
-    let arriveTs = max(at(arriveF), board + 1)
-    var a = TripCandidate(train: t, key: c.key, boardTs: board, arriveTs: arriveTs, rideSec: arriveTs - board,
-                          schedRideSec: schedule.lines[c.key]?.runBetween(ix.from, ix.to).map(Double.init), stopsToOrigin: 0)
+    guard let arriveF = t.points.first(where: { $0.idx == ix.to })?.ts ?? c.stopTs[ix.to] ?? c.alightTs ?? run.map({ c.boardTs + $0 }) else { return nil }
+    var board = at(c.boardTs)
+    var arriveTs = max(at(arriveF), board + 1)
+    if let dep = departedTs, dep > board + 60 {
+        arriveTs = max(arriveTs, dep + (run ?? arriveTs - board))
+        board = dep
+    }
+    var a = TripCandidate(train: t, key: c.key, boardTs: board, arriveTs: arriveTs, rideSec: arriveTs - board, schedRideSec: run, stopsToOrigin: 0)
     if let pt = t.pred?.point(at: ix.to) { a.arriveLoTs = at(pt.loTs); a.arriveHiTs = at(pt.hiTs); a.arriveSource = pt.source }
     a.feedArriveTs = t.feedPoints?.first(where: { $0.idx == ix.to }).map { at($0.ts) }
     let sched = Double(option.schedSec)
@@ -171,6 +182,14 @@ func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, opti
     return Itinerary(legs: [a], boardTs: board, arriveTs: arrive2, totalSec: arrive2 - now, walkSec: walk,
                      waitAtTransferSec: earliest + option.wait2Sec - a.arriveTs, connectionMarginSec: nil,
                      nextIfMissedSec: nil, schedRideSec: sched, rideVsSchedSec: (arrive2 - board) - sched)
+}
+
+/// A train the feed no longer carries, as the departure log kept it: its line, its progress, its time at the alighting stop.
+private func keptTrain(_ c: BoardingCandidate) -> LiveTrain {
+    let tripId = c.trainId.split(separator: "|", maxSplits: 1).last.map(String.init) ?? c.trainId
+    return LiveTrain(key: c.key, tripId: tripId, trainId: nil, route: c.route, points: [], nextIdx: c.progressIdx ?? c.boardIdx + 1, nextName: "",
+                     etaTs: c.alightTs ?? c.boardTs, schedTs: nil, schedMethod: nil, latenessSec: nil, effectiveLatenessSec: nil, position: nil,
+                     corroboration: "kept", trackChanged: false, started: true, segment: nil, lastRun: nil)
 }
 
 /// Stops left on leg `leg` before the rider gets off (the alighting stop counted), from the train's progress in the

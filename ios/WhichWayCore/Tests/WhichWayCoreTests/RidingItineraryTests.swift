@@ -37,6 +37,28 @@ final class RidingItineraryTests: XCTestCase {
                           boardIdx: 0, alightIdx: 2, stopTs: [1: 1400, 2: 1690])
     }
 
+    func testATrainFeltLeavingLateOrGoneFromTheFeedStillGivesTheLegsRide() {
+        // Oct 21: the A stood at 14 St past its time, then the feed went quiet underground. The G here: the log has it at the
+        // platform at 1000 and at Hoyt at 1690, and the board no longer carries it
+        let sched = try! schedule()
+        let p = option
+        let gone = ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1100)
+        XCTAssertNotNil(gone, "followed from what the log kept")
+        XCTAssertEqual(gone?.legs.first?.key, "G_N")
+        XCTAssertEqual(gone?.legs.first?.arriveTs ?? 0, 1690 - lagG, accuracy: 0.5)
+        // felt leaving at 1500, long after the feed's 1000: the ride runs on from then, the scheduled 240 s at least
+        let late = ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1600, departedTs: 1500)
+        XCTAssertEqual(late?.legs.first?.boardTs, 1500)
+        XCTAssertEqual(late?.legs.first?.arriveTs ?? 0, 1740, accuracy: 0.5)
+        // a pull-away within a minute of the feed's time changes nothing
+        let onTime = ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1100, departedTs: 1000 - lagG + 30)
+        XCTAssertEqual(onTime?.legs.first?.arriveTs ?? 0, 1690 - lagG, accuracy: 0.5)
+        // with nothing kept at the alighting stop, the scheduled run from the platform moment
+        var bare = boardedG; bare.stopTs = [:]; bare.alightTs = nil
+        XCTAssertEqual(ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: bare, now: 1100)?.legs.first?.arriveTs ?? 0,
+                       1000 + 240 - lagG, accuracy: 0.5)
+    }
+
     func testStopsToTheChangeCountDownWithTheTrainsProgress() {
         // the G from g0 to Hoyt (idx 2): two stops, Hoyt counted
         func cand(next: Int, stoppedAt: Int? = nil) -> TripCandidate {
@@ -130,7 +152,7 @@ final class RidingItineraryTests: XCTestCase {
         XCTAssertEqual(it.legs[0].schedRideSec, 240)
     }
 
-    func testWithoutAConnectingTrainTheScheduleStandsInAndWithTheTrainGoneThereIsNothing() throws {
+    func testWithoutAConnectingTrainTheScheduleStandsInAndWithTheTrainGoneTheLogsTimesDo() throws {
         let sched = try schedule()
         var boards = ["G_N": board("G_N", [train("g1", key: "G_N", points: [(3, 1820)])]), "C_N": board("C_N", [])]
         // the G is past Hoyt already (the alighting not yet felt): the log's kept time at Hoyt stands, and the
@@ -140,8 +162,11 @@ final class RidingItineraryTests: XCTestCase {
         XCTAssertEqual(it.legs[0].arriveTs, 1690 - lagG)
         XCTAssertEqual(it.arriveTs, max(1690 - lagG + 120, 1750) + 300 + 300)
         XCTAssertNil(it.connectionMarginSec)
+        // the G gone from the feed: the same ride, from the times the log kept
         boards["G_N"] = board("G_N", [])
-        XCTAssertNil(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 0, boarded: boardedG, now: 1750))
+        let kept = try XCTUnwrap(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 0, boarded: boardedG, now: 1750))
+        XCTAssertEqual(kept.legs[0].arriveTs, 1690 - lagG)
+        XCTAssertEqual(kept.arriveTs, it.arriveTs)
     }
 
     func testOnTheLastLegTheTrainsOwnArrivalIsTheItinerary() throws {

@@ -145,6 +145,9 @@ final class TripRecorder {
     /// On a train right now (not on the way, at the platform, or between trains at the change).
     var onTrain: Bool { tracker?.onTrain ?? false }
 
+    /// When the ride on leg `leg` began: the felt (or named) pull-away, nil for one assumed from the timetable.
+    func rideDepartedTs(leg: Int) -> Double? { tracker?.ride(leg)?.departedTs }
+
     /// The leg in hand (legs ridden so far) and the lines the route allows on it, for the rider's own say.
     var currentLeg: Int { tracker?.timeline.legsRidden ?? 0 }
     var currentLegKeys: [String] { currentLeg < legs.count ? legs[currentLeg].keys : [] }
