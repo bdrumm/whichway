@@ -154,9 +154,10 @@ final class LineFallbackTests: XCTestCase {
         MotionSecond(ts: ts, stepEnergy: walking ? 0.05 : 0.002, pushG: push, shakeG: shake)
     }
 
-    func testWithSensorsOnThePlannedRideIsAssumedOnceTheBoardingTimePassesAndAFeltDepartureTakesOver() {
+    func testWithSensorsOnTheTimetableAloneNeverPutsTheRiderOnATrain() {
+        // Oct 21 at 14 St: the A stood at the platform well past its time; standing still, the rider is not riding it
         var t = TripTracker(TripTimeline(startTs: 1000, startedBy: "gps", startDistanceM: 40, placeId: nil, originStation: "S1", destStation: "S9",
-                                         transferStation: nil, legs: 1), distanceToOriginM: 40)
+                                         transferStation: "S5", legs: 2), distanceToOriginM: 40)
         t.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)
         var ts = 1000.0
         for _ in 0..<30 { t.motion(sec(ts, walking: true)); ts += 1 }        // down to the platform
@@ -164,17 +165,25 @@ final class LineFallbackTests: XCTestCase {
         XCTAssertEqual(t.phase, .atStation, "still walking when the boarding time passed: not put on a train")
         for _ in 0..<30 { t.motion(sec(ts, walking: false)); ts += 1 }       // standing on the platform
         XCTAssertNotNil(t.timeline.platformTs)
-        t.tick(now: 1210)
-        XCTAssertEqual(t.phase, .atStation, "the grace after the boarding time has not run out")
+        ts = 1100
+        for _ in 0..<120 { t.motion(sec(ts, walking: false)); ts += 1 }      // on the held train, the doors open, nothing moving
         t.tick(now: 1225)
+        XCTAssertEqual(t.phase, .atStation, "past the boarding time with nothing felt: not riding")
+        XCTAssertFalse(t.onTrain)
+        // the train finally eases out: a short shake, too short for a felt pull-away, backs the timetable
+        for _ in 0..<5 { t.motion(sec(ts, walking: false, shake: 0.03)); ts += 1 }
+        XCTAssertTrue(t.timeline.events.isEmpty, "not a felt pull-away")
+        t.tick(now: ts)
         XCTAssertEqual(t.phase, .riding)
         XCTAssertTrue(t.timeline.rideAssumed)
-        // the phone was in a bag; the pull-away is felt late, on the next train
-        ts = 1300
-        for _ in 0..<6 { t.motion(sec(ts, walking: false, push: 0.08, shake: 0.03)); ts += 1 }
-        XCTAssertEqual(t.timeline.events.first, MotionEvent(kind: .departed, ts: 1300))
-        XCTAssertFalse(t.timeline.rideAssumed, "a departure felt turns the assumed ride into a measured one")
-        XCTAssertEqual(t.phase, .riding)
+        XCTAssertEqual(t.timeline.events, [MotionEvent(kind: .departed, ts: 1220)])
+        // the ride on the record can end: the train stands at the change and the rider walks off
+        for _ in 0..<60 { t.motion(sec(ts, walking: false, push: 0.02, shake: 0.03)); ts += 1 }
+        for _ in 0..<5 { t.motion(sec(ts, walking: false)); ts += 1 }
+        for _ in 0..<10 { t.motion(sec(ts, walking: true)); ts += 1 }
+        XCTAssertEqual(t.timeline.legsRidden, 1, "off at the change: the next train's wait comes up")
+        XCTAssertFalse(t.onTrain)
+        XCTAssertFalse(t.timeline.rideAssumed)
     }
 
     func testThePlanAndTheRidersWordAreBeliefsToo() {

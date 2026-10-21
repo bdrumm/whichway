@@ -216,7 +216,10 @@ final class TripRecorder {
     /// Oct 8: both changes across the platform at Jay St were 11 to 12 s walks the detector let pass.
     private func checkQuickChange() {
         guard let t = tracker, t.phase == .riding, let walk = t.walking, walk.seconds >= quickChangeWalkSec,
-              t.timeline.events.last?.kind == .departed, let c = trainInHand else { return }
+              let dep = t.timeline.events.last, dep.kind == .departed, let c = trainInHand else { return }
+        // steps this soon after the pull-away are boarding or the platform, not a ride over (Oct 21 at W 4 St: a pull-away
+        // at 9:42:16 and steps at 9:42:28 ended the trip there, read as the E already at 14 St)
+        guard walk.startTs - dep.ts >= t.minRideSec else { return }
         let lag = PlatformTiming.recordedLag(route: c.route)
         let atStop = c.stopTs.contains { idx, feedTs in
             idx > c.boardIdx && walk.startTs >= feedTs - lag - quickChangeBeforeSec && walk.startTs <= feedTs - lag + quickChangeAfterSec
