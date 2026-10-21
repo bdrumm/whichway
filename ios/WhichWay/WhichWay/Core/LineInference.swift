@@ -16,6 +16,36 @@ func excludingTrainLeft(_ cands: [BoardingCandidate], leftTrainId: String?) -> [
     return cands.filter { $0.trainId != id }
 }
 
+/// The rider says they are not on a train while the train the phone has them on has already reached the stop the route
+/// had them leave it at, by the feed (its time there, put back to the platform moment, has passed, or the feed has it
+/// beyond): they got off there and the walk-off went unfelt, so the route goes on from the change (or the trip is over),
+/// not back to the platform they boarded at. The moment they got off, else nil.
+func unfeltAlighting(_ c: BoardingCandidate, departedTs: Double, now: Double) -> Double? {
+    guard let off = c.alightIdx else { return nil }
+    let at = (c.stopTs[off] ?? c.alightTs).map { PlatformTiming.atPlatform($0, route: c.route) }
+    if let at = at, at > departedTs, at <= now { return at }
+    if let p = c.progressIdx, p > off { return min(now, max(departedTs, at ?? now)) }
+    return nil
+}
+
+/// How well a line at the boarding platform that is not one of the leg's suits the trip, for the line prior: 1 when its
+/// train goes on to the destination or to the stop the leg leaves the train at (a rider could take it on purpose, the
+/// A for the C), `oneChangeFit` when it reaches a station where a line to the destination calls (a change that makes
+/// sense), else `noUseFit` (it leads away from the trip). `stationsAfter` are the line's stations past the boarding stop.
+func platformLineFit(stationsAfter: [String], targets: Set<String>, changeStations: Set<String>,
+                     oneChangeFit: Double = 0.6, noUseFit: Double = 0.25) -> Double {
+    if stationsAfter.contains(where: targets.contains) { return 1 }
+    if stationsAfter.contains(where: changeStations.contains) { return oneChangeFit }
+    return noUseFit
+}
+
+/// A pull-away felt at a change sooner after the walk-off than `fraction` of the planned walk to the next platform: the
+/// stairs or the passage, not a train (Oct 21 at W 4 St: off the F, then asked about the C before any train was taken).
+/// Not for a change across the platform (no walk planned).
+func departureTooSoonAfterChange(departedTs: Double, alightedTs: Double, walkSec: Double, fraction: Double = 0.5) -> Bool {
+    walkSec > 0 && departedTs - alightedTs < fraction * walkSec
+}
+
 /// A train the rider could have boarded on one leg of the route: the line it runs, the feed's time at the
 /// boarding stop (the last one published before the train moved on), the station stops it makes to the alighting
 /// stop and the feed's time there.
@@ -276,11 +306,15 @@ struct LineInference {
 
     /// The prior over candidates: the plan's line gets its share, the leg's other lines split the rest, a line
     /// at the platform that is not on the leg counts half; within a line the trains are equal.
-    func prior(_ cands: [BoardingCandidate], leg: Int, chosenKey: String?, learnedShare: Double? = nil) -> [String: Double] {
+    /// `lineFit` scales the other lines' weights: how well each suits the trip (`platformLineFit`), times what the
+    /// rider's own habits say of it, as the planner puts them on the leg's plan.
+    func prior(_ cands: [BoardingCandidate], leg: Int, chosenKey: String?, learnedShare: Double? = nil, lineFit: [String: Double] = [:]) -> [String: Double] {
         guard !cands.isEmpty else { return [:] }
         let pc = priorChosen(leg: leg, learnedShare: learnedShare)
         var lineWeight: [String: Double] = [:]
-        for c in cands where c.key != chosenKey { lineWeight[c.key] = c.onLeg ? 1.0 : (c.samePlatform ? otherLineAtPlatformWeight : otherPlatformWeight) }
+        for c in cands where c.key != chosenKey {
+            lineWeight[c.key] = (c.onLeg ? 1.0 : (c.samePlatform ? otherLineAtPlatformWeight : otherPlatformWeight)) * (lineFit[c.key] ?? 1)
+        }
         let hasChosen = chosenKey != nil && cands.contains { $0.key == chosenKey }
         let otherTotal = lineWeight.values.reduce(0, +)
         var lineMass: [String: Double] = [:]
@@ -326,8 +360,9 @@ struct LineInference {
     /// The belief right after the sensors felt the train leave at `departedTs`: each train's time at the stop
     /// against that moment, and, when the feed reported vehicle positions, whether it had the train standing at
     /// the platform just before (a train never seen standing there keeps `stoppedAtFloor`).
-    func fromDeparture(_ cands: [BoardingCandidate], departedTs: Double, leg: Int, chosenKey: String?, learnedShare: Double? = nil) -> LineBelief {
-        let p = prior(cands, leg: leg, chosenKey: chosenKey, learnedShare: learnedShare)
+    func fromDeparture(_ cands: [BoardingCandidate], departedTs: Double, leg: Int, chosenKey: String?, learnedShare: Double? = nil,
+                       lineFit: [String: Double] = [:]) -> LineBelief {
+        let p = prior(cands, leg: leg, chosenKey: chosenKey, learnedShare: learnedShare, lineFit: lineFit)
         let positions = cands.contains { $0.stoppedAtBoardTs != nil }
         var w: [String: Double] = [:]
         for c in cands {

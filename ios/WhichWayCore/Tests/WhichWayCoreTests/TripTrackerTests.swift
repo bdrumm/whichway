@@ -297,6 +297,28 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertEqual(u.timeline.endedBy, "timeout")
     }
 
+    func testNotOnTheTrainAfterAnAssumedRideWaitsForTheNextTrain() {
+        // the ride was assumed from the timetable; the rider says they let that train go: back at the station, the
+        // forecast follows the planner's next train, and the ride is assumed again only from that one
+        var t = TripTracker(start(), distanceToOriginM: 30)
+        t.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)
+        t.tick(now: 1230)
+        XCTAssertTrue(t.onTrain)
+        t.notOnTrain()
+        t.noteNotOnTrain(at: 1235)
+        XCTAssertEqual(t.phase, .atStation)
+        XCTAssertFalse(t.onTrain)
+        XCTAssertEqual(t.timeline.notOnTrainTaps, [1235])
+        t.tick(now: 1240)
+        XCTAssertEqual(t.phase, .atStation, "the train let go is not assumed again")
+        t.updateForecast(boardTs: 1500, arriveTs: 2100, now: 1245)
+        XCTAssertEqual(t.timeline.forecastBoardTs, 1500)
+        XCTAssertEqual(t.timeline.liveArriveTs, 2100, "the arrival follows the next train")
+        t.tick(now: 1630)
+        XCTAssertEqual(t.phase, .riding)
+        XCTAssertTrue(t.timeline.rideAssumed)
+    }
+
     func testForecastFreezesOnceTheBoardingTimePassesAtTheStation() {
         var t = TripTracker(start(), distanceToOriginM: 30)
         t.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)

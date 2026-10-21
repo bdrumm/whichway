@@ -36,6 +36,36 @@ final class LineInferenceTests: XCTestCase {
         XCTAssertEqual(excludingTrainLeft([g, a], leftTrainId: nil).count, 2)
     }
 
+    func testNotOnTheTrainOnceItReachedTheChangeMeansOffThereUnfelt() {
+        // Oct 21: on the F to W 4 St (stop 20), its time there 2000 by the feed; "not on the train" at 2100 is the rider
+        // off at W 4 St, not back at the platform they boarded at
+        var f = cand("f1", key: "F_N", board: 1000, alight: 2000, chosen: true)
+        f.boardIdx = 10; f.alightIdx = 20; f.stopTs = [19: 1900, 20: 2000]
+        let off = unfeltAlighting(f, departedTs: 1000, now: 2100)
+        XCTAssertEqual(off, PlatformTiming.atPlatform(2000, route: "F"))
+        XCTAssertNil(unfeltAlighting(f, departedTs: 1000, now: 1500), "still short of the change: a ride that was not one")
+        f.stopTs = [19: 1900]; f.alightTs = nil; f.progressIdx = 21
+        XCTAssertEqual(unfeltAlighting(f, departedTs: 1000, now: 2100), 2100, "the feed has it past the change")
+        // a pull-away at the change sooner than half the walk to the next platform is the stairs, not a train
+        XCTAssertTrue(departureTooSoonAfterChange(departedTs: 2050, alightedTs: 2000, walkSec: 150))
+        XCTAssertFalse(departureTooSoonAfterChange(departedTs: 2100, alightedTs: 2000, walkSec: 150))
+        XCTAssertFalse(departureTooSoonAfterChange(departedTs: 2010, alightedTs: 2000, walkSec: 0), "across the platform")
+    }
+
+    func testALineAtThePlatformThatGoesToTheDestinationOutweighsOneThatLeadsAway() {
+        // off the F at W 4 St for the C uptown: the A beside it reaches 14 St too; the B heads off up 6 Av
+        XCTAssertEqual(platformLineFit(stationsAfter: ["s1", "dest"], targets: ["dest"], changeStations: []), 1)
+        XCTAssertEqual(platformLineFit(stationsAfter: ["s1", "x"], targets: ["dest"], changeStations: ["x"]), 0.6)
+        XCTAssertEqual(platformLineFit(stationsAfter: ["s1", "y"], targets: ["dest"], changeStations: ["x"]), 0.25)
+        // the planned C is not there; an A and a B left together: the A, which goes to the destination, is the likelier
+        let c = [cand("c1", key: "C_N", board: 1400, chosen: true), cand("a1", key: "A_N", board: 1000, onLeg: false),
+                 cand("b1", key: "B_N", board: 1005, onLeg: false)]
+        let b = inf.fromDeparture(c, departedTs: 1030, leg: 1, chosenKey: "C_N", lineFit: ["A_N": 1, "B_N": 0.25])
+        XCTAssertGreaterThan(b.byLine["A_N"] ?? 0, 2 * (b.byLine["B_N"] ?? 0), "\(b.byLine)")
+        let flat = inf.fromDeparture(c, departedTs: 1030, leg: 1, chosenKey: "C_N")
+        XCTAssertLessThan(abs((flat.byLine["A_N"] ?? 0) - (flat.byLine["B_N"] ?? 0)), 0.2, "without the fit they are on a par: \(flat.byLine)")
+    }
+
     func testADepartureThatMatchesTheOtherLineOverridesThePrior() {
         // the plan was the F, due at 1200; the G reached the platform at 1000 and the train left at 1030
         let c = [cand("f1", key: "F_N", board: 1200, chosen: true), cand("g1", key: "G_N", board: 1000)]

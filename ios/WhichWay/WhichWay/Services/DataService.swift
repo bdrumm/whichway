@@ -250,6 +250,28 @@ final class DataService {
 
     // MARK: - static data
 
+    /// The tables as last fetched (else as built into the app), decoded at once. Opened for the first time at the
+    /// station with weak signal (Oct 21), the app waited on six fetches of up to 25 s each before it had a route to
+    /// pick, a station map to start the route by, or a first feed poll for the countdown. The fetch that follows
+    /// replaces them.
+    private func loadStaticFromDisk() {
+        func local<T: Decodable>(_ type: T.Type, _ path: String) -> T? {
+            guard let d = cache.read(path) ?? DataService.seed(path) else { return nil }
+            return try? JSONDecoder().decode(T.self, from: d)
+        }
+        guard schedule == nil, let sched = local(ClientSchedule.self, "client_schedule.json") else { return }
+        schedule = sched
+        index = StationIndex(schedule: sched)
+        demoOffset = sched.demoNow.map { $0 - Date().timeIntervalSince1970 }
+        lineSched = local(ClientLines.self, "client_lines.json")?.lines ?? [:]
+        holds = local(HoldsSummary.self, "holds.json")
+        segments = local(SegmentsSummary.self, "segments.json")
+        model = local(ClientModel.self, "client_model.json")
+        delayModel = local(DelayModel.self, "delay_model.json")
+        if geometry == nil { geometry = local(ClientGeometry.self, "client_geometry.json") }
+        staticVersion += 1
+    }
+
     func loadStatic() async {
         loading = true
         defer { loading = false }
@@ -277,6 +299,12 @@ final class DataService {
     func requestGeometry() {
         if geometryRequested { return }
         geometryRequested = true
+        // the copy kept on the phone at once (the auto-start at the station needs it), the fresh one when it comes
+        if geometry == nil, let d = cache.read("client_geometry.json") ?? DataService.seed("client_geometry.json"),
+           let g = try? JSONDecoder().decode(ClientGeometry.self, from: d) {
+            geometry = g
+            staticVersion += 1
+        }
         Task { [weak self] in
             guard let self = self else { return }
             if let g = try? await self.fetchJSON(ClientGeometry.self, "client_geometry.json") { self.geometry = g; self.staticVersion += 1 }
@@ -320,6 +348,10 @@ final class DataService {
         if pollTask != nil { return }
         pollTask = Task { [weak self] in
             guard let self = self else { return }
+            // the tables kept on the phone first, so the routes and the first poll do not wait on the network; the
+            // fresh ones are fetched alongside
+            self.loadStaticFromDisk()
+            if self.schedule != nil { Task { await self.loadStatic() } }
             while !Task.isCancelled {
                 if self.schedule == nil { await self.loadStatic() }
                 if self.schedule != nil { await self.poll() }

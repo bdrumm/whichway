@@ -104,13 +104,16 @@ struct PlannerView: View {
             applyHabit()
             autoApply()
         }
-        .onChange(of: originId) { _, _ in resetTrip(); recompute() }
-        .onChange(of: destId) { _, _ in resetTrip(); recompute() }
+        // a station picked (the nearest one resolved, a commute applied) or the station map in: the rider may be
+        // standing at the origin already, so the route starts now rather than at the next fix or poll
+        .onChange(of: originId) { _, _ in resetTrip(); recompute(); checkArrival() }
+        .onChange(of: destId) { _, _ in resetTrip(); recompute(); checkArrival() }
         .onChange(of: data.staticVersion) { _, _ in
             recompute()
             autoApply()
             applyHabit()
             resolveNearest()
+            checkArrival()
         }
         .onChange(of: data.tick) { _, _ in refreshLive(); pollLocation() }
         .onChange(of: data.scenario) { _, _ in refreshLive() }
@@ -903,7 +906,7 @@ struct PlannerView: View {
             }
             if let pr = trip.prompt {
                 boardingPrompt(pr)
-            } else if trip.phase == .riding, trip.currentLegKeys.count > 1 {
+            } else if trip.onTrain, trip.currentLegKeys.count > 1 {
                 lineChooser
             }
         }
@@ -1297,6 +1300,11 @@ struct PlannerView: View {
             return s
         case .atStation: return "At \(originName)"
         case .riding:
+            // off the train: waiting for the connection at the change, or walking off at the end
+            if !trip.onTrain {
+                if let p = headline, trip.currentLeg > 0, trip.currentLeg < p.legs.count, let x = p.transfer?.station { return "Changing at \(x)" }
+                return "Off the train"
+            }
             if let b = trip.currentBelief, b.settled || b.byHand, let r = b.route {
                 if b.verdict == .switched, let c = b.chosenRoute, c != r { return "On the \(r), not the \(c)" }
                 return b.assumed ? "On the \(r), presumably" : "On the \(r)"
@@ -1394,6 +1402,12 @@ struct PlannerView: View {
     private func legPlans(_ p: PathOption?) -> [LegPlan] {
         guard let p = p, let index = data.index else { return [] }
         var plans: [LegPlan] = []
+        // the stations where a line to the destination calls: a line at the platform that reaches one is a sensible change
+        let destSt = index.stationOf(destId)
+        var changeStations: Set<String> = []
+        for line in (data.schedule?.lines ?? [:]).values where line.stops.contains(where: { index.stationOf($0) == destSt }) {
+            for st in line.stops { changeStations.insert(index.stationOf(st)) }
+        }
         for (i, leg) in p.legs.enumerated() {
             let tc: TripCandidate? = (p.live?.legs.indices.contains(i) ?? false) ? p.live?.legs[i] : nil
             let preferred = preferredKeys[i].flatMap { leg.keys.contains($0) ? $0 : nil }
@@ -1406,6 +1420,10 @@ struct PlannerView: View {
                 for m in st.members where m.dir == dir && !leg.keys.contains(m.key) {
                     plan.platformKeys[m.key] = m.idx
                     if m.stop != leg.from { plan.otherPlatformKeys.insert(m.key) }
+                    if let line = data.schedule?.lines[m.key], m.idx + 1 < line.stops.count {
+                        let after = line.stops[(m.idx + 1)...].map { index.stationOf($0) }
+                        plan.lineFit[m.key] = platformLineFit(stationsAfter: Array(after), targets: [destSt, index.stationOf(leg.to)], changeStations: changeStations)
+                    }
                 }
             }
             plans.append(plan)

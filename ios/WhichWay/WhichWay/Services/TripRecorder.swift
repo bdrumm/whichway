@@ -14,6 +14,10 @@ struct LegPlan {
     var dest: String = ""
     var walkSec: Double = 0                   // the walk before boarding this leg (0: the first leg, or a same-platform change)
     var otherPlatformKeys: Set<String> = []   // of platformKeys, those boarding at another platform of the station (the 8 Av L beside the A/C/E)
+    /// Per line other than the plan's, how well it suits the trip (`platformLineFit`: one that reaches the destination
+    /// or the change outweighs one that leads away), times the rider's own habits on this trip when there are any. The
+    /// line prior scales each line's weight by it; a line missing is 1.
+    var lineFit: [String: Double] = [:]
 }
 
 /// What the Go tab asks the rider when the phone is not sure which train they boarded, or believes they boarded a
@@ -108,7 +112,12 @@ final class TripRecorder {
     var sensing: Bool { sampler.isRunning }
 
     /// The belief about the ride in progress, or the last one.
-    var currentBelief: LineBelief? { beliefs.last }
+    /// Between trains at the change, none: the train just left is not the one in hand (Oct 21 at W 4 St, "not on the
+    /// train" there read as back on the F).
+    var currentBelief: LineBelief? {
+        guard let t = tracker, t.phase == .riding else { return beliefs.last }
+        return t.onTrain ? belief(leg: t.timeline.legsRidden) : nil
+    }
     func belief(leg: Int) -> LineBelief? { beliefs.first { $0.leg == leg } }
     /// The question for the rider, if there is one: the phone is unsure which train they boarded, believes they
     /// boarded one off the plan, or has only assumed the ride. Gone once they answer or wave it away.
@@ -399,7 +408,7 @@ final class TripRecorder {
             if let key = belief(leg: l)?.bestKey { store(LineBelief.byHand(leg: l, key: key, chosenKey: plan.chosenKey, candidates: cands, departedTs: r.departedTs)) }
             return
         }
-        var b = inference.fromDeparture(cands, departedTs: r.departedTs, leg: l, chosenKey: plan.chosenKey)
+        var b = inference.fromDeparture(cands, departedTs: r.departedTs, leg: l, chosenKey: plan.chosenKey, lineFit: plan.lineFit)
         guard !b.byTrain.isEmpty else {
             departureBeliefs[l] = nil
             beliefs.removeAll { $0.leg == l }
@@ -513,6 +522,13 @@ final class TripRecorder {
                     reread(leg)
                     return
                 }
+                // a pull-away at the change before the rider could have reached the next platform: the stairs, not a train
+                if leg >= 1, !handSet.contains(leg), !t.departedByLocation, let la = lastAlight, la.leg == leg - 1,
+                   departureTooSoonAfterChange(departedTs: e.ts, alightedTs: la.ts, walkSec: legs[leg].walkSec) {
+                    tracker?.withdrawDeparture()
+                    seenEvents = tracker?.timeline.events.count ?? 0
+                    return
+                }
                 if t.departedByLocation { locationRides.insert(leg) }
                 let plan = legs[leg]
                 let cands = legCandidates(log, leg: leg, departedTs: e.ts)
@@ -522,7 +538,7 @@ final class TripRecorder {
                 let share = plan.chosenKey.flatMap {
                     PersonalModelStore.shared.model.chosenLineShare(origin: plan.origin, dest: plan.dest, leg: leg, chosenKey: $0)
                 }
-                let b = inference.fromDeparture(cands, departedTs: e.ts, leg: leg, chosenKey: plan.chosenKey, learnedShare: share)
+                let b = inference.fromDeparture(cands, departedTs: e.ts, leg: leg, chosenKey: plan.chosenKey, learnedShare: share, lineFit: plan.lineFit)
                 // a departure felt with no train in the feed to match it: the plan stands, as a guess
                 if b.byTrain.isEmpty, let fallback = LineBelief.fromPlan(leg: leg, chosenKey: plan.chosenKey, chosenTrainId: plan.chosenTrainId, evidence: "plan") {
                     store(fallback)
@@ -619,7 +635,20 @@ final class TripRecorder {
     }
 
     /// The rider says they are not on a train: the felt departure is withdrawn and the leg starts over at the platform.
+    ///
+    /// Said while the train the phone has them on has already reached the stop the route had them leave it at, they got
+    /// off there unfelt: the ride closes at that stop and the route goes on from the change, with its arrival from the
+    /// connection, rather than starting over at the platform they boarded at.
     func notOnTrain() {
+        let now = lastNow ?? Date().timeIntervalSince1970
+        tracker?.noteNotOnTrain(at: now)
+        if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed, let c = trainInHand,
+           let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs, let at = unfeltAlighting(c, departedTs: dep, now: now) {
+            tracker?.alightStanding(at: at)
+            handleEvents()
+            publish()
+            return
+        }
         let leg = currentLeg
         tracker?.notOnTrain()
         if let i = beliefs.firstIndex(where: { $0.leg == leg }) { beliefs.remove(at: i) }
@@ -673,7 +702,7 @@ final class TripRecorder {
         let plan = legs[leg]
         let cs = legCandidates(log, leg: leg, departedTs: dep)
         candidates[leg] = cs
-        let b = inference.fromDeparture(cs, departedTs: dep, leg: leg, chosenKey: plan.chosenKey)
+        let b = inference.fromDeparture(cs, departedTs: dep, leg: leg, chosenKey: plan.chosenKey, lineFit: plan.lineFit)
         if !b.byTrain.isEmpty { departureBeliefs[leg] = b; store(b) }
         publish()
     }
