@@ -535,8 +535,12 @@ final class TripRecorder {
                 candidates[leg] = cands
                 departedTs[leg] = e.ts
                 guard !handSet.contains(leg) else { continue }
-                let share = plan.chosenKey.flatMap {
-                    PersonalModelStore.shared.model.chosenLineShare(origin: plan.origin, dest: plan.dest, leg: leg, chosenKey: $0)
+                // what this rider has ridden on this very trip, else the line they usually board at this platform
+                // (after the line just ridden, at a change) at about this hour
+                let share = plan.chosenKey.flatMap { k in
+                    PersonalModelStore.shared.model.chosenLineShare(origin: plan.origin, dest: plan.dest, leg: leg, chosenKey: k)
+                        ?? HabitStore.shared.linePrior(boardingAt: leg == 0 ? plan.origin : (t.timeline.transferStation ?? ""), leg: leg, toward: plan.dest,
+                                                       after: t.timeline.boarded.first { $0.leg == leg - 1 }?.key, now: e.ts)?.share(k)
                 }
                 let b = inference.fromDeparture(cands, departedTs: e.ts, leg: leg, chosenKey: plan.chosenKey, learnedShare: share, lineFit: plan.lineFit)
                 // a departure felt with no train in the feed to match it: the plan stands, as a guess
@@ -773,6 +777,7 @@ final class TripRecorder {
         motionState = .unknown
         endReason = tl.endedBy
         PersonalModelStore.shared.learn(tl)
+        if PersonalModelStore.shared.optIn { HabitStore.shared.learnRide(tl) }
         Telemetry.shared.endTrip(timeline: tl, api: api)
         MotionTrace.shared.end(tl)
         return tl
