@@ -1402,6 +1402,12 @@ struct PlannerView: View {
     private func legPlans(_ p: PathOption?) -> [LegPlan] {
         guard let p = p, let index = data.index else { return [] }
         var plans: [LegPlan] = []
+        // the stations where a line to the destination calls: a line at the platform that reaches one is a sensible change
+        let destSt = index.stationOf(destId)
+        var changeStations: Set<String> = []
+        for line in (data.schedule?.lines ?? [:]).values where line.stops.contains(where: { index.stationOf($0) == destSt }) {
+            for st in line.stops { changeStations.insert(index.stationOf(st)) }
+        }
         for (i, leg) in p.legs.enumerated() {
             let tc: TripCandidate? = (p.live?.legs.indices.contains(i) ?? false) ? p.live?.legs[i] : nil
             let preferred = preferredKeys[i].flatMap { leg.keys.contains($0) ? $0 : nil }
@@ -1414,6 +1420,10 @@ struct PlannerView: View {
                 for m in st.members where m.dir == dir && !leg.keys.contains(m.key) {
                     plan.platformKeys[m.key] = m.idx
                     if m.stop != leg.from { plan.otherPlatformKeys.insert(m.key) }
+                    if let line = data.schedule?.lines[m.key], m.idx + 1 < line.stops.count {
+                        let after = line.stops[(m.idx + 1)...].map { index.stationOf($0) }
+                        plan.lineFit[m.key] = platformLineFit(stationsAfter: Array(after), targets: [destSt, index.stationOf(leg.to)], changeStations: changeStations)
+                    }
                 }
             }
             plans.append(plan)

@@ -14,6 +14,10 @@ struct LegPlan {
     var dest: String = ""
     var walkSec: Double = 0                   // the walk before boarding this leg (0: the first leg, or a same-platform change)
     var otherPlatformKeys: Set<String> = []   // of platformKeys, those boarding at another platform of the station (the 8 Av L beside the A/C/E)
+    /// Per line other than the plan's, how well it suits the trip (`platformLineFit`: one that reaches the destination
+    /// or the change outweighs one that leads away), times the rider's own habits on this trip when there are any. The
+    /// line prior scales each line's weight by it; a line missing is 1.
+    var lineFit: [String: Double] = [:]
 }
 
 /// What the Go tab asks the rider when the phone is not sure which train they boarded, or believes they boarded a
@@ -404,7 +408,7 @@ final class TripRecorder {
             if let key = belief(leg: l)?.bestKey { store(LineBelief.byHand(leg: l, key: key, chosenKey: plan.chosenKey, candidates: cands, departedTs: r.departedTs)) }
             return
         }
-        var b = inference.fromDeparture(cands, departedTs: r.departedTs, leg: l, chosenKey: plan.chosenKey)
+        var b = inference.fromDeparture(cands, departedTs: r.departedTs, leg: l, chosenKey: plan.chosenKey, lineFit: plan.lineFit)
         guard !b.byTrain.isEmpty else {
             departureBeliefs[l] = nil
             beliefs.removeAll { $0.leg == l }
@@ -534,7 +538,7 @@ final class TripRecorder {
                 let share = plan.chosenKey.flatMap {
                     PersonalModelStore.shared.model.chosenLineShare(origin: plan.origin, dest: plan.dest, leg: leg, chosenKey: $0)
                 }
-                let b = inference.fromDeparture(cands, departedTs: e.ts, leg: leg, chosenKey: plan.chosenKey, learnedShare: share)
+                let b = inference.fromDeparture(cands, departedTs: e.ts, leg: leg, chosenKey: plan.chosenKey, learnedShare: share, lineFit: plan.lineFit)
                 // a departure felt with no train in the feed to match it: the plan stands, as a guess
                 if b.byTrain.isEmpty, let fallback = LineBelief.fromPlan(leg: leg, chosenKey: plan.chosenKey, chosenTrainId: plan.chosenTrainId, evidence: "plan") {
                     store(fallback)
@@ -698,7 +702,7 @@ final class TripRecorder {
         let plan = legs[leg]
         let cs = legCandidates(log, leg: leg, departedTs: dep)
         candidates[leg] = cs
-        let b = inference.fromDeparture(cs, departedTs: dep, leg: leg, chosenKey: plan.chosenKey)
+        let b = inference.fromDeparture(cs, departedTs: dep, leg: leg, chosenKey: plan.chosenKey, lineFit: plan.lineFit)
         if !b.byTrain.isEmpty { departureBeliefs[leg] = b; store(b) }
         publish()
     }
