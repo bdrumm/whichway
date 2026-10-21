@@ -14,6 +14,9 @@ struct TripTimeline: Codable, Equatable {
     var originStation: String
     var destStation: String
     var transferStation: String?
+    /// The change's two platforms, "<stop off>><stop on>" (parent stops), so the walk is learned for that pair and
+    /// not for the whole complex: at 14 St-8 Av the step across to the E says nothing about the walk to the L.
+    var transferStops: String? = nil
     var legs: Int
     var arrivedStationTs: Double?         // within the station radius, or the first departure the sensors saw
     var platformTs: Double?               // walking stopped after arriving: on the platform
@@ -468,10 +471,11 @@ struct TripTracker {
     /// The route changed under the rider (they boarded a line off the plan and the planner found the route that
     /// rides it): the legs still to ride and the change follow the new route, so the trip ends at the right
     /// alighting and not at a change the old route had, or never.
-    mutating func replan(legs: Int, transferStation: String?) {
+    mutating func replan(legs: Int, transferStation: String?, transferStops: String? = nil) {
         guard phase != .arrived else { return }
         timeline.legs = max(1, legs)
         timeline.transferStation = transferStation
+        timeline.transferStops = transferStops
         alightedAll = timeline.legsRidden >= timeline.legs
     }
 

@@ -677,16 +677,35 @@ struct PlannerView: View {
         refreshLive()
     }
 
-    /// The rider's own changes, where learned at the station, replace the MTA's minimum either way: longer when
-    /// they take longer, shorter where the timetable's figure is a station-wide allowance (Oct 8: 3:00 booked at
-    /// Jay St against 0:17 measured, so every route through it ran three minutes late and ranked behind W 4 St).
+    /// The rider's own changes between the same two platforms, where learned, replace the MTA's minimum either
+    /// way: longer when they take longer, shorter where the timetable's figure is a station-wide allowance (Oct 8:
+    /// 3:00 booked at Jay St against 0:17 measured, so every route through it ran three minutes late and ranked
+    /// behind W 4 St). Not learned yet, a change between platforms far apart takes the walk their distance makes
+    /// (`TransferTiming.platformWalkSec`) where that is longer than the MTA's allowance: at 14 St-8 Av the L is much
+    /// farther from the A than the E is, and the faster change should rank first.
     private func applyPersonalTransfers(_ ps: inout [PathOption]) {
         let pm = PersonalModelStore.shared.model
         for i in ps.indices {
             guard var tr = ps[i].transfer else { continue }
-            let sec = pm.plannedTransferSec(station: tr.station, scheduled: tr.walkSec)
+            var scheduled = tr.walkSec
+            if !tr.acrossPlatform, let m = platformDistanceM(ps[i]) {
+                scheduled = max(scheduled, Int(TransferTiming.platformWalkSec(meters: m, speedMPerMin: pm.walkSpeedMPerMin).rounded()))
+            }
+            let sec = pm.plannedTransferSec(station: tr.station, stops: tr.stopsKey, scheduled: scheduled, acrossPlatform: tr.acrossPlatform)
             if sec != tr.walkSec { ps[i].schedSec += sec - tr.walkSec; tr.walkSec = sec; ps[i].transfer = tr }
         }
+    }
+
+    /// Straight-line metres between the platform a two-leg route gets off at and the one it changes to, from the
+    /// stop coordinates (nil until the geometry is in).
+    private func platformDistanceM(_ p: PathOption) -> Double? {
+        guard p.legs.count == 2, let geo = data.geometry else { return nil }
+        func at(_ leg: PathLeg, end: Bool) -> (lat: Double, lon: Double)? {
+            for k in leg.keys { if let ix = leg.idx[k], let c = geo.lines[k]?.coord(end ? ix.to : ix.from) { return c } }
+            return nil
+        }
+        guard let a = at(p.legs[0], end: true), let b = at(p.legs[1], end: false) else { return nil }
+        return haversineM(a, b)
     }
 
     private func refreshLive() {
@@ -1059,7 +1078,7 @@ struct PlannerView: View {
         forecastTrainId = nil        // another route's train is a choice, not the forecast's train leaving
         let plans = legPlans(p)
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
-        trip.replan(legs: plans, transferStation: p.transfer?.station)
+        trip.replan(legs: plans, transferStation: p.transfer?.station, transferStops: p.transfer?.stopsKey)
         Telemetry.shared.updateRoute(label: p.label, legs: p.legs.map { TripObservation.Leg(line: $0.primaryKey, from: $0.from, to: $0.to) },
                                      transferStation: p.transfer?.station, transferWalkSec: p.transfer.map { Int($0.plannedSec.rounded()) })
         refreshRideArrival()
@@ -1458,6 +1477,7 @@ struct PlannerView: View {
         let p = headline
         var tl = TripTimeline(startTs: data.now, startedBy: by, startDistanceM: d, placeId: nearbyPlace()?.id.uuidString,
                               originStation: originId, destStation: destId, transferStation: p?.transfer?.station, legs: p?.legs.count ?? 1)
+        tl.transferStops = p?.transfer?.stopsKey
         tl.forecastBoardTs = p?.live?.boardTs; tl.forecastArriveTs = p?.live?.arriveTs; tl.liveArriveTs = p?.live?.arriveTs
         let obs = (Telemetry.shared.optIn && p != nil) ? observationBase(p!, startedBy: by) : nil
         let plans = legPlans(p)

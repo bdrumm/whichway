@@ -632,7 +632,7 @@ final class TripRecorder {
     /// The route changed under the rider (they boarded a line off the plan and the planner found the route that
     /// rides it): the legs from here on follow the new plan; the belief about the leg in hand is kept and now
     /// counts as on-plan.
-    func replan(legs newLegs: [LegPlan], transferStation: String? = nil) {
+    func replan(legs newLegs: [LegPlan], transferStation: String? = nil, transferStops: String? = nil) {
         let leg = currentLeg
         let old = legs
         legs = newLegs
@@ -651,7 +651,7 @@ final class TripRecorder {
         }
         dismissed.remove(leg)
         stayedOn = nil
-        tracker?.replan(legs: max(1, newLegs.count), transferStation: transferStation)
+        tracker?.replan(legs: max(1, newLegs.count), transferStation: transferStation, transferStops: transferStops)
         publish()
     }
 
