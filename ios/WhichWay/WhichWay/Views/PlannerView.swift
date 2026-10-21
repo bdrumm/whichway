@@ -39,6 +39,8 @@ struct PlannerView: View {
     @State private var lastEndNote: String? = nil
     /// The trip the rider's history put on screen for this hour.
     @State private var habitNote: String? = nil
+    /// Seconds each listed route gains in the ranking for being the rider's usual one on this trip (`ranked`).
+    @State private var habitNudgeSec: [String: Double] = [:]
     /// When a station was last picked by hand: the history does not override a choice for two hours.
     @AppStorage("pickedByHandTs") private var pickedByHandTs = 0.0
     @State private var showInsights = false
@@ -577,14 +579,17 @@ struct PlannerView: View {
     private var headline: PathOption? { paths.first { $0.id == selectedPath } ?? ranked.first }
 
     /// Routes with a train in the feeds first, by that itinerary's arrival; the rest by expected time. A route
-    /// nobody can board yet never outranks one with a train on its way.
+    /// nobody can board yet never outranks one with a train on its way. The route the rider usually takes on this
+    /// trip at this hour counts up to a minute and a half sooner (`RouteHabits.rankNudgeSec`): it wins a near tie.
     private var ranked: [PathOption] {
-        paths.sorted { a, b in
+        let nudge = habitNudgeSec
+        return paths.sorted { a, b in
+            let na = nudge[a.id] ?? 0, nb = nudge[b.id] ?? 0
             switch (a.live, b.live) {
-            case let (x?, y?): return x.arriveTs != y.arriveTs ? x.arriveTs < y.arriveTs : a.expectedSec < b.expectedSec
+            case let (x?, y?): return x.arriveTs - na != y.arriveTs - nb ? x.arriveTs - na < y.arriveTs - nb : a.expectedSec < b.expectedSec
             case (.some, .none): return true
             case (.none, .some): return false
-            case (.none, .none): return a.expectedSec < b.expectedSec
+            case (.none, .none): return a.expectedSec - na < b.expectedSec - nb
             }
         }
     }
@@ -647,6 +652,9 @@ struct PlannerView: View {
             evaluate(&ps[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour)
         }
         paths = ps
+        habitNudgeSec = Dictionary(uniqueKeysWithValues: ps.map {
+            ($0.id, RouteHabits.rankNudgeSec(HabitStore.shared.routeAffinity($0, origin: originId, dest: destId, now: now)))
+        })
         var keys = Set<String>()
         for p in ps { for l in p.legs { keys.formUnion(l.keys) } }
         data.setWanted(keys, for: "planner")
