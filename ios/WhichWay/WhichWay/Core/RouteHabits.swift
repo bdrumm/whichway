@@ -31,6 +31,13 @@ struct LinePrior: Equatable {
     var weight: Double
 
     func share(_ key: String) -> Double { shares[key] ?? 0 }
+
+    /// A multiplier per line for the line inference's prior (`LegPlan.lineFit`): a line the rider always takes here
+    /// up to 1.4, one they never do down to 0.6, pulled toward 1 while few rides stand behind it.
+    func fit(_ keys: [String]) -> [String: Double] {
+        let trust = weight / (weight + 2)
+        return Dictionary(uniqueKeysWithValues: keys.map { ($0, 1 + trust * (0.8 * share($0) - 0.4)) })
+    }
 }
 
 struct RouteHabits: Codable, Equatable {

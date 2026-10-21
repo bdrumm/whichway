@@ -47,6 +47,10 @@ final class RouteHabitsTests: XCTestCase {
         XCTAssertLessThan(am.share("G_N"), 0.25)
         let pm = try! XCTUnwrap(h.linePrior(boardingAt: "A", leg: 0, toward: "C", hour: 19, weekday: 2, now: now))
         XCTAssertGreaterThan(pm.share("G_N"), 0.85, "heading for C the rider takes the G")
+        let fit = am.fit(["F_N", "G_N", "R_N"])
+        XCTAssertGreaterThan(fit["F_N"]!, 1.1)
+        XCTAssertLessThan(fit["R_N"]!, 0.9)
+        XCTAssertGreaterThan(fit["R_N"]!, 0.6, "a handful of rides never rules a line out")
         XCTAssertNil(h.linePrior(boardingAt: "Z", leg: 0, toward: nil, hour: 8, weekday: 2, now: now))
         // a single ride is not a habit
         var one = RouteHabits()
