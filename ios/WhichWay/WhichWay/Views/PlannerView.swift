@@ -1565,6 +1565,11 @@ struct PlannerView: View {
                     }
                 }
             }
+            // the rider's own lines boarding here at about this hour (`RouteHabits.linePrior`); 1 where habits say nothing
+            let boardAt = i == 0 ? originId : (p.transfer?.station ?? "")
+            if let habit = HabitStore.shared.linePrior(boardingAt: boardAt, leg: i, toward: destId, now: data.now) {
+                for (k, f) in habit.fit(leg.keys + Array(plan.platformKeys.keys)) { plan.lineFit[k, default: 1] *= f }
+            }
             plans.append(plan)
         }
         return plans
