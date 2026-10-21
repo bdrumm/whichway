@@ -21,6 +21,9 @@ struct PersonalModel: Codable, Equatable {
     var access: [String: PaceStat] = [:]              // origin station id -> seconds from the radius to the platform
     var accessDefault = PaceStat()
     var transfer: [String: PaceStat] = [:]            // transfer station name -> seconds walking between trains
+    /// "station|<stop off>><stop on>" -> seconds walking between those two platforms. Optional so models saved
+    /// before it still load.
+    var transferPair: [String: PaceStat]? = nil
     var transferDefault = PaceStat()
     var placeToStation: [String: PaceStat] = [:]      // "placeId|stationId" -> seconds from leaving the place to the station
     /// "origin|dest|leg" -> line key -> rides the sensors put on that line. Optional so models saved before it
@@ -52,6 +55,21 @@ struct PersonalModel: Codable, Equatable {
     func plannedTransferSec(station: String, scheduled: Int) -> Int {
         guard let s = transfer[station], s.n >= 2 else { return scheduled }
         return Int(max(PersonalModel.transferFloorSec, s.mean).rounded())
+    }
+
+    static func pairKey(station: String, stops: String) -> String { "\(station)|\(stops)" }
+
+    /// The walk for a change between two particular platforms: the rider's own between them, once seen twice;
+    /// else the station's figure, which mixes all its platforms, so it is taken only where it cannot mislead. Across
+    /// the platform it is never used (a long walk elsewhere in the complex would slow the step across); between
+    /// platforms only when longer than `scheduled` (Oct 21: at 14 St-8 Av the quick step from the A to the E is no
+    /// measure of the walk to the L, which is much farther).
+    func plannedTransferSec(station: String, stops: String, scheduled: Int, acrossPlatform: Bool) -> Int {
+        if let s = transferPair?[PersonalModel.pairKey(station: station, stops: stops)], s.n >= 2 {
+            return Int(max(PersonalModel.transferFloorSec, s.mean).rounded())
+        }
+        guard !acrossPlatform, let s = transfer[station], s.n >= 2 else { return scheduled }
+        return max(scheduled, Int(s.mean.rounded()))
     }
 
     func placeToStationSec(place: String, station: String) -> Double? {
@@ -89,6 +107,11 @@ struct PersonalModel: Codable, Equatable {
         if let x = t.transferStation, let s = t.transferWalkSec, s >= 8, s <= 900 {
             transfer[x, default: PaceStat()].add(s)
             transferDefault.add(s)
+            if let p = t.transferStops {
+                var m = transferPair ?? [:]
+                m[PersonalModel.pairKey(station: x, stops: p), default: PaceStat()].add(s)
+                transferPair = m
+            }
             any = true
         }
         if let p = t.placeId, let arr = t.arrivedStationTs, arr - t.startTs >= 30, arr - t.startTs <= 3600 {

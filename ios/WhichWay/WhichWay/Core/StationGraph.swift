@@ -207,12 +207,24 @@ struct PathTransfer {
     /// stairs and crowds) between platforms.
     var tightSec: Double { acrossPlatform ? TransferTiming.tightAcrossSec : max(60, 0.25 * Double(walkSec)) }
 
+    /// The two platforms, as the rider's own changes are learned by: "<stop off>><stop on>" (parent stops).
+    var stopsKey: String { "\(parentOf(stop))>\(parentOf(stop2))" }
+
     /// "across the platform" or "3:00 walk".
     var kindText: String { acrossPlatform ? "across the platform" : "\(Fmt.mmss(Double(walkSec))) walk" }
 }
 
 /// How a change is timed.
 enum TransferTiming {
+    /// The walk between two platforms this far apart (straight line), at the rider's pace: passages wind, so the
+    /// straight line counts `passageFactor` times, and the stairs down and up add `stairsSec`. The MTA's minimum is a
+    /// complex-wide allowance (3:00 at 14 St-8 Av to the L as to anywhere), which this raises where the platforms are
+    /// far apart, so the change to the far platform no longer ranks with the near one.
+    static let passageFactor = 1.4
+    static let stairsSec = 60.0
+    static func platformWalkSec(meters: Double, speedMPerMin: Double) -> Double {
+        meters * passageFactor / max(30, speedMPerMin) * 60 + stairsSec
+    }
     /// Stepping off one train and onto the one across the platform.
     static let stepAcrossSec = 15.0
     /// A change across the platform with less than this to spare is tight.

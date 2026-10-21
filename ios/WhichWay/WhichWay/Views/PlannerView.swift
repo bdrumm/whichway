@@ -76,6 +76,15 @@ struct PlannerView: View {
     @State private var page = 0
     /// The five detail views, the itineraries and the departure board, as a sheet from the line view.
     @State private var showDetails = false
+    /// While the route is under way: a faster way on from where the rider is taken to be (`fasterRoute`), shown across
+    /// the top, and the sheet that sets it beside the route in hand.
+    @State private var reroute: RerouteOffer? = nil
+    @State private var showReroute = false
+    /// Faster routes the rider waved off this trip, with what they saved then: one comes back only when it saves
+    /// `Reroute.offerSec` more than that.
+    @State private var declinedReroutes: [String: Double] = [:]
+    /// The planner's further options for this trip beyond the listed ones, timed once a trip, weighed with them.
+    @State private var rerouteMore: [PathOption]? = nil
 
     var body: some View {
         NavigationStack {
@@ -96,6 +105,20 @@ struct PlannerView: View {
             }
             .navigationTitle("Which way?")
             .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let o = reroute, routeStarted {
+                    RerouteBanner(offer: o, name: stationName, onView: { showReroute = true }, onSwitch: takeReroute, onDismiss: declineReroute)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .sheet(isPresented: $showReroute) {
+                if let o = reroute {
+                    RerouteSheet(offer: o, name: stationName, onSwitch: takeReroute)
+                } else {
+                    Text("Your route is as quick as any from here now.").font(.subheadline).foregroundStyle(.secondary).padding()
+                        .presentationDetents([.fraction(0.2)])
+                }
+            }
         }
         .onAppear {
             if loc.authorized { loc.startTracking() }
@@ -657,16 +680,35 @@ struct PlannerView: View {
         refreshLive()
     }
 
-    /// The rider's own changes, where learned at the station, replace the MTA's minimum either way: longer when
-    /// they take longer, shorter where the timetable's figure is a station-wide allowance (Oct 8: 3:00 booked at
-    /// Jay St against 0:17 measured, so every route through it ran three minutes late and ranked behind W 4 St).
+    /// The rider's own changes between the same two platforms, where learned, replace the MTA's minimum either
+    /// way: longer when they take longer, shorter where the timetable's figure is a station-wide allowance (Oct 8:
+    /// 3:00 booked at Jay St against 0:17 measured, so every route through it ran three minutes late and ranked
+    /// behind W 4 St). Not learned yet, a change between platforms far apart takes the walk their distance makes
+    /// (`TransferTiming.platformWalkSec`) where that is longer than the MTA's allowance: at 14 St-8 Av the L is much
+    /// farther from the A than the E is, and the faster change should rank first.
     private func applyPersonalTransfers(_ ps: inout [PathOption]) {
         let pm = PersonalModelStore.shared.model
         for i in ps.indices {
             guard var tr = ps[i].transfer else { continue }
-            let sec = pm.plannedTransferSec(station: tr.station, scheduled: tr.walkSec)
+            var scheduled = tr.walkSec
+            if !tr.acrossPlatform, let m = platformDistanceM(ps[i]) {
+                scheduled = max(scheduled, Int(TransferTiming.platformWalkSec(meters: m, speedMPerMin: pm.walkSpeedMPerMin).rounded()))
+            }
+            let sec = pm.plannedTransferSec(station: tr.station, stops: tr.stopsKey, scheduled: scheduled, acrossPlatform: tr.acrossPlatform)
             if sec != tr.walkSec { ps[i].schedSec += sec - tr.walkSec; tr.walkSec = sec; ps[i].transfer = tr }
         }
+    }
+
+    /// Straight-line metres between the platform a two-leg route gets off at and the one it changes to, from the
+    /// stop coordinates (nil until the geometry is in).
+    private func platformDistanceM(_ p: PathOption) -> Double? {
+        guard p.legs.count == 2, let geo = data.geometry else { return nil }
+        func at(_ leg: PathLeg, end: Bool) -> (lat: Double, lon: Double)? {
+            for k in leg.keys { if let ix = leg.idx[k], let c = geo.lines[k]?.coord(end ? ix.to : ix.from) { return c } }
+            return nil
+        }
+        guard let a = at(p.legs[0], end: true), let b = at(p.legs[1], end: false) else { return nil }
+        return haversineM(a, b)
     }
 
     private func refreshLive() {
@@ -696,6 +738,7 @@ struct PlannerView: View {
             followPlan(now: now)
             trip.observeBoards(data.boards, now: now)
             refreshRideArrival()
+            checkReroute(now: now)
             updateActivity(); updateTelemetry()
             trip.updateForecast(boardTs: headline?.live?.boardTs, arriveTs: headline?.live?.arriveTs, now: now)
             if trip.forecastBoardTs == headline?.live?.boardTs { forecastTrainId = liveId }
@@ -1038,7 +1081,7 @@ struct PlannerView: View {
         forecastTrainId = nil        // another route's train is a choice, not the forecast's train leaving
         let plans = legPlans(p)
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
-        trip.replan(legs: plans, transferStation: p.transfer?.station)
+        trip.replan(legs: plans, transferStation: p.transfer?.station, transferStops: p.transfer?.stopsKey)
         Telemetry.shared.updateRoute(label: p.label, legs: p.legs.map { TripObservation.Leg(line: $0.primaryKey, from: $0.from, to: $0.to) },
                                      transferStation: p.transfer?.station, transferWalkSec: p.transfer.map { Int($0.plannedSec.rounded()) })
         refreshRideArrival()
@@ -1251,6 +1294,92 @@ struct PlannerView: View {
         switchRoute(to: alt)
     }
 
+    // MARK: - a faster route on the way
+
+    /// Where the rider is taken to be on the route in progress: on the way to the first platform (at their pace from
+    /// the last fix), at it, on the train the phone settled on (else the plan's, as the predicted boards move it on,
+    /// offline too), or at the change.
+    private var riderPosition: RiderPosition? {
+        switch trip.phase {
+        case .approaching?: return .toOrigin(reachTs: reachTs)
+        case .atStation?: return .toOrigin(reachTs: nil)
+        case .riding?:
+            let leg = trip.currentLeg
+            if trip.onTrain { return (trip.boardedCandidate ?? plannedTrains[leg]).map { .onTrain(leg: leg, boarded: $0) } }
+            return leg > 0 ? .atChange(leg: leg) : .toOrigin(reachTs: nil)
+        case .arrived?, nil: return nil
+        }
+    }
+
+    private func stationName(_ stop: String) -> String {
+        guard let index = data.index else { return stop }
+        return index.stations[index.stationOf(stop)]?.name ?? stop
+    }
+
+    /// Every poll while the route is on: the routes that go on from where the rider is, timed from there on the trains
+    /// in the feeds, against the route in hand. One that gets them in at least two minutes sooner goes across the top.
+    private func checkReroute(now: Double) {
+        guard let sched = data.schedule, let index = data.index, let sel = headline, let pos = riderPosition else { setReroute(nil); return }
+        if rerouteMore == nil {
+            let listed = Set(paths.map { $0.id })
+            var more = enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 24).filter { !listed.contains($0.id) }
+            applyPersonalTransfers(&more)
+            let hour = nyHour(now)
+            for i in more.indices { evaluate(&more[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour) }
+            rerouteMore = more
+        }
+        let station: (String) -> String = { index.stationOf($0) }
+        let listed = Set(paths.map { $0.id })
+        let ways = (paths + (rerouteMore ?? []).filter { !listed.contains($0.id) }).filter { $0.id != sel.id && continuesFrom($0, current: sel, at: pos, station: station) }
+        // the feeds of the best few ways on by the timetable, so a faster one on another line can show up at all
+        let watched = Array(ways.sorted { $0.expectedSec < $1.expectedSec }.prefix(6))
+        data.setWanted(Set(watched.flatMap { $0.legs.flatMap { $0.keys } }), for: "reroute")
+        guard let f = fasterRoute(current: sel, options: watched, at: pos, boards: data.predictedBoards, schedule: sched, station: station,
+                                  now: now, keeping: reroute?.faster.option.id) else { setReroute(nil); return }
+        if let d = declinedReroutes[f.option.id], f.savedSec < d + Reroute.offerSec { setReroute(nil); return }
+        setReroute(RerouteOffer(faster: f, current: currentItinerary(boards: data.predictedBoards, schedule: sched, option: sel, at: pos, now: now),
+                                currentOption: sel, onTrain: trip.onTrain))
+    }
+
+    private func setReroute(_ o: RerouteOffer?) {
+        if (o == nil) != (reroute == nil) || o?.faster.option.id != reroute?.faster.option.id {
+            withAnimation(.easeInOut(duration: 0.3)) { reroute = o }
+        } else {
+            reroute = o
+        }
+    }
+
+    private func clearReroute() {
+        reroute = nil; showReroute = false; declinedReroutes = [:]; rerouteMore = nil
+        data.setWanted([], for: "reroute")
+    }
+
+    /// The rider takes the faster route: it joins the list if it was one of the planner's further options, the trains
+    /// still to board follow it (the train in hand is kept), and the trip, the card and the Live Activity follow it.
+    private func takeReroute() {
+        guard let o = reroute else { return }
+        let alt = o.faster.option
+        if !paths.contains(where: { $0.id == alt.id }) {
+            extraPaths.append(alt); paths.append(alt)
+            data.setWanted(Set(paths.flatMap { $0.legs.flatMap { $0.keys } }), for: "planner")
+        }
+        let keepFrom = trip.onTrain ? trip.currentLeg + 1 : trip.currentLeg
+        for i in Array(plannedTrains.keys) where i >= keepFrom { plannedTrains[i] = nil }
+        frozenLegs = frozenLegs.filter { $0 < keepFrom }
+        lastSwitchTs = data.now
+        showReroute = false
+        withAnimation(.easeInOut(duration: 0.3)) { reroute = nil }
+        switchRoute(to: alt)
+        refreshLive()
+    }
+
+    /// The rider keeps their route: this faster one stays away unless it gets two minutes better still.
+    private func declineReroute() {
+        guard let o = reroute else { return }
+        declinedReroutes[o.faster.option.id] = o.faster.savedSec
+        withAnimation(.easeInOut(duration: 0.3)) { reroute = nil }
+    }
+
     /// Before a route starts: a walk closing on the origin station at a walking pace, over the last minute or so,
     /// starts the route on the way (the sensors then see the walk, the platform and the pull-away in order).
     private func checkApproach() {
@@ -1356,11 +1485,13 @@ struct PlannerView: View {
         let p = headline
         var tl = TripTimeline(startTs: data.now, startedBy: by, startDistanceM: d, placeId: nearbyPlace()?.id.uuidString,
                               originStation: originId, destStation: destId, transferStation: p?.transfer?.station, legs: p?.legs.count ?? 1)
+        tl.transferStops = p?.transfer?.stopsKey
         tl.forecastBoardTs = p?.live?.boardTs; tl.forecastArriveTs = p?.live?.arriveTs; tl.liveArriveTs = p?.live?.arriveTs
         let obs = (Telemetry.shared.optIn && p != nil) ? observationBase(p!, startedBy: by) : nil
         let plans = legPlans(p)
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
         extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]; forecastTrainId = nil; frozenLegs = []
+        clearReroute()
         trip.stopCoordinate = { [weak data] key, idx in data?.geometry?.lines[key]?.coord(idx) }
         // the scheduled run from the boarding stop to the next, the shortest over the first leg's lines: steps sooner
         // than most of it after a felt pull-away are the stairs, not a ride
@@ -1440,6 +1571,7 @@ struct PlannerView: View {
         data.setWanted([], for: "onTrain")
         loc.stopTracking()
         rideItinerary = nil; plannedTrains = [:]; forecastTrainId = nil; frozenLegs = []
+        clearReroute()
         TripActivityService.shared.end()
         let tl = trip.end(by: by, api: Telemetry.shared.uploadURL(fallback: data.apiBase), now: data.now)
         lastEndTs = data.now; lastEndOrigin = originId
