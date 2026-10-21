@@ -108,7 +108,12 @@ final class TripRecorder {
     var sensing: Bool { sampler.isRunning }
 
     /// The belief about the ride in progress, or the last one.
-    var currentBelief: LineBelief? { beliefs.last }
+    /// Between trains at the change, none: the train just left is not the one in hand (Oct 21 at W 4 St, "not on the
+    /// train" there read as back on the F).
+    var currentBelief: LineBelief? {
+        guard let t = tracker, t.phase == .riding else { return beliefs.last }
+        return t.onTrain ? belief(leg: t.timeline.legsRidden) : nil
+    }
     func belief(leg: Int) -> LineBelief? { beliefs.first { $0.leg == leg } }
     /// The question for the rider, if there is one: the phone is unsure which train they boarded, believes they
     /// boarded one off the plan, or has only assumed the ride. Gone once they answer or wave it away.
@@ -513,6 +518,13 @@ final class TripRecorder {
                     reread(leg)
                     return
                 }
+                // a pull-away at the change before the rider could have reached the next platform: the stairs, not a train
+                if leg >= 1, !handSet.contains(leg), !t.departedByLocation, let la = lastAlight, la.leg == leg - 1,
+                   departureTooSoonAfterChange(departedTs: e.ts, alightedTs: la.ts, walkSec: legs[leg].walkSec) {
+                    tracker?.withdrawDeparture()
+                    seenEvents = tracker?.timeline.events.count ?? 0
+                    return
+                }
                 if t.departedByLocation { locationRides.insert(leg) }
                 let plan = legs[leg]
                 let cands = legCandidates(log, leg: leg, departedTs: e.ts)
@@ -619,7 +631,20 @@ final class TripRecorder {
     }
 
     /// The rider says they are not on a train: the felt departure is withdrawn and the leg starts over at the platform.
+    ///
+    /// Said while the train the phone has them on has already reached the stop the route had them leave it at, they got
+    /// off there unfelt: the ride closes at that stop and the route goes on from the change, with its arrival from the
+    /// connection, rather than starting over at the platform they boarded at.
     func notOnTrain() {
+        let now = lastNow ?? Date().timeIntervalSince1970
+        tracker?.noteNotOnTrain(at: now)
+        if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed, let c = trainInHand,
+           let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs, let at = unfeltAlighting(c, departedTs: dep, now: now) {
+            tracker?.alightStanding(at: at)
+            handleEvents()
+            publish()
+            return
+        }
         let leg = currentLeg
         tracker?.notOnTrain()
         if let i = beliefs.firstIndex(where: { $0.leg == leg }) { beliefs.remove(at: i) }

@@ -32,6 +32,7 @@ struct TripTimeline: Codable, Equatable {
     var rideStops: [Int] = []             // station stops felt on each ride, the alighting stop included
     var boarded: [BoardedLeg] = []        // the train and line each leg was ridden on, as far as the phone could tell
     var withdrawnDepartures: [Double]? = nil   // pull-aways felt that no train made (the platform shaking), withdrawn
+    var notOnTrainTaps: [Double]? = nil   // when the rider said "not on the train" by hand
     var stopSpans: [FeltStop] = []        // every station stop felt on each ride: the train at rest, then moving again
     var beliefLog: [BeliefNote] = []      // each change in the train the phone believes the rider is on, as it happened
 
@@ -152,6 +153,7 @@ struct TripTracker {
     /// The ride in hand began from the phone's movement (moving away from the station at a train's pace), not
     /// from a felt pull-away at the platform.
     private(set) var departedByLocation = false
+    private var declinedBoardTs: Double?  // the forecast train the rider said they did not take: not assumed again
 
     /// Riding and standing at a station since this moment (nil while moving).
     var standingSince: Double? { phase == .riding && quietRun >= stopQuietSec ? quietStartTs : nil }
@@ -352,7 +354,7 @@ struct TripTracker {
         guard phase != .arrived else { return }
         let pa = timeline.liveArriveTs
         if alightedAll, pa == nil || now >= pa! - 120 { finish(now, by: "alighted"); return }
-        if phase == .atStation, let pb = timeline.forecastBoardTs, now >= pb + assumeRideAfterSec, !hasMotion || timeline.platformTs != nil {
+        if phase == .atStation, let pb = timeline.forecastBoardTs, pb != declinedBoardTs, now >= pb + assumeRideAfterSec, !hasMotion || timeline.platformTs != nil {
             phase = .riding
             timeline.rideAssumed = true
             if timeline.platformTs == nil { timeline.platformTs = pb }
@@ -366,7 +368,7 @@ struct TripTracker {
     /// presumably took this one); on the way to the station it keeps following.
     mutating func updateForecast(boardTs: Double?, arriveTs: Double?, now: Double) {
         guard phase != .riding, phase != .arrived else { return }
-        if phase == .atStation, let b = timeline.forecastBoardTs, now >= b { return }
+        if phase == .atStation, let b = timeline.forecastBoardTs, now >= b, b != declinedBoardTs { return }
         timeline.liveArriveTs = arriveTs ?? timeline.liveArriveTs
         timeline.forecastBoardTs = boardTs
         timeline.forecastArriveTs = arriveTs
@@ -423,7 +425,15 @@ struct TripTracker {
     /// The rider says they are not on a train: the departure the sensors felt is withdrawn, they are back at the
     /// station waiting, and the next pull-away counts afresh.
     mutating func notOnTrain() {
-        guard phase == .riding, let last = timeline.events.last, last.kind == .departed else { return }
+        guard phase == .riding else { return }
+        if timeline.rideAssumed, timeline.events.last?.kind != .departed {
+            // a ride assumed from the timetable: the rider let that train go, so the forecast follows the next one again
+            timeline.rideAssumed = false
+            declinedBoardTs = timeline.forecastBoardTs
+            if timeline.events.last?.kind != .alighted { phase = .atStation }
+            return
+        }
+        guard let last = timeline.events.last, last.kind == .departed else { return }
         let ride = rideCount - 1
         timeline.events.removeLast()
         timeline.stopSpans.removeAll { $0.ride == ride }
@@ -443,6 +453,11 @@ struct TripTracker {
         detector.standDown()
         motionState = detector.state
         firstMotionTs = nil                  // the grace period runs again from here
+    }
+
+    /// The rider said "not on the train", kept on the record whatever it changed.
+    mutating func noteNotOnTrain(at ts: Double) {
+        timeline.notOnTrainTaps = (timeline.notOnTrainTaps ?? []) + [ts]
     }
 
     /// The rider says they are on a train already, having left the station at `departedTs` (a route started from

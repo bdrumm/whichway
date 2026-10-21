@@ -906,7 +906,7 @@ struct PlannerView: View {
             }
             if let pr = trip.prompt {
                 boardingPrompt(pr)
-            } else if trip.phase == .riding, trip.currentLegKeys.count > 1 {
+            } else if trip.onTrain, trip.currentLegKeys.count > 1 {
                 lineChooser
             }
         }
@@ -1300,6 +1300,11 @@ struct PlannerView: View {
             return s
         case .atStation: return "At \(originName)"
         case .riding:
+            // off the train: waiting for the connection at the change, or walking off at the end
+            if !trip.onTrain {
+                if let p = headline, trip.currentLeg > 0, trip.currentLeg < p.legs.count, let x = p.transfer?.station { return "Changing at \(x)" }
+                return "Off the train"
+            }
             if let b = trip.currentBelief, b.settled || b.byHand, let r = b.route {
                 if b.verdict == .switched, let c = b.chosenRoute, c != r { return "On the \(r), not the \(c)" }
                 return b.assumed ? "On the \(r), presumably" : "On the \(r)"

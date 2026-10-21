@@ -36,6 +36,22 @@ final class LineInferenceTests: XCTestCase {
         XCTAssertEqual(excludingTrainLeft([g, a], leftTrainId: nil).count, 2)
     }
 
+    func testNotOnTheTrainOnceItReachedTheChangeMeansOffThereUnfelt() {
+        // Oct 21: on the F to W 4 St (stop 20), its time there 2000 by the feed; "not on the train" at 2100 is the rider
+        // off at W 4 St, not back at the platform they boarded at
+        var f = cand("f1", key: "F_N", board: 1000, alight: 2000, chosen: true)
+        f.boardIdx = 10; f.alightIdx = 20; f.stopTs = [19: 1900, 20: 2000]
+        let off = unfeltAlighting(f, departedTs: 1000, now: 2100)
+        XCTAssertEqual(off, PlatformTiming.atPlatform(2000, route: "F"))
+        XCTAssertNil(unfeltAlighting(f, departedTs: 1000, now: 1500), "still short of the change: a ride that was not one")
+        f.stopTs = [19: 1900]; f.alightTs = nil; f.progressIdx = 21
+        XCTAssertEqual(unfeltAlighting(f, departedTs: 1000, now: 2100), 2100, "the feed has it past the change")
+        // a pull-away at the change sooner than half the walk to the next platform is the stairs, not a train
+        XCTAssertTrue(departureTooSoonAfterChange(departedTs: 2050, alightedTs: 2000, walkSec: 150))
+        XCTAssertFalse(departureTooSoonAfterChange(departedTs: 2100, alightedTs: 2000, walkSec: 150))
+        XCTAssertFalse(departureTooSoonAfterChange(departedTs: 2010, alightedTs: 2000, walkSec: 0), "across the platform")
+    }
+
     func testADepartureThatMatchesTheOtherLineOverridesThePrior() {
         // the plan was the F, due at 1200; the G reached the platform at 1000 and the train left at 1030
         let c = [cand("f1", key: "F_N", board: 1200, chosen: true), cand("g1", key: "G_N", board: 1000)]

@@ -16,6 +16,25 @@ func excludingTrainLeft(_ cands: [BoardingCandidate], leftTrainId: String?) -> [
     return cands.filter { $0.trainId != id }
 }
 
+/// The rider says they are not on a train while the train the phone has them on has already reached the stop the route
+/// had them leave it at, by the feed (its time there, put back to the platform moment, has passed, or the feed has it
+/// beyond): they got off there and the walk-off went unfelt, so the route goes on from the change (or the trip is over),
+/// not back to the platform they boarded at. The moment they got off, else nil.
+func unfeltAlighting(_ c: BoardingCandidate, departedTs: Double, now: Double) -> Double? {
+    guard let off = c.alightIdx else { return nil }
+    let at = (c.stopTs[off] ?? c.alightTs).map { PlatformTiming.atPlatform($0, route: c.route) }
+    if let at = at, at > departedTs, at <= now { return at }
+    if let p = c.progressIdx, p > off { return min(now, max(departedTs, at ?? now)) }
+    return nil
+}
+
+/// A pull-away felt at a change sooner after the walk-off than `fraction` of the planned walk to the next platform: the
+/// stairs or the passage, not a train (Oct 21 at W 4 St: off the F, then asked about the C before any train was taken).
+/// Not for a change across the platform (no walk planned).
+func departureTooSoonAfterChange(departedTs: Double, alightedTs: Double, walkSec: Double, fraction: Double = 0.5) -> Bool {
+    walkSec > 0 && departedTs - alightedTs < fraction * walkSec
+}
+
 /// A train the rider could have boarded on one leg of the route: the line it runs, the feed's time at the
 /// boarding stop (the last one published before the train moved on), the station stops it makes to the alighting
 /// stop and the feed's time there.
