@@ -104,13 +104,16 @@ struct PlannerView: View {
             applyHabit()
             autoApply()
         }
-        .onChange(of: originId) { _, _ in resetTrip(); recompute() }
-        .onChange(of: destId) { _, _ in resetTrip(); recompute() }
+        // a station picked (the nearest one resolved, a commute applied) or the station map in: the rider may be
+        // standing at the origin already, so the route starts now rather than at the next fix or poll
+        .onChange(of: originId) { _, _ in resetTrip(); recompute(); checkArrival() }
+        .onChange(of: destId) { _, _ in resetTrip(); recompute(); checkArrival() }
         .onChange(of: data.staticVersion) { _, _ in
             recompute()
             autoApply()
             applyHabit()
             resolveNearest()
+            checkArrival()
         }
         .onChange(of: data.tick) { _, _ in refreshLive(); pollLocation() }
         .onChange(of: data.scenario) { _, _ in refreshLive() }
