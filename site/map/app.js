@@ -198,7 +198,7 @@ async function initMap() {
   map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: false }, trackUserLocation: false }), "bottom-right");
   map.on("style.load", () => { addLayers(); mapReady = true; if (E && Object.keys(E.lines).length) { drawStatic(); renderAll(); } });
   bindMapEvents();
-  setInterval(() => { if (mapReady && E) { drawTrains(); pulse(); } }, 250);
+  setInterval(() => { if (mapReady && E) { if (!easeRaf) drawTrains(); pulse(); } }, 250);
 }
 async function setBasemap() { if (!map) return; mapReady = false; map.setStyle(await styleFor(isDark()), { diff: false }); }
 
@@ -275,7 +275,7 @@ function trainFill(t, pal) {
   return routeColor(t.route);
 }
 function currentPositions() {
-  if (S.replay != null) return E.positionsAt(S.replay).trains;
+  if (shownT != null) return E.positionsAt(shownT).trains;
   const age = E.age();
   return E.trains.map(t => { const p = t.progress(age); return { id: t.id, key: t.key, route: t.route, dir: t.dir, idx: p.idx, state: p.state, late: t.late, kind: t.kind, track: t.track_changed, optimistic: t.corroboration === "feed_optimistic" }; });
 }
@@ -811,30 +811,78 @@ function renderSystem(body) {
 }
 
 // ---------------------------------------------------------------- timeline: replay today
+// S.replay is where the handle sits; the map shows `shownT`, which eases toward it every frame, so dragging the
+// handle slides the trains along the track instead of jumping them. A rebuild waits while the handle is held.
+let shownT = null, easeRaf = 0, lastFrame = 0, dragging = false, tlPending = false, tl = null;
+const TL_SPAN = 86400;
 function renderTimeline() {
   const el = $("#timeline"); if (!E || !E.trains) return;
-  const now = E.now(), day0 = nyDayStart(now), span = 86400, xp = ts => `${Math.max(0, Math.min(100, (ts - day0) / span * 100))}%`;
+  if (dragging) { tlPending = true; return; }
+  const now = E.now(), day0 = nyDayStart(now), xp = ts => `${Math.max(0, Math.min(100, (ts - day0) / TL_SPAN * 100))}%`;
+  const hadFocus = !!tl && document.activeElement === tl.track, kbd = hadFocus && tl.track.classList.contains("kbd");
   el.replaceChildren();
   const top = h("div", "tl-top", null, el);
-  const ttl = h("span", null, null, top);
-  if (S.replay == null) { h("b", null, "Today", ttl); h("span", "tl-desc", " · drag the timeline to replay train positions", ttl); }
-  else { h("b", null, `Replaying ${hhmm(S.replay)}`, ttl); h("span", "tl-desc", E.history.length && S.replay >= E.history[0].ts ? " · recorded live positions" : " · scheduled positions (before this page opened)", ttl); }
+  const ttl = h("span", null, null, top), title = h("b", null, null, ttl), desc = h("span", "tl-desc", null, ttl);
   const sp = h("span", null, null, top); sp.style.flex = "1";
   h("span", null, "Bars: disruptions by hour (archive average) · red ticks: live incidents", top).className = "hide-sm";
-  const back = h("button", "btn", "−15 min", top); back.type = "button"; back.addEventListener("click", () => setReplay((S.replay ?? now) - 900));
-  const live = h("button", `btn${S.replay == null ? " primary" : ""}`, "Live", top); live.type = "button"; live.addEventListener("click", () => setReplay(null));
+  const back = h("button", "btn", "−15 min", top); back.type = "button"; back.addEventListener("click", () => setReplay((S.replay ?? E.now()) - 900));
+  const live = h("button", "btn", "Live", top); live.type = "button"; live.addEventListener("click", () => setReplay(null));
   const track = h("div", "tl-track", null, el);
+  track.tabIndex = 0; track.setAttribute("role", "slider"); track.setAttribute("aria-label", "Replay time");
   const bars = h("div", "tl-bars", null, track); const by = (D.climatology && D.climatology.per_week_by_hour) || Array(24).fill(1); const mx = Math.max(...by, 1e-9);
   by.forEach((v, i) => { const b = h("span", day0 + (i + 1) * 3600 <= now ? "past" : "", null, bars); b.style.height = `${Math.max(4, v / mx * 100)}%`; b.title = `${String(i).padStart(2, "0")}:00 · ${v.toFixed(1)} disruptions a week on average`; });
   if (E.history.length) { const r = h("div", "tl-range", null, track); r.style.left = xp(E.history[0].ts); r.style.width = `calc(${xp(now)} - ${xp(E.history[0].ts)})`; r.title = "Recorded live positions"; }
   for (const ev of E.events) { const m = h("div", "tl-ev", null, track); m.style.left = xp(ev.first_ts); m.title = ev.title; }
-  const head = h("div", "tl-head", null, track); head.style.left = xp(S.replay ?? now);
+  const head = h("div", "tl-head", null, track), tip = h("span", "tl-tip mono", null, head);
   const axis = h("div", "tl-axis", null, track); for (const t of ["00:00", "06:00", "12:00", "18:00", "24:00"]) h("span", null, t, axis);
-  const scrub = ev => { const r = track.getBoundingClientRect(); const ts = day0 + Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * span; setReplay(ts >= now - 20 ? null : ts); };
-  track.addEventListener("pointerdown", ev => { track.setPointerCapture(ev.pointerId); scrub(ev); track.onpointermove = scrub; });
-  track.addEventListener("pointerup", () => { track.onpointermove = null; });
+  tl = { title, desc, live, head, tip, track, day0, xp, kbd };
+  updateTimeline();
+  if (hadFocus) { track.focus({ preventScroll: true }); track.classList.toggle("kbd", tl.kbd); }
+
+  const at = ev => { const r = track.getBoundingClientRect(); return day0 + Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * TL_SPAN; };
+  const end = ev => { if (!dragging) return; dragging = false; track.classList.remove("dragging"); try { track.releasePointerCapture(ev.pointerId); } catch {} if (tlPending) { tlPending = false; renderTimeline(); } };
+  track.addEventListener("pointerdown", ev => { if (ev.button) return; ev.preventDefault(); dragging = true; track.classList.add("dragging"); track.classList.remove("kbd"); track.setPointerCapture(ev.pointerId); track.focus({ preventScroll: true }); setReplay(at(ev)); });
+  track.addEventListener("pointermove", ev => { if (dragging) setReplay(at(ev)); });
+  track.addEventListener("pointerup", end); track.addEventListener("pointercancel", end); track.addEventListener("lostpointercapture", end);
+  track.addEventListener("keydown", ev => {
+    const step = ev.shiftKey ? 900 : 60, cur = S.replay ?? E.now();
+    if (ev.key === "ArrowLeft") setReplay(cur - step); else if (ev.key === "ArrowRight") setReplay(cur + step);
+    else if (ev.key === "Home") setReplay(day0); else if (ev.key === "End" || ev.key === "Escape") setReplay(null); else return;
+    ev.preventDefault(); track.classList.add("kbd");
+  });
 }
-function setReplay(ts) { const now = E.now(); S.replay = ts == null || ts >= now - 20 ? null : Math.max(nyDayStart(now), ts); drawTrains(); renderTimeline(); renderModePill(); }
+/** Moves the handle and relabels the bar in place, so a drag never rebuilds the element it is holding. */
+function updateTimeline() {
+  if (!tl || !E) return;
+  const now = E.now(), t = S.replay ?? now;
+  tl.head.style.left = tl.xp(t); tl.tip.textContent = hhmm(t);
+  tl.track.setAttribute("aria-valuetext", S.replay == null ? `Live, ${hhmm(now)}` : hhmm(t));
+  tl.live.classList.toggle("primary", S.replay == null);
+  tl.title.textContent = S.replay == null ? "Today" : `Replaying ${hhmm(S.replay)}`;
+  tl.desc.textContent = S.replay == null ? " · drag the timeline to replay train positions"
+    : E.history.length && S.replay >= E.history[0].ts ? " · recorded live positions" : " · scheduled positions (before this page opened)";
+}
+function setReplay(ts) {
+  const now = E.now();
+  S.replay = ts == null || ts >= now - 20 ? null : Math.max(nyDayStart(now), ts);
+  updateTimeline(); renderModePill(); easeReplay();
+}
+/** Glides the shown time to the handle: about 0.1 s to settle on a nearby minute, a little longer across hours. */
+function easeReplay() {
+  if (easeRaf) return;
+  if (shownT == null && S.replay == null) { drawTrains(); return; }
+  lastFrame = performance.now();
+  const step = t => {
+    const dt = Math.min(64, t - lastFrame); lastFrame = t;
+    const now = E.now(), target = S.replay ?? now, from = shownT ?? now;
+    let next = from + (target - from) * (1 - Math.exp(-dt / 90));
+    if (Math.abs(target - next) < 2) next = target;
+    shownT = S.replay == null && next === target ? null : next;
+    drawTrains();
+    easeRaf = next === target ? 0 : requestAnimationFrame(step);
+  };
+  easeRaf = requestAnimationFrame(step);
+}
 
 // ---------------------------------------------------------------- boot
 const { base, source } = await resolveDataBase();
