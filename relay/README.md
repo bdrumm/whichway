@@ -48,6 +48,8 @@ repository, 401 that the token is wrong).
 |---|---|
 | `POST /v1/trips` | body: one trip observation, as the app records it (JSON) |
 | `POST /v1/traces` | body: one motion trace (JSON, `startTs`, `columns`, `seconds`) |
+| `POST /v1/reports` | body: one rider report (JSON: `id`, `ts`, `kind`, `route`, `stop`, optional `sub`, `dir`, `trip`, `source`, `confidence`) |
+| `GET /v1/reports?since=<ts>` | the rider reports of the last two days from `since` (default the last two hours); public, CORS open, no key |
 | `GET /v1/health` | `{ok, repo, configured}` |
 
 Headers: `X-WhichWay-Key` (the app key) and `X-WhichWay-Install` (the phone's random telemetry id). Replies:
@@ -55,6 +57,24 @@ Headers: `X-WhichWay-Key` (the app key) and `X-WhichWay-Install` (the phone's ra
 replaces the file), 400 for a body the review could not use, 401 for a wrong key, 413 over size (256 KB for a
 trip, 4 MB for a trace), 429 too many (60 a minute per phone, 120 per address), 502 when GitHub refused the
 write (the reply says why: usually the token).
+
+## Rider reports
+
+A rider can report what they see (`held`, `delay`, `moving`, `long_wait`, `crowded`, `incident`, `skipped`,
+`all_good`), pinned to the line, direction and stop the app detected. The relay replaces the phone's install id with
+two keyed hashes before anything is stored: `reporter`, stable, only in the archived file
+(`reports/<y>/<m>/<d>/<ts>-<id>.json` in the data repository), so the pipeline can learn whose reports the feed
+backs up; and `rider`, which changes every New York day, in the public list, enough to count distinct riders. The
+same rider, kind and stop again within two minutes is answered 200 `repeat` and stored nowhere. Ten reports a
+minute per phone (`RATE_REPORT`).
+
+The public list the Atlas map reads lives in Workers KV. Once:
+
+    npx wrangler kv namespace create REPORTS      # paste the id into the commented [[kv_namespaces]] in wrangler.toml
+    openssl rand -hex 24 | npx wrangler secret put REPORT_SALT
+
+Without the KV binding reports are still archived and the list is empty; without `REPORT_SALT` the hashes are keyed
+with the app key.
 
 ## What it does not do
 
