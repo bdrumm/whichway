@@ -37,10 +37,10 @@ export function makeLoader(base) {
 }
 
 // ---------------------------------------------------------------- schedule positions (fallback)
-const cumRun = line => { const c = [0]; for (let i = 0; i < line.stops.length - 1; i++) c.push(c[i] + (line.run_sec[i] ?? 90)); return c; };
+export const cumRun = line => { const c = [0]; for (let i = 0; i < line.stops.length - 1; i++) c.push(c[i] + (line.run_sec[i] ?? 90)); return c; };
 
 /** Trains of one line where today's schedule puts them at ``now``: [{trip_id, idx, points}] */
-function scheduledTrains(line, entries, cum, now) {
+export function scheduledTrains(line, entries, cum, now) {
   const out = [];
   for (const [stem, li, ts] of entries || []) {
     const c = cum[li] - (ts - now);           // scheduled running seconds covered from the first stop
@@ -62,7 +62,7 @@ function scheduledTrains(line, entries, cum, now) {
  */
 export function createEngine({ base, load, onUpdate, onStatus }) {
   const E = { schedule: null, lineSched: {}, geometry: {}, lines: {}, trains: [], events: [], stations: null, alerts: null, alertsError: null,
-    mode: "loading", boardNow: 0, wallAtBoard: 0, demoOffset: 0, feedTs: null, feedInfo: [], failedFeeds: new Set(), polls: 0, model: null };
+    mode: "loading", boardNow: 0, wallAtBoard: 0, demoOffset: 0, feedTs: null, feedInfo: [], failedFeeds: new Set(), polls: 0, model: null, history: [], startedAt: Date.now() / 1000 };
   const active = new Map();   // event key -> event (open events, updated in place)
 
   E.now = () => Date.now() / 1000 + E.demoOffset;
@@ -110,7 +110,26 @@ export function createEngine({ base, load, onUpdate, onStatus }) {
     }
     E.trains = trains;
     detect(now);
+    // replay history: where every train was at this poll (positions only, kept for two hours)
+    E.history.push({ ts: now, mode: E.mode, trains: trains.map(t => { const p = t.progress(0); return { id: t.id, key: t.key, route: t.route, dir: t.dir, idx: p.idx, state: p.state, late: t.late, kind: t.kind }; }) });
+    while (E.history.length && E.history[0].ts < now - 7200) E.history.shift();
   }
+
+  /** Train positions at a past moment: interpolated between the recorded polls around it, else today's schedule. */
+  E.positionsAt = t => {
+    const H = E.history;
+    if (H.length && t >= H[0].ts) {
+      let i = H.length - 1; while (i > 0 && H[i].ts > t) i--;
+      const a = H[i], b = H[i + 1];
+      if (!b) return { source: a.mode, trains: a.trains };
+      const f = (t - a.ts) / Math.max(1, b.ts - a.ts), nb = new Map(b.trains.map(x => [x.id, x]));
+      return { source: a.mode, trains: a.trains.map(x => { const y = nb.get(x.id); return y && y.idx >= x.idx ? { ...x, idx: x.idx + f * (y.idx - x.idx) } : x; }) };
+    }
+    const trains = [];
+    for (const L of Object.values(E.lines)) for (const s of scheduledTrains(L.line, E.lineSched[L.key], L.cum, t))
+      trains.push({ id: `${L.key}|${s.trip_id}`, key: L.key, route: L.route, dir: L.dir, idx: s.idx, state: "scheduled", late: null, kind: "scheduled" });
+    return { source: "scheduled", trains };
+  };
 
   // ---- live insights: open an event when a condition appears, keep it updated, close it when it clears
   function upsert(key, now, make) {
@@ -140,7 +159,7 @@ export function createEngine({ base, load, onUpdate, onStatus }) {
         const ca = L.cum[Math.floor(a.idx)] + (a.idx % 1) * ((L.cum[Math.floor(a.idx) + 1] ?? L.cum[Math.floor(a.idx)]) - L.cum[Math.floor(a.idx)]);
         const cb = L.cum[Math.floor(b.idx)] + (b.idx % 1) * ((L.cum[Math.floor(b.idx) + 1] ?? L.cum[Math.floor(b.idx)]) - L.cum[Math.floor(b.idx)]);
         const gap = ca - cb;
-        if (gap >= Math.max(2.2 * L.hw, 720)) upsert(`gap|${L.key}|${b.t.trip_id}`, now, () => ({ kind: "gap", severity: gap >= 3 * L.hw ? "high" : "medium", route: L.route, lineKey: L.key, trainId: `${L.key}|${b.t.trip_id}`,
+        if (b.idx >= 2 && gap >= Math.max(2.5 * L.hw, 900)) upsert(`gap|${L.key}|${b.t.trip_id}`, now, () => ({ kind: "gap", severity: gap >= 3 * L.hw ? "high" : "medium", route: L.route, lineKey: L.key, trainId: `${L.key}|${b.t.trip_id}`,
           stopIdx: Math.round((a.idx + b.idx) / 2), title: `${Math.round(gap / 60)} min gap in ${L.route} service`, text: `Between ${L.line.names[Math.ceil(b.idx)]} and ${L.line.names[Math.ceil(a.idx)]} toward ${L.terminus} · scheduled every ${Math.round(L.hw / 60)} min`, gap }));
       }
     }
