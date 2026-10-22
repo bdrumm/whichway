@@ -4,6 +4,7 @@ import { fmt, stringline, heatmap, lineChart, barChart } from "../charts.js";
 import { enumeratePaths, pathTrips } from "../rt-client.js";
 import { resolveDataBase, makeLoader, createEngine, routeHealth, baseRoute, routeColor, routeSort, DARK_TEXT } from "./engine.js";
 import { bboxOf } from "./geo.js";
+import { relayAddress, createReportsSource, liveReports, groupReports, matchDetections, demoReports, groupTitle, stopIndex } from "./reports.js";
 
 // ---------------------------------------------------------------- small helpers
 const $ = s => document.querySelector(s);
@@ -38,26 +39,29 @@ function richText(text, parent) { // **bold** and [ROUTE] markup from the digest
 function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, ms); }
 
 // ---------------------------------------------------------------- state
-const S = { colorBy: "route", layers: { trains: true, stations: true, labels: true, hotspots: false, incidents: true },
+const S = { colorBy: "route", layers: { trains: true, stations: true, labels: true, hotspots: false, incidents: true, reports: true }, reportsDemo: false,
   line: null, dir: "S", train: null, follow: false, station: null, tab: "feed", feed: "all", from: null, to: null, opt: 0, replay: null, lineSort: "map" };
 const D = {};          // published tables
 let load = null, dataBase = "", dataSource = "";
 let E = null, map = null, mapReady = false, health = new Map(), stopLngLat = new Map();
+let R = null, riders = { groups: [], byEvent: new Map(), byGroup: new Map() };   // rider reports (reports.js)
 
 function onEngine() {
   if (!stopLngLat.size) for (const L of Object.values(E.lines)) L.line.stops.forEach((s, i) => { if (!stopLngLat.has(s)) stopLngLat.set(s, L.geo.stop(i)); });
   health = routeHealth(E);
+  computeRiders();
   if (mapReady && !map.getSource("lines").__filled) drawStatic();
   renderAll();
   if (S.follow && S.train) followTrain();
 }
-function renderAll() { renderHeader(); renderLeft(); renderRight(); renderInspector(); renderTimeline(); drawIncidents(); }
+function renderAll() { renderHeader(); renderLeft(); renderRight(); renderInspector(); renderTimeline(); drawIncidents(); drawReports(); }
 
 // ---------------------------------------------------------------- URL state
 function readHash() {
   const q = new URLSearchParams(location.hash.slice(1));
   if (q.get("line")) S.line = q.get("line"); if (q.get("dir")) S.dir = q.get("dir");
   if (q.get("station")) S.station = q.get("station"); if (q.get("tab")) S.tab = q.get("tab");
+  if (q.get("reports") === "demo") S.reportsDemo = true;
   if (q.get("from")) S.from = q.get("from"); if (q.get("to")) S.to = q.get("to");
 }
 function writeHash() {
@@ -65,6 +69,7 @@ function writeHash() {
   if (S.line) { q.set("line", S.line); q.set("dir", S.dir); }
   if (S.station) q.set("station", S.station);
   if (S.tab !== "feed") q.set("tab", S.tab);
+  if (S.reportsDemo) q.set("reports", "demo");
   if (S.from) q.set("from", S.from); if (S.to) q.set("to", S.to);
   history.replaceState(null, "", `${location.pathname}${location.search}${q.toString() ? "#" + q : ""}`);
 }
@@ -204,7 +209,7 @@ async function setBasemap() { if (!map) return; mapReady = false; map.setStyle(a
 
 function addLayers() {
   const fc = { type: "FeatureCollection", features: [] };
-  for (const id of ["lines", "path", "stations", "trains", "incidents", "hotspots"]) if (!map.getSource(id)) map.addSource(id, { type: "geojson", data: fc });
+  for (const id of ["lines", "path", "stations", "trains", "incidents", "hotspots", "reports"]) if (!map.getSource(id)) map.addSource(id, { type: "geojson", data: fc });
   const dark = isDark();
   map.addLayer({ id: "lines", type: "line", source: "lines", layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": ["get", "color"], "line-width": ["interpolate", ["linear"], ["zoom"], 9, 1.6, 12, 3, 15, 6], "line-opacity": 0.9,
@@ -224,6 +229,14 @@ function addLayers() {
     paint: { "text-color": dark ? "#c8d2dd" : "#3b424b", "text-halo-color": dark ? "#0e1116" : "#ffffff", "text-halo-width": 1.4 } });
   map.addLayer({ id: "incident-pulse", type: "circle", source: "incidents", filter: ["==", ["geometry-type"], "Point"],
     paint: { "circle-color": "transparent", "circle-stroke-color": ["match", ["get", "severity"], "high", cssVar("--status-critical"), cssVar("--status-warning")], "circle-stroke-width": 2, "circle-radius": 14, "circle-stroke-opacity": 0.8 } });
+  map.addLayer({ id: "reports", type: "circle", source: "reports",
+    paint: { "circle-color": ["case", ["==", ["get", "verdict"], "disputes"], cssVar("--status-good"), ["get", "good"], cssVar("--status-good"), cssVar("--status-warning")],
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, ["+", 5, ["*", 1.5, ["min", ["get", "count"], 6]]], 15, ["+", 9, ["*", 2, ["min", ["get", "count"], 6]]]],
+      "circle-stroke-color": dark ? "#0e1116" : "#ffffff", "circle-stroke-width": 2, "circle-opacity": ["case", ["get", "demo"], 0.55, 0.9],
+      "circle-translate": [0, -14] } });
+  map.addLayer({ id: "report-labels", type: "symbol", source: "reports",
+    layout: { "text-field": ["to-string", ["get", "count"]], "text-font": FONT, "text-size": 11, "text-allow-overlap": true, "text-ignore-placement": true },
+    paint: { "text-color": "#15181c", "text-translate": [0, -14] } });
   map.addLayer({ id: "trains", type: "circle", source: "trains",
     paint: { "circle-color": ["get", "fill"], "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, ["case", ["get", "sel"], 6, 2.6], 12, ["case", ["get", "sel"], 11, 6], 15, ["case", ["get", "sel"], 14, 10]],
       "circle-stroke-color": ["get", "ring"], "circle-stroke-width": ["case", ["get", "sel"], 3, ["get", "ringW"]], "circle-opacity": ["get", "op"], "circle-stroke-opacity": ["get", "op"] } });
@@ -239,6 +252,7 @@ function applyLayerVisibility() {
   set("trains", S.layers.trains); set("train-labels", S.layers.trains && S.layers.labels);
   set("stations", S.layers.stations); set("station-labels", S.layers.stations);
   set("hotspots", S.layers.hotspots); set("incident-pulse", S.layers.incidents); set("incident-lines", S.layers.incidents);
+  set("reports", S.layers.reports); set("report-labels", S.layers.reports);
   if (S.layers.hotspots) drawHotspots();
 }
 
@@ -305,6 +319,41 @@ function drawIncidents() {
   for (const pw of prewarnings()) { const seg = segmentCoords(pw.route, pw.direction, pw.from_stop, pw.to_stop); if (seg) feats.push({ type: "Feature", properties: { severity: "medium" }, geometry: { type: "LineString", coordinates: seg } }); }
   map.getSource("incidents").setData({ type: "FeatureCollection", features: feats });
 }
+// ---------------------------------------------------------------- rider reports
+/** The reports on the map now (the relay's, plus the labelled samples in demo mode), grouped and set against the detections. */
+function computeRiders() {
+  if (!E || !R) return;
+  const now = E.now();
+  const all = (R.reports || []).concat(S.reportsDemo ? demoReports(E.events, E.lines, now) : []);
+  const groups = groupReports(liveReports(all, now, R.ttl));
+  riders = { groups, ...matchDetections(groups, E.events, E.lines) };
+}
+/** Where a group sits: its stop on its line (either direction when the report had none). */
+function groupPlace(gr) {
+  for (const k of gr.lineKey ? [gr.lineKey] : [`${gr.route}_N`, `${gr.route}_S`]) {
+    const L = E.lines[k]; if (!L) continue; const i = stopIndex(L, gr.stop);
+    if (i >= 0) return { L, i, ll: L.geo.stop(i), name: L.line.names[i] };
+  }
+  const ll = stopLngLat.get(gr.stop) || stopLngLat.get(gr.stop + "N") || stopLngLat.get(gr.stop + "S"); return ll ? { L: null, i: -1, ll, name: gr.stop } : null;
+}
+function drawReports() {
+  if (!mapReady || !E || !map.getSource("reports")) return;
+  const feats = [];
+  for (const gr of riders.groups) { const p = groupPlace(gr); if (!p) continue; const m = riders.byGroup.get(gr.id) || {};
+    feats.push({ type: "Feature", properties: { id: gr.id, count: gr.count, kind: gr.kind, good: gr.kind === "all_good" || gr.kind === "moving", verdict: m.verdict || "", demo: gr.demo }, geometry: { type: "Point", coordinates: p.ll } }); }
+  map.getSource("reports").setData({ type: "FeatureCollection", features: feats });
+}
+function riderVerdictText(gr, now) {
+  const m = riders.byGroup.get(gr.id) || {}, ev = m.event;
+  if (ev && m.verdict === "confirms") return `Backs up what Whichway detected ${ago(ev.first_ts, now)}: ${ev.title}`;
+  if (ev && m.verdict === "disputes") return `Disputes what Whichway detected: ${ev.title}`;
+  if (gr.kind === "all_good" || gr.kind === "moving" || gr.kind === "crowded") return "The feeds have no measure for this: riders are the only source";
+  return "No sign of this in the feeds yet: Whichway is watching the next trains here";
+}
+function startReports() {
+  R = createReportsSource({ relay: relayAddress(), demo: S.reportsDemo, onChange: () => { computeRiders(); if (mapReady) drawReports(); if (S.tab === "feed") renderRight(); } }).start();
+}
+
 function segmentCoords(route, dir, a, b) {
   const L = E.lines[`${route}_${dir}`]; if (!L) return null;
   const i = L.line.stops.indexOf(a), k = L.line.stops.indexOf(b); if (i < 0 || k < 0) return null;
@@ -602,8 +651,10 @@ function prewarnings() { const pw = (D.alerts && D.alerts.prewarnings) || []; co
 
 function feedItems() {
   const now = E.now(), items = [];
-  for (const ev of E.events) items.push({ cat: "live", ts: ev.first_ts, open: ev.open, route: ev.route, title: ev.title, text: ev.open ? ev.text : `${ev.text} · cleared ${ago(ev.ended_ts, now)}`,
-    meta: ev.open ? `Live · ${ago(ev.first_ts, now)}` : "Cleared", metaCls: ev.open ? "live" : "", go: () => { if (ev.trainId && E.trainById(ev.trainId)) selectTrain(ev.trainId); else { S.dir = ev.lineKey.split("_")[1]; selectLine(baseRoute(ev.route)); } } });
+  for (const ev of E.events) { const rv = riders.byEvent.get(ev.key);
+    const backed = rv ? [rv.confirm ? `confirmed by ${rv.confirm} rider${rv.confirm > 1 ? "s" : ""}` : "", rv.dispute ? `${rv.dispute} rider${rv.dispute > 1 ? "s" : ""} say${rv.dispute > 1 ? "" : "s"} all is well` : ""].filter(Boolean).join(", ") : "";
+    items.push({ cat: "live", ts: ev.first_ts, open: ev.open, route: ev.route, title: ev.title, text: ev.open ? ev.text : `${ev.text} · cleared ${ago(ev.ended_ts, now)}`, disputed: rv && rv.dispute > rv.confirm,
+    meta: (ev.open ? `Live · ${ago(ev.first_ts, now)}` : "Cleared") + (backed ? ` · ${backed}` : ""), metaCls: ev.open ? "live" : "", go: () => { if (ev.trainId && E.trainById(ev.trainId)) selectTrain(ev.trainId); else { S.dir = ev.lineKey.split("_")[1]; selectLine(baseRoute(ev.route)); } } }); }
   for (const p of prewarnings()) items.push({ cat: "live", ts: p.onset_ts, open: true, route: p.route, title: `Slowdown building on the ${p.route}, ahead of any MTA alert`,
     text: `${p.where}: ${p.n_slow} of ${p.n_trains} trains slow, ${p.loss_sec} s lost. ${pct(p.p_alert_60)} chance of an alert within the hour.`, meta: `Early warning · as of ${hhmm(D.alerts.generated_at ? Date.parse(D.alerts.generated_at) / 1000 : p.onset_ts)}`, metaCls: "warn",
     go: () => { const seg = segmentCoords(p.route, p.direction, p.from_stop, p.to_stop); if (seg) map.fitBounds(bboxOf(seg), { padding: 120, maxZoom: 15 }); S.dir = p.direction; selectLine(baseRoute(p.route), { fit: false }); } });
@@ -613,6 +664,10 @@ function feedItems() {
   if (D.live && D.live.stations && now - D.live.generated_ts < 5400) for (const st of D.live.stations) for (const ef of st.effects || [])
     items.push({ cat: "live", ts: D.live.generated_ts, open: true, route: ef.route_id, title: st.label, text: ef.text, meta: `Platform forecast · as of ${hhmm(D.live.generated_ts)}`, metaCls: "warn",
       go: () => { const sid = E.stations.stationOf(st.stop_id); selectStation(sid, true); } });
+  for (const gr of riders.groups) { const p = groupPlace(gr);
+    items.push({ cat: "riders", ts: gr.last_ts, open: true, route: gr.route, title: `${groupTitle(gr)} at ${p ? p.name : gr.stop}`, text: riderVerdictText(gr, now),
+      meta: `Riders · ${ago(gr.last_ts, now)}${gr.demo ? " · sample" : ""}`, metaCls: gr.kind === "all_good" ? "" : "warn",
+      go: () => { if (p && p.L) { S.dir = p.L.dir; selectLine(baseRoute(gr.route), { fit: false }); map.flyTo({ center: p.ll, zoom: Math.max(map.getZoom(), 14) }); } } }); }
   for (const it of (D.digest && D.digest.items) || []) {
     const m = /^\*\*([A-Z0-9]+) (north|south)bound\*\*/i.exec(it.text);
     items.push({ cat: "research", ts: 0, open: true, route: m ? m[1] : null, header: it.text, meta: `Research · ${it.kind.replace(/_/g, " ")}`, metaCls: "research",
@@ -622,18 +677,19 @@ function feedItems() {
 }
 function renderFeed(body) {
   const all = feedItems();
-  const counts = { all: all.length, live: all.filter(i => i.cat === "live" && i.open).length, alerts: all.filter(i => i.cat === "alerts").length, research: all.filter(i => i.cat === "research").length };
+  const counts = { all: all.length, live: all.filter(i => i.cat === "live" && i.open).length, riders: all.filter(i => i.cat === "riders").length, alerts: all.filter(i => i.cat === "alerts").length, research: all.filter(i => i.cat === "research").length };
   const chips = h("div", "chips-row", null, body);
-  for (const [k, lab] of [["all", "All"], ["live", "Live"], ["alerts", "MTA alerts"], ["research", "Research"]]) {
+  for (const [k, lab] of [["all", "All"], ["live", "Live"], ["riders", "Riders"], ["alerts", "MTA alerts"], ["research", "Research"]]) {
     const c = h("button", `chip${S.feed === k ? " on" : ""}`, lab, chips); c.type = "button"; h("span", "c", String(counts[k]), c);
     c.addEventListener("click", () => { S.feed = k; renderRight(); });
   }
-  const order = { live: 0, alerts: 1, research: 2 };
+  const order = { live: 0, riders: 1, alerts: 2, research: 3 };
   const shown = all.filter(i => S.feed === "all" || i.cat === S.feed).sort((a, b) => (b.open - a.open) || order[a.cat] - order[b.cat] || (a.rank || 0) - (b.rank || 0) || b.ts - a.ts);
-  if (!shown.length) h("div", "empty-s", S.feed === "live" ? "Nothing unusual right now: no held, stalled or gapped trains across the network." : "Nothing here yet.", body);
+  if (!shown.length) h("div", "empty-s", S.feed === "live" ? "Nothing unusual right now: no held, stalled or gapped trains across the network."
+    : S.feed === "riders" ? (R && R.relay ? "No rider reports in the last half hour." : "Rider reports from the Whichway app show here once the report relay is connected. Add #reports=demo to the address to see sample reports.") : "Nothing here yet.", body);
   const list = h("div", "feed", null, body);
   for (const it of shown.slice(0, 120)) {
-    const b = h("button", `feed-item${it.open ? "" : " closed"}`, null, list); b.type = "button";
+    const b = h("button", `feed-item${it.open ? "" : " closed"}${it.disputed ? " disputed" : ""}`, null, list); b.type = "button";
     if (it.route && routeColor(it.route) !== "#6b6b6b") bullet(it.route, b, "sm"); else h("span", "icon", it.cat === "research" ? "∑" : "!", b);
     const c = h("div", null, null, b);
     if (it.title) h("div", "t", it.title, c);
@@ -642,7 +698,7 @@ function renderFeed(body) {
     h("div", `m ${it.metaCls || ""}`, it.meta, c);
     b.addEventListener("click", it.go);
   }
-  h("p", "small-print", "Live items are detected in your browser from the MTA feeds every 30 seconds: trains held at a stop 2.5+ min, trains stuck between stops, gaps over twice the scheduled headway, and track changes. Research items come from the daily analysis.", body);
+  h("p", "small-print", "Live items are detected in your browser from the MTA feeds every 30 seconds: trains held at a stop 2.5+ min, trains stuck between stops, gaps over twice the scheduled headway, and track changes. Rider items are reports from the Whichway app, matched to those detections within two stops and ten minutes. Research items come from the daily analysis.", body);
 }
 
 // ---- route planner
@@ -893,5 +949,6 @@ initMap();
 for (const f of ["index", "live", "scorecard", "digest", "alerts", "holds", "dwell", "climatology", "lines", "event_study", "train_runs", "eta_trust", "routes", "status"])
   load(`${f}.json`).then(v => { D[f] = v; if (E && E.mode !== "loading") renderAll(); });
 E = createEngine({ base, load, onUpdate: () => { onEngine(); }, onStatus: st => { if (st.error) toast(`Live feeds unreachable, showing scheduled positions (${st.error})`); } });
+startReports();
 E.start().catch(err => { $("#mode .txt").textContent = "Could not load the network data"; toast(String(err.message || err), 10000); console.error(err); });
 
