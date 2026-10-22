@@ -112,13 +112,29 @@ export async function addRecent(kv, rep, nowSec) {
 }
 
 export const CORS = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, OPTIONS", "access-control-max-age": "86400" };
+// The public list never carries `reporter`; the KV copy does, for the pipeline's read key (listReports).
 
-/** GET /v1/reports: the recent list from `since` (default: the last two hours), cached briefly at the edge. */
-export async function listReports(env, url, nowSec) {
+/**
+ * GET /v1/reports: the recent list from `since` (default: the last two hours), cached briefly at the edge. The stable
+ * `reporter` hash is left out unless the request carries the pipeline's read key (X-WhichWay-Read-Key = READ_KEY),
+ * which the pipeline needs to weigh reporters over more than a day.
+ */
+export async function listReports(env, url, nowSec, readKey) {
   const since = Number(url.searchParams.get("since") || nowSec - 7200);
-  const list = (await readRecent(env.REPORTS)).filter((r) => r.ts >= (Number.isFinite(since) ? since : nowSec - 7200) && nowSec - r.ts < RECENT_SEC);
+  const full = Boolean(env.READ_KEY && readKey && (await keyEquals(readKey, env.READ_KEY)));
+  const list = (await readRecent(env.REPORTS))
+    .filter((r) => r.ts >= (Number.isFinite(since) ? since : nowSec - 7200) && nowSec - r.ts < RECENT_SEC)
+    .map((r) => { if (full) return r; const { reporter, ...pub } = r; return pub; });
   return new Response(JSON.stringify({ ok: true, generated_ts: Math.round(nowSec), ttl: REPORT_TTL, reports: list }), {
     status: 200,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=20", ...CORS },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": full ? "no-store" : "public, max-age=20", ...CORS, vary: "x-whichway-read-key" },
   });
+}
+
+async function keyEquals(a, b) {
+  const enc = (t) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+  const [x, y] = (await Promise.all([enc(a), enc(b)])).map((d) => new Uint8Array(d));
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
 }

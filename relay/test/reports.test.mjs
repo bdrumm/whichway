@@ -89,6 +89,16 @@ test("a report is archived with a reporter hash, listed publicly without it, and
   assert.equal(list.ttl.held, 1200);
 });
 
+test("the stable reporter hash is listed only for the pipeline's read key", async () => {
+  const gh = fakeGitHub(), kv = fakeKV();
+  const env = { ...env0, REPORTS: kv, READ_KEY: "pipeline-key" };
+  await handleRequest(post(report()), env, { fetch: gh.fetch, now: () => NOW });
+  const get = (h) => handleRequest(new Request("https://relay.test/v1/reports", { headers: h }), env, { now: () => NOW }).then((r) => r.json());
+  assert.equal((await get({})).reports[0].reporter, undefined);
+  assert.equal((await get({ "x-whichway-read-key": "wrong" })).reports[0].reporter, undefined);
+  assert.match((await get({ "x-whichway-read-key": "pipeline-key" })).reports[0].reporter, /^[0-9a-f]{16}$/);
+});
+
 test("the public rider hash changes with the day, the archived reporter hash does not", async () => {
   const gh = fakeGitHub(), kv = fakeKV();
   const env = { ...env0, REPORTS: kv };

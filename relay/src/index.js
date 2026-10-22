@@ -146,7 +146,7 @@ export async function handleRequest(request, env, deps = {}) {
     return jsonResponse(200, out);
   }
   if (url.pathname === "/v1/reports" && request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-  if (url.pathname === "/v1/reports" && request.method === "GET") return listReports(env, url, nowSec);
+  if (url.pathname === "/v1/reports" && request.method === "GET") return listReports(env, url, nowSec, request.headers.get("x-whichway-read-key"));
   const kind = url.pathname === "/v1/trips" ? "trip" : url.pathname === "/v1/traces" ? "trace" : url.pathname === "/v1/reports" ? "report" : null;
   if (!kind) return jsonResponse(404, { ok: false, error: "no such route" });
   if (request.method !== "POST") return jsonResponse(405, { ok: false, error: "POST" });
@@ -201,7 +201,7 @@ async function postReport(env, doc, install, nowSec, fetchImpl) {
   } catch (e) {
     return jsonResponse(502, { ok: false, error: String(e.message || e) });
   }
-  const live = await addRecent(env.REPORTS, pub, nowSec).catch(() => "store-failed");
+  const live = await addRecent(env.REPORTS, { ...pub, reporter }, nowSec).catch(() => "store-failed");
   return jsonResponse(r.status === "created" ? 201 : 200, { ok: true, ...r, live });
 }
 

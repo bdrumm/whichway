@@ -76,6 +76,14 @@ The public list the Atlas map reads lives in Workers KV. Once:
 Without the KV binding reports are still archived and the list is empty; without `REPORT_SALT` the hashes are keyed
 with the app key.
 
+The hourly pipeline keeps every report (`python -m pipeline.reports`, into `reports/reports.jsonl` on the data branch)
+and weighs each reporter by how often the record backs them up. For that it needs the stable `reporter` hash, which
+the list carries only with a read key the pipeline holds:
+
+    openssl rand -hex 24 | tee /dev/stderr | npx wrangler secret put READ_KEY
+    # the same value as the repository secret WHICHWAY_REPORTS_READ_KEY, and the relay's address as the repository
+    # variable WHICHWAY_RELAY (Settings › Secrets and variables › Actions)
+
 ## What it does not do
 
 It keeps no copy and no log of its own: the repository is the record. It does not authenticate riders: the app

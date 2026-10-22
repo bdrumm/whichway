@@ -829,6 +829,31 @@ function renderStations(body) {
 }
 
 // ---- system
+/** "How riders train the model": what riders reported, how much the record backed them, and what it changes. */
+function renderRiderLoop(body) {
+  const fb = D.rider_feedback || { n: 0 };
+  const s = h("div", "section", null, body); h("span", "kicker", "How riders train the model", s);
+  const live = riders.groups.length, conf = [...riders.byEvent.values()].filter(m => m.confirm > m.dispute).length;
+  if (!fb.n) {
+    h("p", "lede", "Riders report from the Whichway app: a held train, a long wait, crowding, an incident, or that all is well. Each report is checked against the trains the feeds recorded at that station and time, each rider earns a trust weight from how often the record backs them up, and the weighted reports tune the hold and gap detectors and are tested as a signal for arrival times. No reports have been kept yet.", s);
+  } else {
+    const share = fb.backed_share == null ? "" : ` The record backed ${pct(fb.backed_share)} of those it could check.`;
+    h("p", "lede", `${fmt.compact(fb.n)} reports kept (${fmt.compact(fb.n_week || 0)} this week) from ${fmt.compact((fb.trust || {}).reporters || 0)} riders.${share}`, s);
+    const vd = fb.verdicts || {}, cats = [["backed", "Backed"], ["contradicted", "Contradicted"], ["unverified", "No record"], ["unmeasured", "Riders only"]].filter(([k]) => vd[k]);
+    if (cats.length) barChart(s, { title: "Reports against the record", subtitle: "crowding, incidents and skipped stops have no feed measure", categories: cats.map(c => c[1]), series: [{ name: "reports", values: cats.map(c => vd[c[0]]) }], height: 160, format: v => fmt.compact(v) });
+    const det = fb.detectors || {};
+    const row = (label, d, unit) => { if (!d) return; const k = h("div", "kv", null, s); h("span", null, label, k);
+      h("span", "mono", `${unit(d.current)} in use · riders say ${unit(d.fitted)} · F1 ${d.f1_current} → ${d.f1_fitted} · ${d.n} labels${d.ready ? "" : " (too few yet)"}`, k); };
+    row("Gap detector", (det.gap || {}).all, v => `${v}× headway`);
+    row("Hold detector", (det.hold || {}).all, v => `${Math.round(v)} s`);
+    if ((det.gap || {}).all || (det.hold || {}).all) h("p", "small-print", "Shadow mode: the fitted thresholds are shown beside the ones in use and adopted once they hold up on enough labels in each time of day.", s);
+    const eta = fb.eta || {};
+    h("p", "small-print", eta.status === "adopt" ? `Arrival times: each trusted trouble report on a line in the last 15 min adds ${eta.sec_per_report} s to the countdown there, cutting the held-out error from ${eta.mae_without_sec} s to ${eta.mae_with_sec} s.`
+      : eta.status === "reject" ? `Arrival times: reports did not lower the held-out error (${eta.mae_without_sec} s without, ${eta.mae_with_sec} s with), so the model does not use them yet.`
+      : `Arrival times: ${fmt.compact(eta.n_with_reports || 0)} countdowns had reports on their line; the test needs ${eta.min_rows || 200}.`, s);
+  }
+  h("p", "small-print", `In this browser now: ${live} rider report${live === 1 ? "" : "s"} on the map, ${conf} live detection${conf === 1 ? "" : "s"} confirmed by riders.`, s);
+}
 function renderSystem(body) {
   const ix = D.index || {}, stt = D.status || {}, lm = ix.learned_model || {};
   const s2 = h("div", "stat2", null, body);
@@ -842,6 +867,7 @@ function renderSystem(body) {
     h("p", "lede", `Mean error ${Math.round(lm.mae_model)} s, against ${Math.round(lm.mae_schedule)} s for the timetable and ${Math.round(lm.mae_feed)} s for the MTA countdown. Trained on ${fmt.compact(lm.n_train)} arrivals.`, s);
     barChart(s, { title: "Mean error in seconds (lower is better)", categories: ["Timetable", "MTA clock", "Whichway"], series: [{ name: "error", values: [lm.mae_schedule, lm.mae_feed, lm.mae_model] }], height: 170, format: v => `${Math.round(v)} s` });
   }
+  renderRiderLoop(body);
   const cl = D.climatology;
   if (cl) {
     const s = h("div", "section", null, body); h("span", "kicker", "Disruptions in the alert archive", s);
@@ -946,7 +972,7 @@ load = makeLoader(base); dataBase = base; dataSource = source;
 readHash();
 initChrome();
 initMap();
-for (const f of ["index", "live", "scorecard", "digest", "alerts", "holds", "dwell", "climatology", "lines", "event_study", "train_runs", "eta_trust", "routes", "status"])
+for (const f of ["index", "live", "scorecard", "digest", "alerts", "holds", "dwell", "climatology", "lines", "event_study", "train_runs", "eta_trust", "routes", "status", "rider_feedback"])
   load(`${f}.json`).then(v => { D[f] = v; if (E && E.mode !== "loading") renderAll(); });
 E = createEngine({ base, load, onUpdate: () => { onEngine(); }, onStatus: st => { if (st.error) toast(`Live feeds unreachable, showing scheduled positions (${st.error})`); } });
 startReports();

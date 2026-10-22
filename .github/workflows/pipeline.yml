@@ -63,6 +63,11 @@ jobs:
       - name: Pull Open Data and weather context
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.refresh_context == 'true' }}
         run: python -m pipeline.context
+      - name: Pull rider reports from the relay
+        env:
+          WHICHWAY_RELAY: ${{ vars.WHICHWAY_RELAY }}
+          WHICHWAY_REPORTS_READ_KEY: ${{ secrets.WHICHWAY_REPORTS_READ_KEY }}
+        run: python -m pipeline.reports --data-dir data-branch || echo "rider reports failed (non-fatal)"
       - name: Commit data branch
         run: pipeline/data_branch.sh commit
       - name: Build site
