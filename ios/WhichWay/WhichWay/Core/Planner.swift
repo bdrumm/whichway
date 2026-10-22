@@ -166,8 +166,11 @@ func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, opti
     guard leg == 0, option.legs.count == 2, let transfer = option.transfer else { return nil }
     let walk = transfer.plannedSec
     // the connection: the first train at the transfer platform after the walk, or after now when the first leg is already
-    // behind; across the platform, one still standing there when the rider steps off counts too (`connection`)
-    let earliest = max(a.arriveTs + walk, now)
+    // behind; across the platform, one still standing there when the rider steps off counts too (`connection`), and the
+    // train in hand counts as getting in at the early end of its window: the train across the platform is worth the try,
+    // the next one only a short wait behind it (Oct 22 at Jay St: the C named, the A that came two minutes after the F not)
+    let early = transfer.acrossPlatform ? min(a.arriveTs, a.arriveLoTs ?? a.arriveTs) : a.arriveTs
+    let earliest = max(early + walk, now)
     let seconds = legTrips(boards: boards, schedule: schedule, leg: option.legs[1], now: earliest - TransferTiming.standingCatchSec, maxN: 40)
     if let c = connection(seconds, ready: earliest, transfer: transfer) {
         let b = c.train

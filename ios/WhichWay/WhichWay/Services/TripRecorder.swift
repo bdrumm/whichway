@@ -145,6 +145,9 @@ final class TripRecorder {
     /// On a train right now (not on the way, at the platform, or between trains at the change).
     var onTrain: Bool { tracker?.onTrain ?? false }
 
+    /// A faster route on offer, for the trip's record.
+    func noteReroute(_ n: RerouteNote) { tracker?.noteReroute(n) }
+
     /// When the ride on leg `leg` began: the felt (or named) pull-away, nil for one assumed from the timetable.
     func rideDepartedTs(leg: Int) -> Double? { tracker?.ride(leg)?.departedTs }
 

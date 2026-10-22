@@ -59,6 +59,31 @@ final class RidingItineraryTests: XCTestCase {
                        1000 + 240 - lagG, accuracy: 0.5)
     }
 
+    func testAcrossThePlatformTheConnectionIsTimedFromTheEarlyEndOfTheArrival() {
+        // Oct 22 at Jay St: the F due at the platform in a window; the A across the platform a little before the F's
+        // expected moment, the C after it. The A is named, the C a short wait behind it
+        let sched = try! schedule()
+        var p = option
+        p.transfer = PathTransfer(stop: "c1", stop2: "c1", station: "Hoyt", walkSec: 0)      // one platform: across it
+        var g = train("g1", key: "G_N", points: [(2, 1690)])
+        g.pred = nil
+        let a = train("a", key: "C_N", points: [(1, 1650 - lagG + lagC), (3, 2000)])
+        let c = train("c", key: "C_N", points: [(1, 1800), (3, 2100)])
+        let boards = ["G_N": board("G_N", [g]), "C_N": board("C_N", [a, c])]
+        // without a window for the G's arrival, the expected moment stands: the first one is gone by then
+        let plain = ridingItinerary(boards: boards, schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1100)
+        XCTAssertEqual(plain?.legs.last?.train.tripId, "c")
+        // with the G due as early as 1690 - lag - 60, the first one is in reach
+        var early = boards
+        var ge = g
+        ge.pred = PredictedTrain(tripId: "g1", points: [PredictedPoint(idx: 2, feedTs: 1690, etaTs: 1690, loTs: 1630, hiTs: 1750, source: "test")],
+                                 holdExtraSec: 0, knockOnSec: 0, scenario: "test")
+        early["G_N"] = board("G_N", [ge])
+        let it = ridingItinerary(boards: early, schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1100)
+        XCTAssertEqual(it?.legs.last?.train.tripId, "a")
+        XCTAssertNotNil(it?.nextIfMissedSec, "the next one behind it is shown too")
+    }
+
     func testStopsToTheChangeCountDownWithTheTrainsProgress() {
         // the G from g0 to Hoyt (idx 2): two stops, Hoyt counted
         func cand(next: Int, stoppedAt: Int? = nil) -> TripCandidate {

@@ -319,6 +319,35 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertTrue(t.timeline.rideAssumed)
     }
 
+    func testAOneSecondPauseInTheStepsOffTheTrainDoesNotBreakThem() {
+        // Oct 22 at Jay St, off the F across the platform: a step at 10:36:51, a still second, then seven more
+        var t = TripTracker(start(), distanceToOriginM: 30)
+        t.beginRiding(now: 1000, departedTs: 1000)
+        var ts = 1001.0
+        for _ in 0..<120 { t.motion(sec(ts, walking: false, push: 0.06, shake: 0.03)); ts += 1 }
+        t.motion(sec(ts, walking: true)); ts += 1
+        t.motion(sec(ts, walking: false)); ts += 1
+        for _ in 0..<7 { t.motion(sec(ts, walking: true)); ts += 1 }
+        XCTAssertEqual(t.walking?.startTs, 1121)
+        XCTAssertEqual(t.walking?.seconds, 8)
+        // two still seconds do break them
+        for _ in 0..<2 { t.motion(sec(ts, walking: false)); ts += 1 }
+        t.motion(sec(ts, walking: true))
+        XCTAssertEqual(t.walking?.seconds, 1)
+        XCTAssertEqual(t.walking?.startTs, ts)
+    }
+
+    func testRerouteOffersGoOnTheRecordOnceEach() {
+        var t = TripTracker(start(), distanceToOriginM: 30)
+        let n = RerouteNote(ts: 1000, label: "F → A/C at Jay St", step: "Off at Jay St 10:36, then the C at 10:41", arriveTs: 1900, savedSec: 180)
+        t.noteReroute(n)
+        var again = n; again.ts = 1030
+        t.noteReroute(again)
+        var changed = n; changed.ts = 1060; changed.step = "Off at Jay St 10:36, then the A at 10:39"
+        t.noteReroute(changed)
+        XCTAssertEqual(t.timeline.rerouteNotes?.map(\.ts), [1000, 1060])
+    }
+
     func testForecastFreezesOnceTheBoardingTimePassesAtTheStation() {
         var t = TripTracker(start(), distanceToOriginM: 30)
         t.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)
