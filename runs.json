@@ -1,81 +1,5 @@
 [
 {
-"ts": 1790285810.995542,
-"iso": "2026-09-24T17:36:50.995543-04:00",
-"kind": "context",
-"ok": [
-"trains_delayed:5951",
-"delay_incidents:7805",
-"major_incidents:256",
-"stations:496",
-"ridership_hourly:3744",
-"weather_daily:61"
-],
-"failed": {
-"customer_journey": "customer_journey_2020(4apg-4kt9): 403 for https://data.ny.gov/resource/4apg-4kt9.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\n  \"error\" : true,\n  \"message\" : \"You must be logged in to access this resource\"\n}\n; customer_journey_2020(4apg-4kt9): 403 for https://data.ny.gov/resource/4apg-4kt9.json?%24limit=50000&%24offset=0: {\n  \"error\" : true,\n  \"message\" : \"You must be logged in to access this resource\"\n}\n; customer_journey_2025(s4u6-t435): 403 for https://data.ny.gov/resource/s4u6-t435.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\n  \"err"
-},
-"complex_ids": {
-"grand-central-n": "610",
-"times-sq-s": "611",
-"jay-st-n": "636"
-}
-},
-{
-"ts": 1790286260.6481628,
-"iso": "2026-09-24T17:44:20.648165-04:00",
-"kind": "collect",
-"feeds": [
-"1234567S",
-"ace"
-],
-"polls": 9,
-"errors": 0,
-"arrivals": 119,
-"flushed": 81,
-"alerts": 843,
-"duration_sec": 241,
-"written": {
-"2026-09-24": 219
-},
-"per_feed": [
-{
-"feed": "1234567S",
-"polls": 9,
-"first_ts": 1790286019.5534334,
-"last_ts": 1790286259.5544097,
-"arrivals": 29
-},
-{
-"feed": "ace",
-"polls": 9,
-"first_ts": 1790286019.5534334,
-"last_ts": 1790286259.5544097,
-"arrivals": 9
-}
-]
-},
-{
-"ts": 1790286272.2405856,
-"iso": "2026-09-24T17:44:32.240586-04:00",
-"kind": "context",
-"ok": [
-"trains_delayed:5951",
-"delay_incidents:7805",
-"customer_journey:1200",
-"stations:496",
-"ridership_hourly:3744",
-"weather_daily:61"
-],
-"failed": {
-"major_incidents": "major_incidents_2020(j6d2-s8m2): 403 for https://data.ny.gov/resource/j6d2-s8m2.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\n  \"error\" : true,\n  \"message\" : \"You mu; major_incidents_2025(f462-ka72): 400 for https://data.ny.gov/resource/f462-ka72.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\"message\":\"Query coordinator error: quer; major_incidents_2025(f462-ka72): missing ['month', 'line']; columns=['open_dataset_id', 'dataset_title', 'status', 'plan_submission_date', 'description', 'plan_submission_date_notes', 'type', 'agency', 'posting"
-},
-"complex_ids": {
-"grand-central-n": "610",
-"times-sq-s": "611",
-"jay-st-n": "636"
-}
-},
-{
 "ts": 1790286559.842072,
 "iso": "2026-09-24T17:49:19.842074-04:00",
 "kind": "collect",
@@ -21430,6 +21354,135 @@
 "events:10871"
 ],
 "failed": {},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636",
+"4av-9st-fg-n": "608",
+"4av-9st-fg-s": "608",
+"4av-9st-r-n": "608",
+"4av-9st-r-s": "608",
+"14st-8av-ace-n": "618",
+"14st-8av-ace-s": "618",
+"8av-l-n": "618",
+"8av-l-s": "618"
+},
+"skipped": [
+"ticketmaster"
+]
+},
+{
+"ts": 1792691469.5402265,
+"iso": "2026-10-22T13:51:09.540229-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace",
+"bdfm",
+"g",
+"jz",
+"l",
+"nqrw",
+"si"
+],
+"polls": 9,
+"errors": 0,
+"arrivals": 309,
+"flushed": 708,
+"alerts": 1027,
+"forecast_eval": 15,
+"duration_sec": 243,
+"written": {
+"2026-10-22": 4540
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 271
+},
+{
+"feed": "ace",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 90
+},
+{
+"feed": "bdfm",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 146
+},
+{
+"feed": "g",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 21
+},
+{
+"feed": "jz",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 27
+},
+{
+"feed": "l",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 42
+},
+{
+"feed": "nqrw",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 133
+},
+{
+"feed": "si",
+"polls": 9,
+"first_ts": 1792691226.0910892,
+"last_ts": 1792691466.0920062,
+"arrivals": 5
+}
+]
+},
+{
+"ts": 1792691470.0209286,
+"iso": "2026-10-22T13:51:10.016532-04:00",
+"kind": "backfill",
+"fetched": [],
+"failed": {}
+},
+{
+"ts": 1792691516.6089265,
+"iso": "2026-10-22T13:51:56.608929-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:5950",
+"delay_incidents:7805",
+"major_incidents:1196",
+"customer_journey:1200",
+"stations:496",
+"weather_hourly:1818",
+"weather_daily",
+"alerts_archive:46501(+168)",
+"nws_alerts:58",
+"elevator_outages:115",
+"nyc_events:5000",
+"news:2",
+"events:10871"
+],
+"failed": {
+"ridership_hourly": "HTTPSConnectionPool(host='data.ny.gov', port=443): Read timed out. (read timeout=30)"
+},
 "complex_ids": {
 "grand-central-n": "610",
 "times-sq-s": "611",
