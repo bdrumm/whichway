@@ -2,7 +2,7 @@
 // a trip planner, station boards and the system research (right), and a timeline to replay the day.
 import { fmt, stringline, heatmap, lineChart, barChart } from "../charts.js";
 import { enumeratePaths, pathTrips } from "../rt-client.js";
-import { resolveDataBase, makeLoader, createEngine, routeHealth, baseRoute, routeColor, routeSort, DARK_TEXT } from "./engine.js";
+import { resolveDataBase, makeLoader, createEngine, routeHealth, baseRoute, routeColor, routeSort, DARK_TEXT, schedGapAt, isGap } from "./engine.js";
 import { bboxOf } from "./geo.js";
 
 // ---------------------------------------------------------------- small helpers
@@ -416,9 +416,9 @@ function stationBoard(st, now, maxN = 12) {
       out.push({ t, L, m, ts: pt[1], key: m.key, id: `${m.key}|${t.trip_id}` }); }
   }
   out.sort((a, b) => a.ts - b.ts);
-  // a gap: the wait for this train since the previous one of the same line and direction is over twice the schedule
+  // a gap: the wait for this train since the previous one of the same line and direction, against the timetable at this stop and time
   const last = new Map();
-  for (const d of out) { const prev = last.get(d.key); if (prev != null && d.L.hw) d.gap = d.ts - prev > Math.max(2 * d.L.hw, 600); last.set(d.key, d.ts); }
+  for (const d of out) { const prev = last.get(d.key); if (prev != null) { d.sg = schedGapAt(d.L.cum, E.lineSched[d.key], d.m.idx, prev, d.ts); d.gap = isGap(d.ts - prev, d.sg); } last.set(d.key, d.ts); }
   return out.slice(0, maxN);
 }
 function departureRows(list, parent, now, compact = false) {
@@ -429,7 +429,7 @@ function departureRows(list, parent, now, compact = false) {
     bullet(d.t.route, row, "sm");
     const to = h("span", "to", d.L.terminus, row);
     const late = d.t.effective_lateness_sec ?? d.t.lateness_sec;
-    h("span", `sub ${d.gap ? "" : lateClass(late)}`, d.gap ? `${Math.round(d.L.hw / 60)}-min service, long gap before this train` : d.L.mode === "scheduled" ? "scheduled" : d.t.position && d.t.position.holding ? `holding · ${lateText(late)}` : lateText(late), to);
+    h("span", `sub ${d.gap ? "" : lateClass(late)}`, d.gap ? `${Math.round(d.sg.hw / 60)}-min service, long gap before this train` : d.L.mode === "scheduled" ? "scheduled" : d.t.position && d.t.position.holding ? `holding · ${lateText(late)}` : lateText(late), to);
     if (!compact) h("span", "rng", hhmm(d.ts), row); else h("span", "rng", "", row);
     row.addEventListener("click", () => selectTrain(d.id));
   }
@@ -642,7 +642,7 @@ function renderFeed(body) {
     h("div", `m ${it.metaCls || ""}`, it.meta, c);
     b.addEventListener("click", it.go);
   }
-  h("p", "small-print", "Live items are detected in your browser from the MTA feeds every 30 seconds: trains held at a stop 2.5+ min, trains stuck between stops, gaps over twice the scheduled headway, and track changes. Research items come from the daily analysis.", body);
+  h("p", "small-print", "Live items are detected in your browser from the MTA feeds every 30 seconds: trains held at a stop 2.5+ min, trains stuck between stops, gaps of 2.5+ scheduled headways at that stop and time (and at least 15 min), and track changes. Research items come from the daily analysis.", body);
 }
 
 // ---- route planner
