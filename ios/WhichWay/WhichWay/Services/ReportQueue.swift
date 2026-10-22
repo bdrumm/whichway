@@ -9,6 +9,8 @@ final class ReportQueue {
     static let shared = ReportQueue()
     /// The Report button on the Go tab; on unless the rider switches it off.
     static let enabledKey = "riderReports"
+    /// Asking for a report when the train is held or the wait runs long; on unless the rider switches it off.
+    static let promptsKey = "riderReportPrompts"
     static var enabled: Bool { UserDefaults.standard.object(forKey: enabledKey) == nil ? true : UserDefaults.standard.bool(forKey: enabledKey) }
 
     private(set) var pending: [RiderReport] = []
