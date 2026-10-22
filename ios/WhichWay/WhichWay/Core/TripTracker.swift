@@ -36,6 +36,7 @@ struct TripTimeline: Codable, Equatable {
     var boarded: [BoardedLeg] = []        // the train and line each leg was ridden on, as far as the phone could tell
     var withdrawnDepartures: [Double]? = nil   // pull-aways felt that no train made (the platform shaking), withdrawn
     var notOnTrainTaps: [Double]? = nil   // when the rider said "not on the train" by hand
+    var rerouteNotes: [RerouteNote]? = nil // each faster route offered on the way, as the rider saw it
     var stopSpans: [FeltStop] = []        // every station stop felt on each ride: the train at rest, then moving again
     var beliefLog: [BeliefNote] = []      // each change in the train the phone believes the rider is on, as it happened
 
@@ -62,6 +63,16 @@ struct TripTimeline: Codable, Equatable {
     }
 
     var walkSpeedMPerMin: Double? { walkMeters >= 150 && walkSeconds >= 60 ? walkMeters / walkSeconds * 60 : nil }
+}
+
+/// A faster route offered while the route was under way: when, the route and its first step as the banner put it, and
+/// what it promised. Kept so a trip can be read back (Oct 22: the C offered at Jay St, the A sooner, nothing on record).
+struct RerouteNote: Codable, Equatable {
+    var ts: Double
+    var label: String
+    var step: String
+    var arriveTs: Double
+    var savedSec: Double
 }
 
 /// A change in what the phone believes about one leg's train: when, the line and train it now names, how sure, and on
@@ -168,10 +179,15 @@ struct TripTracker {
     /// Riding and walking right now: when the steps began and for how many seconds they have gone on. The
     /// recorder reads it against the feed: steps that begin while the believed train stands at a station are
     /// the rider getting off, even when the detector could not see the train come to rest first.
+    /// A single still second inside the steps (a pause at the doors) does not break them (Oct 22 at Jay St: steps at
+    /// 10:36:51 and 10:36:53-59 off the F, read as 7 s and let pass, so the change across the platform went unseen).
     var walking: (startTs: Double, seconds: Int)? {
-        guard phase == .riding, walkRun > 0, let s = walkStartTs else { return nil }
-        return (s, walkRun)
+        guard phase == .riding, walkRun > 0, let s = looseWalkStart ?? walkStartTs else { return nil }
+        return (s, max(walkRun, looseWalkSecs))
     }
+    private var looseWalkStart: Double?
+    private var looseWalkSecs = 0
+    private var looseWalkGap = 0
 
     /// The last second the phone felt the train moving (a push or vibration) on the ride in hand.
     private(set) var lastMovingTs: Double?
@@ -259,8 +275,12 @@ struct TripTracker {
         if walking {
             if walkRun == 0 { walkStartTs = m.ts }
             walkRun += 1; stillRun = 0
+            if looseWalkStart == nil { looseWalkStart = m.ts; looseWalkSecs = 0 }
+            looseWalkSecs += 1; looseWalkGap = 0
         } else {
             stillRun += 1; walkRun = 0; walkStartTs = nil
+            looseWalkGap += 1
+            if looseWalkGap > 1 { looseWalkStart = nil; looseWalkSecs = 0 }
         }
         if afterAlight, walking { timeline.walkingSecondsBetweenTrains += 1 }
         if phase == .riding, !walking, m.pushG >= detector.pushThreshold || m.shakeG >= detector.shakeThreshold { lastMovingTs = m.ts }
@@ -458,6 +478,14 @@ struct TripTracker {
         detector.standDown()
         motionState = detector.state
         firstMotionTs = nil                  // the grace period runs again from here
+    }
+
+    /// A faster route on offer, or its first step changed: on the record (the last few dozen).
+    mutating func noteReroute(_ n: RerouteNote) {
+        var notes = timeline.rerouteNotes ?? []
+        if let last = notes.last, last.label == n.label, last.step == n.step { return }
+        notes.append(n)
+        timeline.rerouteNotes = Array(notes.suffix(40))
     }
 
     /// The rider said "not on the train", kept on the record whatever it changed.

@@ -1361,6 +1361,10 @@ struct PlannerView: View {
     }
 
     private func setReroute(_ o: RerouteOffer?) {
+        if let o = o {
+            trip.noteReroute(RerouteNote(ts: data.now, label: o.faster.option.label, step: rerouteStepText(o, name: stationName),
+                                         arriveTs: o.faster.itinerary.arriveTs, savedSec: o.faster.savedSec))
+        }
         if (o == nil) != (reroute == nil) || o?.faster.option.id != reroute?.faster.option.id {
             withAnimation(.easeInOut(duration: 0.3)) { reroute = o }
         } else {

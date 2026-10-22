@@ -47,6 +47,10 @@ struct TripObservation: Codable, Identifiable {
     var ultraTraining: Bool? = nil
     /// Pull-aways felt that no train made, withdrawn (the platform shaking).
     var withdrawnDepartures: [Double]?
+    /// When the rider said "not on the train" by hand.
+    var notOnTrainTaps: [Double]? = nil
+    /// Each faster route offered on the way, as the banner put it.
+    var rerouteNotes: [RerouteNote]? = nil
     var uploaded: Bool?
     /// Written to the private GitHub data repository.
     var uploadedGitHub: Bool?
@@ -208,6 +212,8 @@ final class Telemetry {
                 }
             }
             o.withdrawnDepartures = tl.withdrawnDepartures
+            o.notOnTrainTaps = tl.notOnTrainTaps
+            o.rerouteNotes = tl.rerouteNotes
             o.beliefLog = tl.beliefLog.isEmpty ? nil : tl.beliefLog
             if o.predictedBoardTs == nil { o.predictedBoardTs = tl.forecastBoardTs; o.predictedArriveTs = tl.forecastArriveTs }
         }
