@@ -53,6 +53,46 @@ export function scheduledTrains(line, entries, cum, now) {
   return out;
 }
 
+// ---------------------------------------------------------------- service gaps
+export const GAP_RATIO = 2.5;          // a gap is this many scheduled headways at the stop and time ...
+export const GAP_SCHED_RATIO = 1.5;    // ... and this many times the longest wait the timetable itself has there ...
+export const GAP_MIN_SEC = 900;        // ... and at least 15 minutes
+
+/** Today's timetable at stop j between t0 and t1: the mean headway in the 30 min either side, the longest scheduled
+ *  wait that overlaps [t0, t1] and how many trains are scheduled strictly inside it. Midday and late-evening service
+ *  is thinner and less even than the peaks, so a gap is judged against the schedule at that stop and time, not the line's. */
+export function schedGapAt(cum, entries, j, t0, t1 = t0, windowSec = 1800) {
+  const arr = [];
+  for (const [, li, ts] of entries || []) { if (li < j) continue; const at = ts - (cum[li] - cum[j]); if (at >= t0 - windowSec - 3600 && at <= t1 + windowSec + 3600) arr.push(at); }
+  arr.sort((a, b) => a - b);
+  const n = arr.filter(t => t >= t0 - windowSec && t <= t1 + windowSec).length;
+  if (n < 2) return null;
+  let longest = 0;
+  for (let k = 1; k < arr.length; k++) if (arr[k] >= t0 && arr[k - 1] <= t1) longest = Math.max(longest, arr[k] - arr[k - 1]);
+  return { hw: (t1 - t0 + 2 * windowSec) / n, longest, n_inside: arr.filter(t => t > t0 && t < t1).length };
+}
+
+/** Whether a wait of `wait` seconds at a stop is a service gap given the timetable there (schedGapAt). */
+export const isGap = (wait, sg, minSec = GAP_MIN_SEC) => !!sg && wait >= Math.max(GAP_RATIO * sg.hw, GAP_SCHED_RATIO * sg.longest, minSec);
+
+/** Service gaps on one live line. For each pair of consecutive trains, the gap is the wait at the leading train's next stop
+ *  until the following train gets there, both read from the feed's own predictions; positions from vehicle reports lag
+ *  (a train still "stopped at" the stop it left) and the long padded segments of the timetable inflate a gap measured
+ *  as scheduled running time between two positions. */
+export function serviceGaps(line, entries, cum, trains, minSec = GAP_MIN_SEC) {
+  const out = [], last = line.stops.length - 1;
+  const ordered = [...trains].filter(t => t.points && t.points.length).sort((a, b) => b.points[0][0] - a.points[0][0] || a.points[0][1] - b.points[0][1]);
+  for (let i = 1; i < ordered.length; i++) {
+    const a = ordered[i - 1], b = ordered[i], [j, ta] = a.points[0];
+    if (j >= last || b.points[0][0] < 2) continue;   // the leader is terminating, or the follower has not left the terminal area
+    const pb = b.points.find(p => p[0] === j); if (!pb || pb[1] <= ta) continue;
+    const wait = pb[1] - ta, sg = schedGapAt(cum, entries, j, ta, pb[1]);
+    if (isGap(wait, sg, minSec)) out.push({ ahead: a, behind: b, stop_idx: j, from_idx: b.points[0][0], wait, hw: sg.hw, longest: sg.longest, missing: sg.n_inside,
+      severity: wait >= 1.5 * Math.max(GAP_RATIO * sg.hw, GAP_SCHED_RATIO * sg.longest, minSec) ? "high" : "medium" });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- the live engine
 /**
  * Polls every feed, builds a line board for each exported line and keeps:
@@ -150,17 +190,18 @@ export function createEngine({ base, load, onUpdate, onStatus }) {
       if (t.track_changed) upsert(`track|${t.id}`, now, () => ({ kind: "track", severity: "low", route: t.route, lineKey: t.key, trainId: t.id, stopIdx: t.next_idx,
         title: `${t.route} train rerouted onto another track`, text: `Track change at ${t.next_name}${L ? ` · toward ${L.terminus}` : ""}` }));
     }
-    // service gaps: scheduled running time between consecutive trains vs the scheduled headway
+    // service gaps: the predicted wait between consecutive trains against the timetable at that stop and time
+    // planned work (mostly midday and overnight) runs to a supplement the published timetable does not carry: a gap on such a
+    // route is still shown but kept low, it is usually the plan rather than a disruption
+    const planned = new Set();
+    for (const a of E.alerts || []) if (a.kind === "planned" && (a.start == null || a.start <= now) && (a.end == null || a.end > now)) for (const r of a.routes || []) planned.add(baseRoute(r));
     for (const L of Object.values(E.lines)) {
-      if (L.mode !== "live" || !L.hw || !L.board) continue;
-      const pos = L.board.trains.map(t => ({ t, idx: trainProgress(t, 0, L.line).idx })).sort((a, b) => b.idx - a.idx);
-      for (let i = 1; i < pos.length; i++) {
-        const a = pos[i - 1], b = pos[i]; if (a.idx >= L.line.stops.length - 1.2) continue;
-        const ca = L.cum[Math.floor(a.idx)] + (a.idx % 1) * ((L.cum[Math.floor(a.idx) + 1] ?? L.cum[Math.floor(a.idx)]) - L.cum[Math.floor(a.idx)]);
-        const cb = L.cum[Math.floor(b.idx)] + (b.idx % 1) * ((L.cum[Math.floor(b.idx) + 1] ?? L.cum[Math.floor(b.idx)]) - L.cum[Math.floor(b.idx)]);
-        const gap = ca - cb;
-        if (b.idx >= 2 && gap >= Math.max(2.5 * L.hw, 900)) upsert(`gap|${L.key}|${b.t.trip_id}`, now, () => ({ kind: "gap", severity: gap >= 3 * L.hw ? "high" : "medium", route: L.route, lineKey: L.key, trainId: `${L.key}|${b.t.trip_id}`,
-          stopIdx: Math.round((a.idx + b.idx) / 2), title: `${Math.round(gap / 60)} min gap in ${L.route} service`, text: `Between ${L.line.names[Math.ceil(b.idx)]} and ${L.line.names[Math.ceil(a.idx)]} toward ${L.terminus} · scheduled every ${Math.round(L.hw / 60)} min`, gap }));
+      if (L.mode !== "live" || !L.board) continue;
+      const pw = planned.has(baseRoute(L.route));
+      for (const g of serviceGaps(L.line, E.lineSched[L.key], L.cum, L.board.trains)) {
+        upsert(`gap|${L.key}|${g.behind.trip_id}`, now, () => ({ kind: "gap", severity: pw ? "low" : g.severity, planned: pw, route: L.route, lineKey: L.key, trainId: `${L.key}|${g.behind.trip_id}`,
+          stopIdx: Math.round((g.from_idx + g.stop_idx) / 2), title: `${Math.round(g.wait / 60)} min gap in ${L.route} service`,
+          text: `Between ${L.line.names[g.from_idx]} and ${L.line.names[g.stop_idx]} toward ${L.terminus} · scheduled every ${Math.round(g.hw / 60)} min here${g.missing ? ` · the timetable has ${g.missing} train${g.missing > 1 ? "s" : ""} in that time` : ""}${pw ? " · planned work on this line" : ""}`, gap: g.wait }));
       }
     }
     for (const ev of active.values()) if (ev.seen !== E.polls) { ev.open = false; ev.ended_ts = now; active.delete(ev.key); }
@@ -220,7 +261,7 @@ export function routeHealth(E) {
     if (t.position && t.position.stalled) h.stalled++;
     if (t.late != null) h.late.push(t.late);
   }
-  for (const ev of E.events) if (ev.open && ev.kind === "gap") get(baseRoute(ev.route)).gaps++;
+  for (const ev of E.events) if (ev.open && ev.kind === "gap" && !ev.planned) get(baseRoute(ev.route)).gaps++;
   for (const a of E.alerts || []) if (a.kind === "delay") for (const r of a.routes || []) if (by.has(baseRoute(r))) get(baseRoute(r)).alerts.push(a);
   for (const h of by.values()) {
     h.median_late = median(h.late);

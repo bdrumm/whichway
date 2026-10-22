@@ -46,3 +46,33 @@ def test_geometry_and_scheduled_positions(tmp_path):
     assert trains["t1"]["points"][-1][1] == 10180
     hx = out["health"]
     assert hx["trains"] == 2 and hx["holding"] == 1 and hx["status"] in ("degraded", "disrupted")
+
+
+GAPS_HARNESS = """
+import { cumRun, serviceGaps, schedGapAt } from "%(engine)s";
+const line = { stops: ["A", "B", "C", "D", "E", "F"], names: ["a", "b", "c", "d", "e", "f"], run_sec: [120, 120, 120, 120, 120] };
+const cum = cumRun(line), now = 100000;
+// trips reaching the last stop every `hw` seconds around now: [stem, last idx, ts at the last stop]
+const timetable = hw => Array.from({ length: 40 }, (_, k) => [`t${k}`, 5, now - 10 * hw + k * hw]);
+const tr = (id, pts) => ({ trip_id: id, points: pts.map(([i, dt]) => [i, now + dt]) });
+// x is 8 min behind w at d: on schedule. y is 25 min behind x at d: two trains of the 8-min timetable are missing
+const trains = [tr("w", [[4, 60], [5, 180]]), tr("x", [[3, 100], [4, 540], [5, 660]]), tr("y", [[2, 0], [3, 1600], [4, 2040]])];
+const peak = serviceGaps(line, timetable(480), cum, trains);
+// the same trains against a 20-min midday timetable: a 25-min wait is not a gap
+const midday = serviceGaps(line, timetable(1200), cum, trains);
+// a train that has not left the terminal area is not compared
+const atOrigin = serviceGaps(line, timetable(480), cum, [trains[0], tr("z", [[1, 0], [4, 3000]])]);
+console.log(JSON.stringify({ peak: peak.map(g => ({ ahead: g.ahead.trip_id, behind: g.behind.trip_id, stop: g.stop_idx, wait: g.wait, hw: g.hw, missing: g.missing, severity: g.severity })),
+  midday: midday.length, atOrigin: atOrigin.length, sg: schedGapAt(cum, timetable(600), 3, now, now + 1200) }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_service_gaps_follow_the_timetable_at_the_stop(tmp_path):
+    h = tmp_path / "g.mjs"
+    h.write_text(GAPS_HARNESS % {"engine": (ROOT / "site/map/engine.js").as_uri()})
+    out = json.loads(subprocess.run(["node", str(h)], capture_output=True, text=True, check=True).stdout)
+    assert out["peak"] == [{"ahead": "x", "behind": "y", "stop": 3, "wait": 1500, "hw": pytest.approx(480, rel=0.15), "missing": 3, "severity": "medium"}]
+    assert out["midday"] == 0
+    assert out["atOrigin"] == 0
+    assert out["sg"]["longest"] == 600 and out["sg"]["hw"] == pytest.approx(600, rel=0.1)
