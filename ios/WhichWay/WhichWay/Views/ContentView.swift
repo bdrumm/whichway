@@ -15,7 +15,7 @@ struct ContentView: View {
         .sheet(isPresented: $welcome) { WelcomeView() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            case .active: data.start(); data.refreshIfStale()
+            case .active: data.start(); data.refreshIfStale(); Task { await ReportQueue.shared.flush() }
             case .background: if TripRecorder.shared.phase == nil { data.stop() }     // a route in progress keeps polling
             default: break
             }

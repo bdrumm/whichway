@@ -70,6 +70,9 @@ struct PlannerView: View {
     private let autoSwitchConfidence = 0.75
     /// The rider's own word on the train they are on (and the line to take at the change).
     @State private var onTrainSheet = false
+    /// The rider's report, pinned where `reportContext` says; set when the sheet opens.
+    @State private var reporting: ReportContext?
+    @AppStorage(ReportQueue.enabledKey) private var reportsOn = true
     /// Per leg, the line the rider said they will take where a leg allows several (the A rather than the C).
     @State private var preferredKeys: [Int: String] = [:]
     /// The earlier Go tab: the title, the pickers, the full card, the route list and the five views on one page.
@@ -172,6 +175,9 @@ struct PlannerView: View {
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
         .sheet(isPresented: $onTrainSheet) { onTrainSheetView }
+        .sheet(isPresented: Binding(get: { reporting != nil }, set: { if !$0 { reporting = nil } })) {
+            if let c = reporting { ReportSheet(context: c, onTrain: c.source == .trip) }
+        }
         .onChange(of: trip.phase) { _, ph in
             if ph == .arrived { endTrip(by: trip.endReason ?? "arrived") }
             // on a train by the phone's own reading, with no departure to name it: ask which
@@ -936,6 +942,7 @@ struct PlannerView: View {
                     Label(phaseText(ph, originName: originName), systemImage: phaseSymbol(ph))
                         .font(.caption.weight(.semibold)).foregroundStyle(Color.green).lineLimit(1)
                     Spacer()
+                    reportButton
                     Button { openOnTrain() } label: { Label("Train", systemImage: "tram.fill") }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                         .accessibilityLabel("Which train am I on")
@@ -950,6 +957,7 @@ struct PlannerView: View {
                 } else {
                     Text(lastEndNote ?? "Starts by itself at \(originName)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
+                    reportButton
                     Button("On a train?") { openOnTrain() }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                     Button("Start route") { startTrip(by: "hand") }
@@ -1096,6 +1104,39 @@ struct PlannerView: View {
         refreshRideArrival()
         updateActivity()
         updateFocus()
+    }
+
+    // MARK: - rider reports
+
+    /// What's happening: a held train, a long wait, crowding. Shown when the rider has it switched on (Settings) and
+    /// there is a train or a platform to pin a report to.
+    @ViewBuilder private var reportButton: some View {
+        if reportsOn, headline != nil {
+            Button { reporting = reportContext() } label: { Image(systemName: "exclamationmark.bubble.fill") }
+                .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
+                .accessibilityLabel("Report what's happening")
+        }
+    }
+
+    /// Where a report from here is pinned: on a ride, the train the phone believes the rider is on, at the stop the
+    /// feed has it at now (else the leg's boarding stop); before the ride, the boarding platform of the leg in hand,
+    /// on the line the phone or the rider picked for it.
+    private func reportContext() -> ReportContext? {
+        guard let sel = headline, sel.legs.indices.contains(onTrainLeg) else { return nil }
+        let leg = sel.legs[onTrainLeg]
+        let name: (String) -> String = { sid in data.index?.stations[data.index?.stationOf(sid) ?? ""]?.name ?? sid }
+        let belief = trip.belief(leg: onTrainLeg)
+        if trip.phase == .riding, let b = belief, let key = b.bestKey {
+            let train = data.boards[key]?.trains.first { $0.id == b.bestTrain }
+            let route = train?.route ?? b.route ?? ""
+            if let pos = train?.position {
+                return .onTrain(key: key, tripId: train?.tripId, route: route, stop: pos.stopId, stopName: pos.stopName, confidence: b.confidence)
+            }
+            return .onTrain(key: key, tripId: ReportContext.tripId(ofTrain: b.bestTrain), route: route, stop: leg.from, stopName: name(leg.from), confidence: b.confidence)
+        }
+        let key = belief?.bestKey ?? preferredKeys[onTrainLeg] ?? leg.primaryKey
+        guard !key.isEmpty else { return nil }
+        return .atStation(key: key, stop: leg.from, stopName: name(leg.from))
     }
 
     // MARK: - the rider's own word on the train
