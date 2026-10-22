@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures ios-seed
+.PHONY: help local venv gtfs site-synthetic site data-branch map-dev serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures ios-seed
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -55,6 +55,10 @@ relay-health: ## Ask the deployed relay whether it is configured and its token c
 
 trips-nightly: ## Install a launchd agent that runs `make trips` every night at 23:40 (remove with scripts/trips_agent.sh remove)
 	scripts/trips_agent.sh install
+
+map-dev: ## The Atlas live map (site/map/) against the published data on http://localhost:$(PORT)/map/
+	git fetch -q origin gh-pages && rm -rf site/data && git archive origin/gh-pages data | tar -x -C site
+	cd site && python3 -m http.server $(PORT)
 
 serve: gtfs ## Serve $(SITE) on http://localhost:$(PORT); live.json and the timetable extract refresh from the feeds
 	$(VENV)/bin/mta-insights serve --site $(SITE) --port $(PORT) --db data/mta.sqlite

@@ -53,9 +53,11 @@ class Frame {
     const btn = html("button", null, "Table", tg);
     btn.type = "button";
     btn.addEventListener("click", () => { this.root.classList.toggle("show-table"); btn.textContent = this.root.classList.contains("show-table") ? "Chart" : "Table"; });
-    this.svg = el("svg", { viewBox: `0 0 720 ${height}`, role: "img" }, this.root);
-    this.height = height; this.width = 720;
-    if (dense) { this.root.classList.add("dense"); this.svg.style.minWidth = "640px"; }
+    // a narrow host (a side panel) can ask for a smaller drawing width with data-chart-width, so text keeps its size
+    const host = container.closest ? container.closest("[data-chart-width]") : null, width = host ? Number(host.dataset.chartWidth) || 720 : 720;
+    this.svg = el("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" }, this.root);
+    this.height = height; this.width = width;
+    if (dense) { this.root.classList.add("dense"); if (width >= 640) this.svg.style.minWidth = "640px"; }
     this.tableWrap = html("div", "table-view table-wrap", null, this.root);
   }
   table(headers, rows) {
@@ -210,7 +212,7 @@ export function stringline(container, { title, subtitle, legs, now, horizonSec =
   stops.forEach((st, i) => { el("line", { x1: m.l, x2: m.l + W, y1: yp(i), y2: yp(i), class: "grid-line" }, f.svg);
     const label = st.name.length > 22 ? st.name.slice(0, 21) + "…" : st.name;
     el("text", { x: m.l - 8, y: yp(i) + 4, "text-anchor": "end", class: "axis-text" }, f.svg).textContent = label; });
-  const tick = (t1 - t0) > 5400 ? 1800 : 600;
+  const tick = (t1 - t0) > 5400 || W < 400 ? 1800 : 600;
   for (let t = Math.ceil(t0 / tick) * tick; t <= t1; t += tick) { el("line", { x1: xp(t), x2: xp(t), y1: m.t, y2: m.t + H, class: "grid-line" }, f.svg);
     el("text", { x: xp(t), y: height - 8, "text-anchor": "middle", class: "axis-text" }, f.svg).textContent = new Date(t * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }); }
   el("line", { x1: xp(now), x2: xp(now), y1: m.t, y2: m.t + H, stroke: cssVar("--text-secondary"), "stroke-width": 1.5 }, f.svg);

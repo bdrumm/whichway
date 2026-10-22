@@ -92,6 +92,24 @@ python -m pipeline.build_site --synthetic --out _site && python -m http.server -
 The scheduled collector is a convenience for review; for production, run
 `mta-insights collect` continuously on a small VM and point `build_site` at its store.
 
+## Atlas: the live map (`site/map/`)
+
+A map-first web app over the same data: every train in the network drawn live on the track, with
+line insights docked on the left (live trains and a stringline, where each line loses time, reliability,
+holds, disruptions, monthly delays, countdown accuracy), and on the right an insights feed (holds,
+stalls and gaps detected in the browser every 30 s, MTA alerts, early warnings, research findings),
+a trip planner ranked by live arrival time, station departure boards and the system-wide research.
+A timeline along the bottom replays the day: recorded live positions since the page opened, the
+schedule before that.
+
+- No backend: it reads the published tables (`data/*.json`) and polls the MTA GTFS-Realtime feeds
+  from the browser with `site/rt-client.js`. Lines whose feed is unreachable are drawn from today's
+  schedule and labelled as such (`?scheduled` forces that mode).
+- Data: `../data/` next to the page (the built site, or `mta-insights serve`), else the published
+  `gh-pages` branch; `?data=<url>` overrides.
+- Locally: `make map-dev` then open http://localhost:8000/map/ (serves `site/` with the published data).
+- Deep links: `map/#line=F&dir=S`, `#station=<id>`, `#from=<id>&to=<id>&tab=route`.
+
 ## Running your own instance (beyond GitHub Pages)
 
 Pages refreshes only while the hourly Actions run collects. For continuous
