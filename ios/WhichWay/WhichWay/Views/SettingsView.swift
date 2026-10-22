@@ -47,6 +47,9 @@ struct SettingsView: View {
 /// is under Developer.
 struct SharingSection: View {
     private var tele: Telemetry { Telemetry.shared }
+    private var reports: ReportQueue { ReportQueue.shared }
+    @AppStorage(ReportQueue.enabledKey) private var reportsOn = true
+    @AppStorage(ReportQueue.promptsKey) private var reportPromptsOn = true
 
     var body: some View {
         Section("Improve the predictions") {
@@ -61,6 +64,21 @@ struct SharingSection: View {
                 Button("Delete collected data", role: .destructive) { tele.deleteAll() }
                     .disabled(tele.observations.isEmpty)
             }
+        }
+        Section {
+            Toggle("Report button", isOn: $reportsOn)
+            Toggle("Ask at holds and long waits", isOn: $reportPromptsOn).disabled(!reportsOn)
+            if !reports.sent.isEmpty || !reports.pending.isEmpty {
+                LabeledContent("Reports", value: "\(reports.sent.count) sent · \(reports.pending.count) waiting")
+                ForEach(reports.sent.prefix(3)) { s in
+                    Text("\(Fmt.hhmm(s.ts)) · \(s.summary)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            if !reports.configured { Text("This build has no relay address: reports stay on the phone.").font(.caption).foregroundStyle(.secondary) }
+        } header: {
+            Text("Rider reports")
+        } footer: {
+            Text("Tap the speech bubble on the Go tab to tell other riders and the model what's happening: a held train, a long wait, crowding, an incident, or that all is well. With asking on, the app also asks when your train is held two minutes or your wait runs long. Reports carry the line, the stop and the time, never your location, and are separate from sharing trips.")
         }
         Section("Ultra training mode") {
             Toggle("Ultra training mode", isOn: Binding(get: { ultra }, set: { UltraTraining.enabled = $0; ultra = UltraTraining.enabled }))

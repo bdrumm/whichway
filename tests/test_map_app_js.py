@@ -46,3 +46,47 @@ def test_geometry_and_scheduled_positions(tmp_path):
     assert trains["t1"]["points"][-1][1] == 10180
     hx = out["health"]
     assert hx["trains"] == 2 and hx["holding"] == 1 and hx["status"] in ("degraded", "disrupted")
+
+
+REPORTS_HARNESS = """
+import { normStop, liveReports, groupReports, matchDetections, groupTitle, demoReports } from "%(reports)s";
+const now = 100000;
+const lines = { A_S: { key: "A_S", dir: "S", mode: "live", line: { stops: ["A40S", "A41S", "A42S", "A43S", "A44S"], names: ["a", "b", "c", "d", "e"] } } };
+const reports = [
+  { id: "1", ts: now - 60, kind: "held", route: "A", dir: "S", stop: "A41S", rider: "r1" },
+  { id: "2", ts: now - 30, kind: "held", route: "A", dir: "S", stop: "A41", rider: "r2" },
+  { id: "3", ts: now - 20, kind: "held", route: "A", dir: "S", stop: "A41", rider: "r2" },      // the same rider again
+  { id: "4", ts: now - 3000, kind: "held", route: "A", dir: "S", stop: "A41", rider: "r3" },    // past its 20 min
+  { id: "5", ts: now - 100, kind: "all_good", route: "A", stop: "A44", rider: "r4" },             // no direction: either
+  { id: "6", ts: now - 100, kind: "crowded", sub: "packed", route: "A", dir: "S", stop: "A40", rider: "r5" },
+];
+const events = [
+  { key: "hold|A_S|t1", kind: "hold", lineKey: "A_S", stopIdx: 2, open: true, first_ts: now - 200, title: "A train held at c" },
+  { key: "gap|A_S|t9", kind: "gap", lineKey: "A_S", stopIdx: 4, open: true, first_ts: now - 400, title: "20 min gap in A service" },
+];
+const live = liveReports(reports, now);
+const groups = groupReports(live);
+const m = matchDetections(groups, events, lines);
+console.log(JSON.stringify({ norm: [normStop("A41S"), normStop("631"), normStop("R14N")], live: live.map(r => r.id), groups,
+  byEvent: Object.fromEntries(m.byEvent), byGroup: Object.fromEntries([...m.byGroup].map(([k, v]) => [k, { ev: v.event && v.event.key, verdict: v.verdict }])),
+  titles: groups.map(groupTitle), demo: demoReports(events, lines, now).length }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_rider_reports_group_and_match_detections(tmp_path):
+    h = tmp_path / "r.mjs"
+    h.write_text(REPORTS_HARNESS % {"reports": (ROOT / "site/map/reports.js").as_uri()})
+    out = json.loads(subprocess.run(["node", str(h)], capture_output=True, text=True, check=True).stdout)
+    assert out["norm"] == ["A41", "631", "R14"]
+    assert "4" not in out["live"]                                           # a held report lasts 20 minutes
+    held = next(g for g in out["groups"] if g["kind"] == "held")
+    assert held["count"] == 2 and held["stop"] == "A41"                     # two riders, one of them twice
+    assert out["byGroup"][held["id"]] == {"ev": "hold|A_S|t1", "verdict": "confirms"}   # one stop from the detected hold
+    good = next(g for g in out["groups"] if g["kind"] == "all_good")
+    assert out["byGroup"][good["id"]] == {"ev": "gap|A_S|t9", "verdict": "disputes"}
+    assert out["byEvent"]["hold|A_S|t1"] == {"confirm": 2, "dispute": 0}
+    crowd = next(g for g in out["groups"] if g["kind"] == "crowded")
+    assert out["byGroup"][crowd["id"]]["verdict"] is None                   # crowding confirms no detection
+    assert "Crowded (packed) · 1 rider" in out["titles"]
+    assert out["demo"] >= 1
