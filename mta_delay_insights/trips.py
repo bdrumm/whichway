@@ -462,6 +462,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
         "accessSec": o.get("accessSec"), "walkSpeedMPerMin": o.get("walkSpeedMPerMin"), "startDistanceM": o.get("startDistanceM"),
         "nDeparts": len(departs), "nAlights": len(alights), "legs": [],
         "withdrawnDepartures": o.get("withdrawnDepartures") or [], "phantomRides": phantoms,
+        "appBuild": o.get("appBuild"), "changedEarlyTaps": o.get("changedEarlyTaps") or [],
         "origin": legs_in[0].get("from") if legs_in and isinstance(legs_in[0], dict) else None,
     }
     truth = next((n["lines"] for n in notes or [] if n.get("lines")), None)
@@ -572,6 +573,9 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
     if ended and o.get("endedBy") in ENDED_AT_DESTINATION and o.get("expectedSec") is not None and created:
         r["measuredSec"] = float(ended) - created
         r["doorToDoorErrSec"] = r["measuredSec"] - float(o["expectedSec"])
+    # a route that got to the destination on fewer rides than it had legs: the phone missed a change (Oct 22 and 27: the A
+    # taken across the platform at Jay St, the F "ridden" to W 4 St on the record and the trip ended at 14 St)
+    r["missedChange"] = bool(r["ranItsCourse"] and o.get("endedBy") in ENDED_AT_DESTINATION and len(legs_in) > 1 and len(departs) < len(legs_in))
     if o.get("transferWalkSec") is not None and o.get("measuredTransferSec") is not None:
         r["transferErrSec"] = float(o["measuredTransferSec"]) - float(o["transferWalkSec"])
     # the server's own forecast for the destination platform, as it stood when the route started and at the departure
@@ -698,6 +702,12 @@ def findings(s: dict, reviews: list[dict]) -> list[str]:
     if ar.get("riderLegs"):
         out.append(f"Against the rider's own account: the plan named the right line on {ar['planRight']} of {ar['riderLegs']} legs"
                    + (f", the phone's call on {ar['right']} of {ar['legs']} it made." if ar.get("legs") else "; the phone made no call on them."))
+    mc = [r for r in reviews if r.get("missedChange")]
+    if mc:
+        which = ", ".join(f"{r['day']} {_hm(r['createdTs'])}" + (f" build {r['appBuild']}" if r.get("appBuild") else "") for r in mc)
+        out.insert(0, f"**{len(mc)} trip(s) reached the destination on fewer rides than the route had legs: the phone missed a change** "
+                      f"({which}). "
+                      "Each is a hand-off the Live Activity never made; read the trip's trace at its stations short of the planned change.")
     nd = [r for r in reviews if not r.get("falseStart") and r.get("nDeparts", 0) == 0 and (r.get("startDistanceM") or 0) > 150]
     if nd:
         out.append(f"{len(nd)} trip(s) started more than 150 m from the station's point and never felt a departure: the tracker stayed "
@@ -757,7 +767,7 @@ def render_markdown(reviews: list[dict], s: dict, generated: datetime, legs: lis
                      f"{r.get('startedBy') or '?'} / {r.get('endedBy') or 'open'}" + ((" (restart)" if r.get("restart") else " (false start)") if r.get("falseStart") else "")
                      + (f" · {int(r['startDistanceM'])} m out" if r.get("startDistanceM") is not None else ""),
                      _hm(r.get("predictedArriveTs")), _hm(r.get("actualArriveTs")), _signed(r.get("forecastErrSec")), legs_txt,
-                     f"{r.get('nDeparts', 0)}/{r.get('nAlights', 0)}"])
+                     f"{r.get('nDeparts', 0)}/{r.get('nAlights', 0)}" + (" **missed change**" if r.get("missedChange") else "")])
     L.append(_table(["started", "route", "started / ended by", "forecast arrival", "train's arrival", "error", "lines ridden", "felt dep/alight"], rows))
     L.append("Error: the train's real arrival at the destination platform minus the arrival the app forecast when the route started (+ = arrived later than forecast).\n")
     if notes:

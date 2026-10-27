@@ -77,6 +77,25 @@ def test_a_trip_is_scored_against_the_train_the_phone_named(static):
     assert "false start" in md
 
 
+def test_a_change_the_phone_never_saw_is_flagged(static):
+    # Oct 22 and 27: the F planned to W 4 St, the A taken across the platform at Jay St; on the record one ride, the F,
+    # and the trip ended at the destination. The review says so up front, with the build the trip ran on.
+    route, seq = _line(static)
+    t0 = 1_700_000_000.0
+    arr = pd.DataFrame(_arrivals(route, seq, "0600_X..N1", t0))
+    obs = {"id": "t1", "installId": "p", "createdTs": t0 - 400, "endedTs": t0 + 900, "endedBy": "arrived", "startedBy": "gps", "appBuild": "202610221741",
+           "routeLabel": f"{route} → {route} at x", "legs": [{"line": f"{route}_N", "from": seq[0], "to": seq[3]}, {"line": f"{route}_N", "from": seq[3], "to": seq[5]}],
+           "expectedSec": 1400, "schedSec": 900, "events": [{"kind": "departed", "ts": t0 + 50}, {"kind": "alighted", "ts": t0 + 3 * 120 + 25}]}
+    m = trips.TrainMatcher(static, arr)
+    r = trips.review_trip(obs, static, m)
+    assert r["missedChange"] and r["appBuild"] == "202610221741"
+    both = dict(obs, id="t2", events=obs["events"] + [{"kind": "departed", "ts": t0 + 500}, {"kind": "alighted", "ts": t0 + 850}])
+    assert not trips.review_trip(both, static, m)["missedChange"]
+    s = trips.summarize([r])
+    assert s["findings"][0].startswith("**1 trip(s) reached the destination on fewer rides") and "build 202610221741" in s["findings"][0]
+    assert "**missed change**" in trips.render_markdown([r], s, pd.Timestamp(t0, unit="s", tz="UTC").to_pydatetime(), [])
+
+
 def test_a_ride_no_train_at_the_platform_made_is_dropped_before_the_legs(static):
     # Oct 12 at 4 Av-9 St: a 108 s "ride" with no stop felt that no train at the rider's platform made (an R left the
     # level below), then the real train. The phantom is dropped, the real ride is the first leg, and a trip id that

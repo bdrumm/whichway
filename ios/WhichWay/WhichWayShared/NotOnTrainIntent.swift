@@ -15,3 +15,18 @@ struct NotOnTrainIntent: LiveActivityIntent {
         return .result()
     }
 }
+
+/// "Changed to the A/C at Jay St" from the Live Activity: the rider took the change short of the route's own that the
+/// activity offers. Runs in the app's process, like `NotOnTrainIntent`.
+struct ChangedTrainIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Changed trains"
+    static var description = IntentDescription("Hands the route over to the train the rider changed to at the station the activity names.")
+
+    /// Set by the app (the extension leaves it nil).
+    @MainActor static var handler: (() -> Void)?
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { ChangedTrainIntent.handler?() }
+        return .result()
+    }
+}

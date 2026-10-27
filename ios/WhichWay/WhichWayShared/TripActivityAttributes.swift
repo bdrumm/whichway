@@ -31,6 +31,9 @@ struct TripActivityAttributes: ActivityAttributes {
         /// ride before boarding, the train's progress on it once on board, 0 as it pulls in. Nil with no change ahead,
         /// where the activity shows the estimated arrival instead.
         var stopsToChange: Int? = nil
+        /// On the train: a change short of the route's own that can be made where the train is ("A/C at Jay St-MetroTech"),
+        /// offered as one tap (`ChangedTrainIntent`); the sensors cannot tell two steps across the platform from staying on.
+        var changeHere: String? = nil
 
         /// On the train with a change ahead: when the connecting train leaves the change (the countdown runs to it).
         /// Nil with no change ahead, or no connecting train in the feeds yet (`boardTs` is then the arrival at the change).
