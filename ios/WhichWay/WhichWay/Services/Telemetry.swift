@@ -45,10 +45,15 @@ struct TripObservation: Codable, Identifiable {
     var stopSpans: [FeltStop]? = nil      // ultra training mode: each station stop felt, for the training corpus
     var beliefLog: [BeliefNote]? = nil    // each change in the train the phone believed the rider was on
     var ultraTraining: Bool? = nil
+    /// The build the trip ran on ("202610221741"): the version is 1.0 on every TestFlight build (Oct 27: which build
+    /// a trip ran on could only be told from the fields its record had).
+    var appBuild: String? = nil
     /// Pull-aways felt that no train made, withdrawn (the platform shaking).
     var withdrawnDepartures: [Double]?
     /// When the rider said "not on the train" by hand.
     var notOnTrainTaps: [Double]? = nil
+    /// When the rider said they changed short of the route's change.
+    var changedEarlyTaps: [Double]? = nil
     /// Each faster route offered on the way, as the banner put it.
     var rerouteNotes: [RerouteNote]? = nil
     var uploaded: Bool?
@@ -213,6 +218,7 @@ final class Telemetry {
             }
             o.withdrawnDepartures = tl.withdrawnDepartures
             o.notOnTrainTaps = tl.notOnTrainTaps
+            o.changedEarlyTaps = tl.changedEarlyTaps
             o.rerouteNotes = tl.rerouteNotes
             o.beliefLog = tl.beliefLog.isEmpty ? nil : tl.beliefLog
             if o.predictedBoardTs == nil { o.predictedBoardTs = tl.forecastBoardTs; o.predictedArriveTs = tl.forecastArriveTs }

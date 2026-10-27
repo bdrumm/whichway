@@ -20,6 +20,9 @@ struct OnTrainSheet: View {
     let onPick: (BoardingCandidate) -> Void
     let onTransfer: (String) -> Void
     let onNotOnTrain: () -> Void
+    /// A change short of the route's own that the train in hand has reached ("A/C at Jay St-MetroTech"), and taking it.
+    var changedHere: String? = nil
+    var onChangedHere: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -50,6 +53,15 @@ struct OnTrainSheet: View {
                     Text("Which train are you on?")
                 } footer: {
                     Text("The route follows the train you pick: the change ahead, the arrival and the Live Activity.")
+                }
+                if let here = changedHere {
+                    Section {
+                        Button { onChangedHere(); dismiss() } label: {
+                            Label("I changed to the \(here)", systemImage: "arrow.left.arrow.right").font(.subheadline.weight(.semibold))
+                        }
+                    } footer: {
+                        Text("The phone cannot feel a step across the platform. The route moves to the change you made and follows the train you took.")
+                    }
                 }
                 if let t = transfer, !t.choices.isEmpty {
                     Section("At \(t.station), take the") {

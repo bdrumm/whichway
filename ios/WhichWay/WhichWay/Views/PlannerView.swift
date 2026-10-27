@@ -171,6 +171,7 @@ struct PlannerView: View {
         .onChange(of: trip.onTrain) { _, _ in followRide() }
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
+        .onChange(of: trip.changedEarly) { _, c in if let c { followEarlyChange(c) } }
         .sheet(isPresented: $onTrainSheet) { onTrainSheetView }
         .onChange(of: trip.phase) { _, ph in
             if ph == .arrived { endTrip(by: trip.endReason ?? "arrived") }
@@ -747,6 +748,7 @@ struct PlannerView: View {
             trip.observeBoards(data.boards, now: now)
             refreshRideArrival()
             checkReroute(now: now)
+            offerEarlyChange(now: now)
             updateActivity(); updateTelemetry()
             trip.updateForecast(boardTs: headline?.live?.boardTs, arriveTs: headline?.live?.arriveTs, now: now)
             if trip.forecastBoardTs == headline?.live?.boardTs { forecastTrainId = liveId }
@@ -801,6 +803,7 @@ struct PlannerView: View {
             offline: data.offline, startedBy: startedBy)
         var o = base
         o.trainGapSec = l0?.practicalLatenessSec
+        o.appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
         return o
     }
 
@@ -865,7 +868,8 @@ struct PlannerView: View {
             nextBoardTs: next?.boardTs, nextRoute: next?.legs.first?.train.route,
             changeAt: changeAhead ? p.transfer?.station : nil, changeRoutes: changeAhead ? p.legs[1].routesLabel : nil,
             extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline, routeLabel: p.label,
-            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, stopsToChange: stopsToChange)
+            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, stopsToChange: stopsToChange,
+            changeHere: trip.earlyChange?.change.text)
     }
 
     private func startActivity() {
@@ -955,6 +959,14 @@ struct PlannerView: View {
                     Button("Start route") { startTrip(by: "hand") }
                         .font(.caption.weight(.semibold)).buttonStyle(.borderedProminent).controlSize(.small)
                 }
+            }
+            if let ec = trip.earlyChange {
+                // a change short of the route's own that no sensor can see: the rider says so in one tap
+                Button { trip.takeEarlyChange(now: data.now) } label: {
+                    Label("Changed to the \(ec.change.text)", systemImage: "arrow.left.arrow.right")
+                }
+                .font(.caption.weight(.semibold)).buttonStyle(.borderedProminent).controlSize(.small)
+                .accessibilityLabel("I changed to the \(ec.change.text)")
             }
             if let pr = trip.prompt {
                 boardingPrompt(pr)
@@ -1185,7 +1197,9 @@ struct PlannerView: View {
                 preferredKeys[1] = key
                 switchRoute(to: alt)
             },
-            onNotOnTrain: { trip.notOnTrain() })
+            onNotOnTrain: { trip.notOnTrain() },
+            changedHere: trip.earlyChange?.change.text,
+            onChangedHere: { trip.takeEarlyChange(now: data.now) })
     }
 
     /// The rider is on this train: the route starts from it if it has not started, switches to the route that
@@ -1271,6 +1285,57 @@ struct PlannerView: View {
     private func dropOtherLegsRide(_ sel: PathOption, leg: Int) {
         guard let k = rideItinerary?.legs.first?.key, sel.legs.indices.contains(leg), !sel.legs[leg].keys.contains(k) else { return }
         rideItinerary = nil
+    }
+
+    /// The changes short of the route's own on the line being ridden (the A/C across the platform at Jay St on an F
+    /// planned to change at W 4 St), among the listed routes and the planner's further options.
+    private func earlyChanges(ridingKey: String) -> [EarlyChange] {
+        guard let sched = data.schedule, let index = data.index, let sel = headline, trip.currentLeg == 0 else { return [] }
+        let listed = Set(paths.map { $0.id })
+        let options = paths + enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 24).filter { !listed.contains($0.id) }
+        return earlierChanges(from: sel, ridingKey: ridingKey, among: options, index: index)
+    }
+
+    /// On the first leg's train, the change short of the route's own at the station the train is at (or left a few
+    /// minutes ago) goes to the trip bar and the Live Activity as one tap; nil anywhere else.
+    private func offerEarlyChange(now: Double) {
+        guard trip.onTrain, trip.currentLeg == 0, let c = trip.rideTrain,
+              let o = earlyChangeOffer(earlyChanges(ridingKey: c.key), train: c, now: now) else {
+            trip.offerEarlyChange(nil, alightTs: nil); return
+        }
+        trip.offerEarlyChange(o.change, alightTs: earlyChangeAlightTs(o.change, train: c, now: now))
+    }
+
+    /// The rider changed short of the route's own change: the route becomes the one changing there, and the rider is on
+    /// its connection, the first of the next line's trains to leave that platform after they stepped off (by the
+    /// feed); with none in the feeds yet, those trains are followed and the next pull-away felt names one.
+    private func followEarlyChange(_ c: ChangedEarly) {
+        guard let sched = data.schedule else { return }
+        var alt = c.change.option
+        if let listed = paths.first(where: { $0.id == alt.id }) { alt = listed } else {
+            var more = [alt]
+            applyPersonalTransfers(&more)
+            evaluate(&more[0], schedule: sched, lineSched: data.lineSched, now: data.now, holds: data.holds, deviations: data.deviations, hour: nyHour(data.now))
+            alt = more[0]
+            extraPaths.append(alt); paths.append(alt)
+            data.setWanted(Set(paths.flatMap { $0.legs.flatMap { $0.keys } }), for: "planner")
+        }
+        switchRoute(to: alt)
+        let next = alt.legs[1]
+        var boardIdx: [String: Int] = [:], alightIdx: [String: Int] = [:]
+        for (k, ix) in next.idx { boardIdx[k] = ix.from; alightIdx[k] = ix.to }
+        let gone = trainsAhead(boards: data.boards, schedule: sched, boardIdx: boardIdx, alightIdx: alightIdx, onLegKeys: Set(next.keys), now: data.now, maxAgoSec: 900)
+        // the connection: the first to pull away after the step across (one standing there as the rider stepped off counts)
+        let after = c.alightTs - TransferTiming.standingCatchSec
+        if let train = gone.filter({ PlatformTiming.pullsAway($0.boardTs, route: $0.route) >= after })
+            .min(by: { $0.boardTs < $1.boardTs }) {
+            trip.setOnTrain(train, now: data.now)
+        } else {
+            trip.seedCurrentLeg(gone, now: data.now)
+        }
+        refreshRideArrival()
+        updateActivity()
+        updateFocus()
     }
 
     /// The rider stayed on past the stop where the route had them leave the train: the route becomes the one that

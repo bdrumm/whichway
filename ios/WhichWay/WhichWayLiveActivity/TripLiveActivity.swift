@@ -42,7 +42,12 @@ struct TripLiveActivity: Widget {
                             ExtraBadge(state: context.state)
                         }
                         Text(subline(context.state)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                        if context.state.riding { NotOnTrainButton() }
+                        if context.state.riding {
+                            HStack(spacing: 6) {
+                                if let here = context.state.changeHere { ChangedHereButton(text: here) }
+                                NotOnTrainButton()
+                            }
+                        }
                     }
                     .padding(.horizontal, 6)
                 }
@@ -97,6 +102,18 @@ struct NotOnTrainButton: View {
             Label("Not on the train", systemImage: "xmark.circle").font(.caption.weight(.semibold))
         }
         .buttonStyle(.bordered).tint(.white)
+    }
+}
+
+/// On the train, at a station short of the route's change: the rider says they changed there (`ChangedTrainIntent`).
+struct ChangedHereButton: View {
+    let text: String
+
+    var body: some View {
+        Button(intent: ChangedTrainIntent()) {
+            Label("Changed to the \(text)", systemImage: "arrow.left.arrow.right").font(.caption.weight(.semibold)).lineLimit(1)
+        }
+        .buttonStyle(.borderedProminent).tint(.green)
     }
 }
 
@@ -160,7 +177,12 @@ struct LockScreenView: View {
                 ExtraBadge(state: state)
             }
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            if state.riding { NotOnTrainButton() }
+            if state.riding {
+                HStack(spacing: 8) {
+                    if let here = state.changeHere { ChangedHereButton(text: here) }
+                    NotOnTrainButton()
+                }
+            }
         }
         .padding(14)
     }
