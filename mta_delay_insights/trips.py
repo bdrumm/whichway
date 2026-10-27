@@ -704,8 +704,9 @@ def findings(s: dict, reviews: list[dict]) -> list[str]:
                    + (f", the phone's call on {ar['right']} of {ar['legs']} it made." if ar.get("legs") else "; the phone made no call on them."))
     mc = [r for r in reviews if r.get("missedChange")]
     if mc:
+        which = ", ".join(f"{r['day']} {_hm(r['createdTs'])}" + (f" build {r['appBuild']}" if r.get("appBuild") else "") for r in mc)
         out.insert(0, f"**{len(mc)} trip(s) reached the destination on fewer rides than the route had legs: the phone missed a change** "
-                      f"({', '.join(f'{r['day']} {_hm(r['createdTs'])}' + (f' build {r['appBuild']}' if r.get('appBuild') else '') for r in mc)}). "
+                      f"({which}). "
                       "Each is a hand-off the Live Activity never made; read the trip's trace at its stations short of the planned change.")
     nd = [r for r in reviews if not r.get("falseStart") and r.get("nDeparts", 0) == 0 and (r.get("startDistanceM") or 0) > 150]
     if nd:
