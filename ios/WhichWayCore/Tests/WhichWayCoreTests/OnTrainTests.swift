@@ -122,6 +122,27 @@ final class OnTrainTests: XCTestCase {
         XCTAssertEqual(l2.lastPollTs, 90)
     }
 
+    func testATrainHeldAtThePlatformPastItsTimeVouchesForThePullAwayWhenItLeaves() {
+        // Oct 27 at W 4 St, 16:58:29 (0 here): the F the rider boarded had a last published time at W 4 St over two minutes
+        // before (held there), was still listed at the poll before the pull-away and gone from the list at the next. The
+        // pull-away was withdrawn as no train's, and the next F, seven minutes behind, was taken for the ride.
+        var log = DepartureLog()
+        log.observe(trains: [train("f1", key: "F_S", points: [(4, -130), (5, 60)])], key: "F_S", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -10)
+        log.observe(trains: [train("f2", key: "F_S", points: [(4, 400), (5, 590)])], key: "F_S", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -10)
+        log.observe(trains: [train("f1", key: "F_S", points: [(5, 60), (6, 180)])], key: "F_S", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: 20)
+        log.observe(trains: [train("f2", key: "F_S", points: [(4, 400), (5, 590)])], key: "F_S", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: 100)
+        XCTAssertGreaterThan(abs(PlatformTiming.pullsAway(-130, route: "F")), 120, "its last time there says nothing")
+        let felt = log.departureCheck(at: 0)
+        XCTAssertTrue(felt.left)
+        XCTAssertTrue(felt.waiting)
+        // the same train standing there for five more minutes did not make this pull-away
+        var stood = DepartureLog()
+        stood.observe(trains: [train("f1", key: "F_S", points: [(4, -130), (5, 60)])], key: "F_S", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -10)
+        stood.observe(trains: [train("f1", key: "F_S", points: [(4, -130), (5, 60)])], key: "F_S", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: 280)
+        stood.observe(trains: [train("f1", key: "F_S", points: [(5, 360), (6, 480)])], key: "F_S", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: 310)
+        XCTAssertFalse(stood.departureCheck(at: 0).left)
+    }
+
     func testATrainLeavingAnotherPlatformDoesNotVouchForAPullAway() {
         // Oct 12, 4 Av-9 St at 11:47:51 (0 here): the rider stood on the F platform; the R pulled out of the level below
         // 18 s before (its feed time at 9 St 11:48:11, 85 s after it really arrived), the G had left three minutes before,

@@ -160,6 +160,10 @@ struct DepartureLog: Equatable {
         var progressIdx: Int? = nil
         var samePlatform: Bool = true
         var atOrigin: Bool = false
+        /// The last poll at which the feed still listed the boarding stop, and the first at which it had gone past it:
+        /// the train left the platform between the two, whatever its last published time there said.
+        var listedTs: Double? = nil
+        var passedTs: Double? = nil
     }
 
     private(set) var entries: [String: Entry] = [:]
@@ -187,6 +191,7 @@ struct DepartureLog: Equatable {
                           atOrigin: boardIdx == 0)
             }
             if let b = atBoard { e.boardTs = b }
+            if t.nextIdx <= boardIdx { e.listedTs = now } else if e.passedTs == nil { e.passedTs = now }
             e.lastSeenTs = now
             e.progressIdx = t.nextIdx
             for pt in pts where pt.idx > boardIdx { e.stopTs[pt.idx] = pt.ts }
@@ -256,11 +261,18 @@ struct DepartureLog: Equatable {
     /// Only trains at the rider's own platform can vouch for a pull-away: one leaving another platform of the station
     /// is what shook this one (Oct 12 at 4 Av-9 St: the R pulling out of the level below at 11:47:33 was felt on the
     /// F platform at 11:47:51, read as a ride on that R, and the trip ran a leg behind from there).
+    ///
+    /// A train held at the platform past its last published time there left when the feed stopped listing the stop: one
+    /// still listed within `windowSec` before the pull-away and gone from the list within the feed's lag after it left
+    /// then too (Oct 27 at W 4 St: the F the rider boarded at 16:58:29 had a time there two minutes earlier, the pull-away
+    /// was withdrawn as no train's, and the next F, seven minutes behind, was taken for the ride).
     func departureCheck(at ts: Double, windowSec: Double = 120) -> (left: Bool, waiting: Bool) {
         var left = false, waiting = false
         for e in entries.values {
             let passed = (e.progressIdx ?? e.boardIdx) > e.boardIdx
             if passed, e.samePlatform, abs(PlatformTiming.pullsAway(e.boardTs, route: e.route) - ts) <= windowSec { left = true }
+            if passed, e.samePlatform, let l = e.listedTs, let p = e.passedTs, l >= ts - windowSec, p >= ts - 30,
+               p <= ts + PlatformTiming.recordedLag(route: e.route) + windowSec { left = true }
             if !passed { waiting = true }
         }
         return (left, waiting)
