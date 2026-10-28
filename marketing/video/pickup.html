@@ -1,0 +1,202 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Pickup</title>
+<style>html, body { margin: 0; background: #05070d; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+// "Pickup": the train is held on the way to school pickup; the warning comes early enough to ask a friend. 56 s.
+const DURATION = 56;
+const AMBER = '#ffb547', WARM = '#ffd89a', HELD = '#ffcc33';
+
+function backdrop(t) {
+  // underground navy while riding, afternoon warmth at the school
+  const warm = Math.max(seg(t, 20.4, 22) * (1 - seg(t, 27.4, 28.6)), seg(t, 37.6, 39.4));
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `rgb(${lerp(8, 44, warm)},${lerp(12, 46, warm)},${lerp(30, 84, warm)})`);
+  g.addColorStop(1, `rgb(${lerp(10, 214, warm)},${lerp(18, 128, warm)},${lerp(44, 84, warm)})`);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  return warm;
+}
+/** An analogue clock at minutes past 3. */
+function clock(x, y, r, minutes, alpha = 1, accent = C.ink) {
+  if (alpha <= 0) return;
+  ctx.save(); ctx.globalAlpha *= alpha; ctx.translate(x, y);
+  ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = r * 0.05; ctx.stroke();
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * Math.PI * 2;
+    ctx.beginPath(); ctx.moveTo(Math.sin(a) * r * 0.8, -Math.cos(a) * r * 0.8); ctx.lineTo(Math.sin(a) * r * 0.9, -Math.cos(a) * r * 0.9); ctx.stroke();
+  }
+  const hA = ((3 + minutes / 60) / 12) * Math.PI * 2, mA = (minutes / 60) * Math.PI * 2;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = r * 0.07; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.sin(hA) * r * 0.5, -Math.cos(hA) * r * 0.5); ctx.stroke();
+  ctx.strokeStyle = accent; ctx.lineWidth = r * 0.045; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.sin(mA) * r * 0.78, -Math.cos(mA) * r * 0.78); ctx.stroke();
+  ctx.fillStyle = accent; ctx.beginPath(); ctx.arc(0, 0, r * 0.06, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function person(x, y, s, color = '#fff', bag = false) {
+  ctx.save(); ctx.fillStyle = color; ctx.shadowColor = WARM; ctx.shadowBlur = 16;
+  ctx.beginPath(); ctx.arc(x, y - 52 * s, 15 * s, 0, Math.PI * 2); ctx.fill();
+  rrect(x - 16 * s, y - 34 * s, 32 * s, 46 * s, 14 * s); ctx.fill();
+  if (bag) { ctx.fillStyle = AMBER; rrect(x + 10 * s, y - 30 * s, 14 * s, 26 * s, 5 * s); ctx.fill(); }
+  ctx.restore();
+}
+function school(t, a, waitK) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  const gx = 1100, gy = 860;
+  // the building
+  ctx.fillStyle = '#2a2140'; ctx.fillRect(900, 420, 860, 440);
+  ctx.beginPath(); ctx.moveTo(880, 430); ctx.lineTo(1330, 300); ctx.lineTo(1780, 430); ctx.closePath(); ctx.fill();
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 6; c++) { ctx.fillStyle = 'rgba(255,214,150,0.35)'; rrect(960 + c * 132, 500 + r * 120, 70, 80, 6); ctx.fill(); }
+  clock(1330, 380, 46, 30 + 14 * waitK, 1, waitK > 0.3 ? C.red : C.ink);
+  // the fence and gate
+  ctx.strokeStyle = 'rgba(20,16,30,0.9)'; ctx.lineWidth = 6;
+  for (let x = 860; x < 1800; x += 28) { ctx.beginPath(); ctx.moveTo(x, gy - 110); ctx.lineTo(x, gy + 10); ctx.stroke(); }
+  ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(850, gy - 100); ctx.lineTo(1810, gy - 100); ctx.stroke();
+  ctx.fillStyle = '#1a1426'; ctx.fillRect(0, gy + 10, W, H - gy);
+  ctx.restore();
+}
+
+// phone screens
+function screenRide(t) {
+  text('Tuesday', PW / 2, 112, { size: 22, weight: 600, color: C.dim, align: 'center', display: false });
+  const now = t < 13 ? '3:05' : t < 16 ? '3:09' : '3:12';
+  text(now, PW / 2, 220, { size: 96, weight: 300, align: 'center', display: false });
+  const held = easeOut(seg(t, 13.6, 14.4));
+  const k = easeOut(seg(t, 7.2, 8));
+  ctx.save(); ctx.globalAlpha *= k; ctx.translate(0, (1 - k) * 40);
+  rrect(16, 540, PW - 32, 220, 34); ctx.fillStyle = 'rgba(16,22,40,0.94)'; ctx.fill();
+  if (held > 0) { ctx.save(); ctx.globalAlpha *= held; ctx.strokeStyle = HELD; ctx.lineWidth = 3; ctx.shadowColor = HELD; ctx.shadowBlur = 20; rrect(16, 540, PW - 32, 220, 34); ctx.stroke(); ctx.restore(); }
+  bullet(62, 594, 24, 'A');
+  text(held > 0.5 ? 'Held at Jay St' : "You're on the A", 100, 588, { size: 24, weight: 700, color: held > 0.5 ? HELD : C.ink });
+  text('Off at Hoyt–Schermerhorn', 100, 616, { size: 18, weight: 500, color: C.dim, display: false });
+  text('Arrive', 40, 680, { size: 20, weight: 500, color: C.dim, display: false });
+  text(held > 0.5 ? '3:41' : '3:27', 40, 726, { size: 44, weight: 700, color: held > 0.5 ? C.red : C.ink });
+  if (held > 0) {
+    ctx.save(); ctx.globalAlpha *= held;
+    const pop = 1 + 0.15 * Math.exp(-Math.pow((t - 14.4) * 5, 2));
+    ctx.translate(250, 712); ctx.scale(pop, pop);
+    chip(0, -24, '+14 min', C.red, 1, 26);
+    ctx.restore();
+  }
+  ctx.restore();
+  // the hold, explained
+  const e = easeOut(seg(t, 17, 17.8));
+  if (e > 0) {
+    ctx.save(); ctx.globalAlpha *= e; ctx.translate(0, (1 - e) * 30);
+    rrect(16, 300, PW - 32, 200, 30); ctx.fillStyle = 'rgba(16,22,40,0.94)'; ctx.fill();
+    text('HOLDS HERE AT THIS HOUR', 40, 342, { size: 14, weight: 700, color: C.faint, spacing: 2, display: false });
+    // a small distribution of how long holds last, the likely end marked
+    const bars = [0.2, 0.45, 0.8, 1, 0.75, 0.5, 0.3, 0.15];
+    bars.forEach((b, i) => { ctx.fillStyle = i === 3 ? HELD : 'rgba(255,204,51,0.35)'; rrect(40 + i * 40, 478 - b * 70, 30, b * 70, 5); ctx.fill(); });
+    text('Usually 12 more min', 40, 380, { size: 22, weight: 700, color: HELD, display: false });
+    ctx.restore();
+  }
+}
+function screenMessages(t) {
+  text('Sam', PW / 2, 120, { size: 26, weight: 700, align: 'center' });
+  const bubble = (s, mine, y, at, w) => {
+    const k = easeOut(seg(t, at, at + 0.5));
+    if (k <= 0) return;
+    ctx.save(); ctx.globalAlpha *= k; ctx.translate(0, (1 - k) * 20);
+    const lines = s.split('\n'), h = 30 + lines.length * 28;
+    const x = mine ? PW - 24 - w : 24;
+    rrect(x, y, w, h, 22); ctx.fillStyle = mine ? C.blue : 'rgba(255,255,255,0.14)'; ctx.fill();
+    lines.forEach((l, i) => text(l, x + 20, y + 38 + i * 28, { size: 20, weight: 500, display: false }));
+    ctx.restore();
+  };
+  bubble("My train's stuck, I'll be\n15 late. Could you grab\nMaya with yours?", true, 180, 29.4, 300);
+  // typing
+  const typing = seg(t, 31.6, 31.8) * (1 - seg(t, 33.4, 33.6));
+  if (typing > 0) {
+    ctx.save(); ctx.globalAlpha *= typing; rrect(24, 330, 90, 50, 22); ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fill();
+    for (let i = 0; i < 3; i++) { ctx.fillStyle = `rgba(255,255,255,${0.4 + 0.5 * Math.max(0, Math.sin(t * 8 - i))})`; ctx.beginPath(); ctx.arc(50 + i * 20, 355, 6, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+  }
+  bubble("Of course. I'm at the\ngate already. Got her.", false, 330, 33.6, 290);
+  bubble("We'll be at the park.", false, 446, 34.6, 230);
+  bubble('Thank you!!', true, 520, 35.6, 150);
+}
+
+function render(t) {
+  ctx.save(); ctx.clearRect(0, 0, W, H);
+  const warm = backdrop(t);
+  dust(t, 0.3);
+
+  // 1: the time that matters
+  clock(W / 2, 470, 150, 5, life(t, 0.6, 6.2, 0.6));
+  riseText(t, '3:05 PM', W / 2, 740, 1.2, 5.6, { size: 34, weight: 600, align: 'center', color: C.ice, spacing: 6, display: false });
+  riseText(t, 'School lets out at 3:30.', W / 2, 830, 2.0, 5.6, { size: 72, weight: 800, align: 'center' });
+
+  // 2-3: the ride, the hold
+  const pa = life(t, 6.2, 20.6, 0.7);
+  if (pa > 0) {
+    const shake = t > 13.6 && t < 14 ? Math.sin(t * 90) * 4 * (1 - seg(t, 13.6, 14)) : 0;
+    phone(lerp(1640, 1460, easeOut(seg(t, 6.2, 7.6))) + shake, 540, 1.0, pa, () => screenRide(t));
+    riseText(t, 'Twenty-two minutes.', 180, 480, 7.2, 13.2, { size: 80, weight: 800 });
+    riseText(t, 'Plenty of time.', 180, 575, 8.2, 13.2, { size: 80, weight: 800, color: C.ice });
+    riseText(t, 'Then the train stops', 180, 430, 14, 20, { size: 72, weight: 800 });
+    riseText(t, 'between stations.', 180, 515, 14.6, 20, { size: 72, weight: 800, color: HELD });
+    riseText(t, 'WhichWay sees the hold in the live feed,', 184, 620, 16.4, 20, { size: 32, weight: 500, color: C.dim, display: false });
+    riseText(t, 'and knows how long holds here usually last.', 184, 664, 16.8, 20, { size: 32, weight: 500, color: C.dim, display: false });
+  }
+
+  // 4: the gate, where someone will be waiting
+  const sa = life(t, 20.4, 28.4, 0.8);
+  school(t, sa, easeInOut(seg(t, 23, 26)));
+  if (sa > 0) {
+    ctx.save(); ctx.globalAlpha = sa;
+    person(1140, 870, 0.9, '#fff', true);
+    ctx.restore();
+    riseText(t, 'You’ll be 11 minutes late.', 140, 300, 21, 27.8, { size: 66, weight: 800 });
+    riseText(t, 'Maya will be at the gate,', 140, 385, 22.4, 27.8, { size: 66, weight: 800, color: WARM });
+    riseText(t, 'looking for you.', 140, 470, 23.2, 27.8, { size: 66, weight: 800, color: WARM });
+  }
+
+  // 5: there's still time to ask
+  const ma = life(t, 28.4, 38.2, 0.7);
+  if (ma > 0) {
+    phone(lerp(1640, 1460, easeOut(seg(t, 28.4, 29.6))), 540, 1.0, ma, () => screenMessages(t));
+    riseText(t, 'But it’s only 3:12.', 180, 470, 28.8, 37.6, { size: 80, weight: 800 });
+    riseText(t, 'There’s still time to ask.', 180, 565, 29.6, 37.6, { size: 80, weight: 800, color: C.ice });
+  }
+
+  // 6: the walk to the park
+  const wa = life(t, 38, 50.4, 0.8);
+  if (wa > 0) {
+    ctx.save(); ctx.globalAlpha = wa;
+    ctx.fillStyle = '#1a1426'; ctx.fillRect(0, 870, W, H - 870);
+    // trees
+    for (let i = 0; i < 6; i++) {
+      const x = 200 + i * 320;
+      ctx.fillStyle = '#231c33'; ctx.fillRect(x - 8, 700, 16, 170);
+      ctx.fillStyle = '#2b2a45'; ctx.beginPath(); ctx.arc(x, 670, 90, 0, Math.PI * 2); ctx.fill();
+    }
+    const walk = (t - 38) * 46;
+    person(500 + walk, 870, 1.1, '#fff');
+    person(560 + walk, 870, 0.75, '#ffe7c2', true);
+    person(620 + walk, 870, 0.8, '#fff', true);
+    // and you, catching up
+    const catchK = easeInOut(seg(t, 45.4, 48.4));
+    if (t > 45) person(lerp(-60, 440 + walk, catchK), 870, 1.1, WARM);
+    ctx.restore();
+    riseText(t, 'Being late is a problem.', W / 2, 330, 39, 45, { size: 70, weight: 800, align: 'center' });
+    riseText(t, 'Knowing early is a plan.', W / 2, 420, 40.6, 45, { size: 70, weight: 800, align: 'center', color: WARM });
+    riseText(t, '3:44. You catch up.', W / 2, 380, 45.8, 50, { size: 70, weight: 800, align: 'center' });
+  }
+
+  endCard(t, 50.6, 'Know before it matters.', null);
+  vignette(0.5);
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>
