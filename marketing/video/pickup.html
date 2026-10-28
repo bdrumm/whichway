@@ -9,13 +9,14 @@
 <canvas id="c" width="1920" height="1080"></canvas>
 <script src="kit.js"></script>
 <script>
-// "Pickup": the train is held on the way to school pickup; the warning comes early enough to ask a friend. 56 s.
-const DURATION = 56;
+// "Pickup": the train is held on the way to school pickup; the app's own screens (the saved commute, boarding
+// detection, the hold and how holds here end, the arrival window) give the warning early enough to ask a friend. 60 s.
+const DURATION = 60;
 const AMBER = '#ffb547', WARM = '#ffd89a', HELD = '#ffcc33';
 
 function backdrop(t) {
-  // underground navy while riding, afternoon warmth at the school
-  const warm = Math.max(seg(t, 20.4, 22) * (1 - seg(t, 27.4, 28.6)), seg(t, 37.6, 39.4));
+  // underground navy while riding, afternoon warmth at the school and the park
+  const warm = Math.max(seg(t, 29.6, 31.2) * (1 - seg(t, 36.4, 37.6)), seg(t, 49.6, 51.2));
   const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, `rgb(${lerp(8, 44, warm)},${lerp(12, 46, warm)},${lerp(30, 84, warm)})`);
   g.addColorStop(1, `rgb(${lerp(10, 214, warm)},${lerp(18, 128, warm)},${lerp(44, 84, warm)})`);
@@ -63,39 +64,110 @@ function school(t, a, waitK) {
   ctx.restore();
 }
 
-// phone screens
-function screenRide(t) {
-  text('Tuesday', PW / 2, 112, { size: 22, weight: 600, color: C.dim, align: 'center', display: false });
-  const now = t < 13 ? '3:05' : t < 16 ? '3:09' : '3:12';
-  text(now, PW / 2, 220, { size: 96, weight: 300, align: 'center', display: false });
-  const held = easeOut(seg(t, 13.6, 14.4));
-  const k = easeOut(seg(t, 7.2, 8));
-  ctx.save(); ctx.globalAlpha *= k; ctx.translate(0, (1 - k) * 40);
-  rrect(16, 540, PW - 32, 220, 34); ctx.fillStyle = 'rgba(16,22,40,0.94)'; ctx.fill();
-  if (held > 0) { ctx.save(); ctx.globalAlpha *= held; ctx.strokeStyle = HELD; ctx.lineWidth = 3; ctx.shadowColor = HELD; ctx.shadowBlur = 20; rrect(16, 540, PW - 32, 220, 34); ctx.stroke(); ctx.restore(); }
-  bullet(62, 594, 24, 'A');
-  text(held > 0.5 ? 'Held at Jay St' : "You're on the A", 100, 588, { size: 24, weight: 700, color: held > 0.5 ? HELD : C.ink });
-  text('Off at Hoyt–Schermerhorn', 100, 616, { size: 18, weight: 500, color: C.dim, display: false });
-  text('Arrive', 40, 680, { size: 20, weight: 500, color: C.dim, display: false });
-  text(held > 0.5 ? '3:41' : '3:27', 40, 726, { size: 44, weight: 700, color: held > 0.5 ? C.red : C.ink });
-  if (held > 0) {
-    ctx.save(); ctx.globalAlpha *= held;
-    const pop = 1 + 0.15 * Math.exp(-Math.pow((t - 14.4) * 5, 2));
-    ctx.translate(250, 712); ctx.scale(pop, pop);
-    chip(0, -24, '+14 min', C.red, 1, 26);
+// ---------- phone screens, each modelled on the app's ----------
+const label = (s, x, y) => text(s, x, y, { size: 14, weight: 700, color: C.faint, spacing: 2, display: false });
+
+/** Go tab: the commute picked by its time window, the Now card with the countdown and the 80% arrival window. */
+function screenGo(t) {
+  text('Go', 32, 120, { size: 34, weight: 700 });
+  // commute chips; "School pickup" lights up as its window applies it
+  const on = easeOut(seg(t, 7.4, 8.2));
+  const w1 = chip(24, 146, 'Work', '#8aa0c8', 1, 18);
+  ctx.save(); ctx.globalAlpha *= 1;
+  const w2 = measure('School pickup · 2:45–3:15', 18, 600) + 34;
+  rrect(24 + w1 + 10, 146, w2, 36, 18); ctx.fillStyle = `rgba(46,124,255,${0.2 + 0.8 * on})`; ctx.fill();
+  text('School pickup · 2:45–3:15', 24 + w1 + 27, 165, { size: 18, weight: 600, base: 'middle' });
+  ctx.restore();
+  const k = easeOut(seg(t, 8.2, 9));
+  ctx.save(); ctx.globalAlpha *= k; ctx.translate(0, (1 - k) * 30);
+  text('Fulton St  →  Hoyt–Schermerhorn', 32, 222, { size: 19, weight: 500, color: C.dim, display: false });
+  screenCard(20, 244, PW - 40, 300);
+  label('TAKE THE', 44, 284);
+  bullet(84, 344, 38, 'A');
+  text('at 3:05', 140, 356, { size: 44, weight: 700 });
+  const left = Math.max(0, 420 - (t - 8) * 18), mm = Math.floor(left / 60), ss = String(Math.floor(left % 60)).padStart(2, '0');
+  text(`Board in ${mm}:${ss}`, 44, 432, { size: 28, weight: 700, color: C.ok });
+  text('Arrive 3:27', 44, 486, { size: 26, weight: 700 });
+  text('80% window 3:25–3:30', 44, 518, { size: 18, weight: 500, color: C.dim, display: false });
+  ctx.restore();
+  // the departure board below
+  const b = easeOut(seg(t, 9.6, 10.4));
+  ctx.save(); ctx.globalAlpha *= b;
+  label('DEPARTURES', 44, 594);
+  [['A', '3:05', 'at High St'], ['C', '3:09', 'at Broadway Jct'], ['A', '3:13', 'at Euclid Av']].forEach(([r, at, where], i) => {
+    const y = 634 + i * 56;
+    bullet(62, y, 18, r); text(at, 92, y + 7, { size: 22, weight: 700 }); text(where, 170, y + 7, { size: 18, weight: 500, color: C.dim, display: false });
+  });
+  ctx.restore();
+}
+/** Boarding detection: the motion trace, the candidate trains, the one the phone settles on. */
+function sig(s) {
+  const walk = 1 - seg(s, 16.2, 16.7), push = Math.exp(-Math.pow((s - 17.6) / 0.8, 2)), ride = seg(s, 17.4, 18.2);
+  return clamp(walk * (Math.abs(Math.sin(s * 11)) * 0.9 + noise1(s * 30, 1) * 0.15) + push * 0.75 + ride * (noise1(s * 40, 2) * 0.22) + noise1(s * 50, 4) * 0.03, -1, 1.2);
+}
+function screenDetect(t) {
+  text('Fulton St', 32, 120, { size: 22, weight: 600, color: C.dim, display: false });
+  text(t < 18.4 ? 'On the platform' : 'On the train', 32, 162, { size: 34, weight: 700 });
+  screenCard(20, 196, PW - 40, 220);
+  label('MOTION', 44, 236);
+  ctx.save(); ctx.beginPath();
+  for (let k = 0; k <= 140; k++) { const v = sig(t - (140 - k) / 20), x = lerp(44, PW - 44, k / 140), y = 330 - v * 55; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.lineWidth = 3; ctx.strokeStyle = C.sky; ctx.shadowColor = C.sky; ctx.shadowBlur = 12; ctx.stroke(); ctx.restore();
+  const st = t < 16.5 ? ['Walking', C.ice] : t < 17.2 ? ['Standing', C.ice] : t < 18.4 ? ['Train pulling away', C.late] : ['Riding', C.ok];
+  chip(44, 374, st[0], st[1], 1, 18);
+  const c = easeOut(seg(t, 18.4, 19));
+  ctx.save(); ctx.globalAlpha *= c;
+  label('WHICH TRAIN?', 44, 466);
+  [['A', '3:05', 0.9], ['C', '3:04', 0.07], ['A', '2:57', 0.03]].forEach(([r, at, p], i) => {
+    const y = 500 + i * 56, val = lerp(0.33, p, easeInOut(seg(t, 19, 19.8)));
+    bullet(62, y + 14, 18, r); text(`left ${at}`, 92, y + 21, { size: 19, weight: 500, color: C.dim, display: false });
+    rrect(200, y + 8, 160, 12, 6); ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fill();
+    rrect(200, y + 8, 160 * val, 12, 6); ctx.fillStyle = i === 0 ? C.sky : 'rgba(156,196,255,0.45)'; ctx.fill();
+  });
+  ctx.restore();
+  const r = easeOut(seg(t, 19.8, 20.4));
+  if (r > 0) {
+    ctx.save(); ctx.globalAlpha *= r; ctx.translate(0, (1 - r) * 30);
+    rrect(20, 700, PW - 40, 80, 22); ctx.fillStyle = C.blue; ctx.fill();
+    bullet(62, 740, 22, 'A');
+    text("You're on the 3:05 A", 98, 734, { size: 22, weight: 700 });
+    text('Off at Hoyt–Schermerhorn 3:27', 98, 762, { size: 17, weight: 500, color: 'rgba(255,255,255,0.85)', display: false });
     ctx.restore();
   }
+}
+/** The hold: the Live Activity on the lock screen, then the scenario switch in the app. */
+function screenHold(t) {
+  const held = easeOut(seg(t, 22.4, 23.2));
+  text('Tuesday', PW / 2, 112, { size: 22, weight: 600, color: C.dim, align: 'center', display: false });
+  text(t < 22.4 ? '3:08' : '3:10', PW / 2, 210, { size: 88, weight: 300, align: 'center', display: false });
+  // Live Activity
+  ctx.save();
+  rrect(16, 250, PW - 32, 200, 32); ctx.fillStyle = 'rgba(16,22,40,0.94)'; ctx.fill();
+  if (held > 0) { ctx.save(); ctx.globalAlpha *= held; ctx.strokeStyle = HELD; ctx.lineWidth = 3; ctx.shadowColor = HELD; ctx.shadowBlur = 18; rrect(16, 250, PW - 32, 200, 32); ctx.stroke(); ctx.restore(); }
+  bullet(60, 300, 22, 'A');
+  text(held > 0.5 ? 'Held at High St' : "You're on the A", 96, 296, { size: 23, weight: 700, color: held > 0.5 ? HELD : C.ink });
+  text('Off at Hoyt–Schermerhorn', 96, 322, { size: 17, weight: 500, color: C.dim, display: false });
+  text('ETA', 40, 380, { size: 18, weight: 500, color: C.dim, display: false });
+  text(held > 0.5 ? '3:41' : '3:27', 40, 424, { size: 42, weight: 700, color: held > 0.5 ? C.red : C.ink });
+  if (held > 0) { ctx.save(); ctx.globalAlpha *= held; const pop = 1 + 0.15 * Math.exp(-Math.pow((t - 23.2) * 5, 2)); ctx.translate(262, 410); ctx.scale(pop, pop); chip(0, -22, '+14 min', C.red, 1, 24); ctx.restore(); }
   ctx.restore();
-  // the hold, explained
-  const e = easeOut(seg(t, 17, 17.8));
-  if (e > 0) {
-    ctx.save(); ctx.globalAlpha *= e; ctx.translate(0, (1 - e) * 30);
-    rrect(16, 300, PW - 32, 200, 30); ctx.fillStyle = 'rgba(16,22,40,0.94)'; ctx.fill();
-    text('HOLDS HERE AT THIS HOUR', 40, 342, { size: 14, weight: 700, color: C.faint, spacing: 2, display: false });
-    // a small distribution of how long holds last, the likely end marked
-    const bars = [0.2, 0.45, 0.8, 1, 0.75, 0.5, 0.3, 0.15];
-    bars.forEach((b, i) => { ctx.fillStyle = i === 3 ? HELD : 'rgba(255,204,51,0.35)'; rrect(40 + i * 40, 478 - b * 70, 30, b * 70, 5); ctx.fill(); });
-    text('Usually 12 more min', 40, 380, { size: 22, weight: 700, color: HELD, display: false });
+  // scenario switch
+  const s = easeOut(seg(t, 24.6, 25.4));
+  if (s > 0) {
+    ctx.save(); ctx.globalAlpha *= s; ctx.translate(0, (1 - s) * 30);
+    screenCard(20, 480, PW - 40, 330);
+    text('A train on this path is held.', 44, 522, { size: 19, weight: 600, display: false });
+    text('Times assume the hold…', 44, 548, { size: 17, weight: 500, color: C.dim, display: false });
+    const opts = [['ends as usual', '3:41', '3:37–3:46'], ['drags on (p90)', '3:49', ''], ['clears now', '3:30', '']];
+    const pick = t < 26.6 ? 0 : t < 27.6 ? 1 : t < 28.6 ? 2 : 0;
+    opts.forEach(([name, eta, win], i) => {
+      const y = 576 + i * 74, sel = i === pick;
+      rrect(36, y, PW - 72, 62, 18); ctx.fillStyle = sel ? 'rgba(255,204,51,0.22)' : 'rgba(255,255,255,0.05)'; ctx.fill();
+      if (sel) { ctx.strokeStyle = HELD; ctx.lineWidth = 2; ctx.stroke(); }
+      text(name, 56, y + 38, { size: 20, weight: 600, color: sel ? C.ink : C.dim, display: false });
+      text(eta, PW - 56, y + 30, { size: 24, weight: 700, align: 'right', color: sel ? HELD : C.dim });
+      if (win) text(win, PW - 56, y + 52, { size: 14, weight: 500, align: 'right', color: C.faint, display: false });
+    });
     ctx.restore();
   }
 }
@@ -111,87 +183,105 @@ function screenMessages(t) {
     lines.forEach((l, i) => text(l, x + 20, y + 38 + i * 28, { size: 20, weight: 500, display: false }));
     ctx.restore();
   };
-  bubble("My train's stuck, I'll be\n15 late. Could you grab\nMaya with yours?", true, 180, 29.4, 300);
-  // typing
-  const typing = seg(t, 31.6, 31.8) * (1 - seg(t, 33.4, 33.6));
+  bubble('My A is held. WhichWay\nhas me in at 3:41, 3:49\nat worst. Could you grab\nMaya with yours?', true, 170, 38.2, 316);
+  const typing = seg(t, 40.2, 40.4) * (1 - seg(t, 41.6, 41.8));
   if (typing > 0) {
-    ctx.save(); ctx.globalAlpha *= typing; rrect(24, 330, 90, 50, 22); ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fill();
-    for (let i = 0; i < 3; i++) { ctx.fillStyle = `rgba(255,255,255,${0.4 + 0.5 * Math.max(0, Math.sin(t * 8 - i))})`; ctx.beginPath(); ctx.arc(50 + i * 20, 355, 6, 0, Math.PI * 2); ctx.fill(); }
+    ctx.save(); ctx.globalAlpha *= typing; rrect(24, 360, 90, 50, 22); ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fill();
+    for (let i = 0; i < 3; i++) { ctx.fillStyle = `rgba(255,255,255,${0.4 + 0.5 * Math.max(0, Math.sin(t * 8 - i))})`; ctx.beginPath(); ctx.arc(50 + i * 20, 385, 6, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore();
   }
-  bubble("Of course. I'm at the\ngate already. Got her.", false, 330, 33.6, 290);
-  bubble("We'll be at the park.", false, 446, 34.6, 230);
-  bubble('Thank you!!', true, 520, 35.6, 150);
+  bubble("Of course. I'm at the\ngate already. Got her.", false, 360, 41.8, 290);
+  bubble("We'll be at the park.", false, 476, 42.8, 230);
+  bubble('Thank you!!', true, 550, 43.6, 150);
+}
+function screenArrived(t) {
+  const k = easeOut(seg(t, 45.2, 46));
+  ctx.save(); ctx.globalAlpha *= k;
+  ctx.shadowColor = C.ok; ctx.shadowBlur = 40;
+  ctx.fillStyle = C.ok; ctx.beginPath(); ctx.arc(PW / 2, 300, 66 * expoOut(k), 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#08321f'; ctx.lineWidth = 12; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.setLineDash([140 * easeOut(seg(t, 45.6, 46.4)), 300]);
+  ctx.beginPath(); ctx.moveTo(PW / 2 - 30, 302); ctx.lineTo(PW / 2 - 6, 326); ctx.lineTo(PW / 2 + 34, 276); ctx.stroke(); ctx.setLineDash([]);
+  text('Hoyt–Schermerhorn', PW / 2, 430, { size: 24, weight: 600, color: C.dim, align: 'center', display: false });
+  text('Arrived 3:41', PW / 2, 486, { size: 42, weight: 700, align: 'center' });
+  text('Predicted at 3:10: 3:41', PW / 2, 530, { size: 21, weight: 600, color: C.ok, align: 'center', display: false });
+  ctx.restore();
+}
+
+/** Two lines on the left of the phone, and an optional smaller note. */
+function say(t, a, b, at, out, { colB = C.ice, note = null } = {}) {
+  riseText(t, a, 180, 440, at, out, { size: 70, weight: 800 });
+  if (b) riseText(t, b, 180, 526, at + 0.6, out, { size: 70, weight: 800, color: colB });
+  if (note) note.forEach((n, i) => riseText(t, n, 184, 620 + i * 42, at + 1.6 + i * 0.2, out, { size: 30, weight: 500, color: C.dim, display: false }));
 }
 
 function render(t) {
   ctx.save(); ctx.clearRect(0, 0, W, H);
-  const warm = backdrop(t);
+  backdrop(t);
   dust(t, 0.3);
 
-  // 1: the time that matters
+  // the time that matters
   clock(W / 2, 470, 150, 5, life(t, 0.6, 6.2, 0.6));
-  riseText(t, '3:05 PM', W / 2, 740, 1.2, 5.6, { size: 34, weight: 600, align: 'center', color: C.ice, spacing: 6, display: false });
+  riseText(t, '2:58 PM', W / 2, 740, 1.2, 5.6, { size: 34, weight: 600, align: 'center', color: C.ice, spacing: 6, display: false });
   riseText(t, 'School lets out at 3:30.', W / 2, 830, 2.0, 5.6, { size: 72, weight: 800, align: 'center' });
 
-  // 2-3: the ride, the hold
-  const pa = life(t, 6.2, 20.6, 0.7);
+  // the phone, its screen following the story
+  const pa = Math.max(life(t, 6.2, 30, 0.7), life(t, 37.4, 49.8, 0.7));
   if (pa > 0) {
-    const shake = t > 13.6 && t < 14 ? Math.sin(t * 90) * 4 * (1 - seg(t, 13.6, 14)) : 0;
-    phone(lerp(1640, 1460, easeOut(seg(t, 6.2, 7.6))) + shake, 540, 1.0, pa, () => screenRide(t));
-    riseText(t, 'Twenty-two minutes.', 180, 480, 7.2, 13.2, { size: 80, weight: 800 });
-    riseText(t, 'Plenty of time.', 180, 575, 8.2, 13.2, { size: 80, weight: 800, color: C.ice });
-    riseText(t, 'Then the train stops', 180, 430, 14, 20, { size: 72, weight: 800 });
-    riseText(t, 'between stations.', 180, 515, 14.6, 20, { size: 72, weight: 800, color: HELD });
-    riseText(t, 'WhichWay sees the hold in the live feed,', 184, 620, 16.4, 20, { size: 32, weight: 500, color: C.dim, display: false });
-    riseText(t, 'and knows how long holds here usually last.', 184, 664, 16.8, 20, { size: 32, weight: 500, color: C.dim, display: false });
+    const inK = t < 33 ? easeOut(seg(t, 6.2, 7.6)) : easeOut(seg(t, 37.4, 38.6));
+    const shake = t > 22.4 && t < 22.8 ? Math.sin(t * 90) * 4 * (1 - seg(t, 22.4, 22.8)) : 0;
+    phone(lerp(1640, 1460, inK) + shake, 540, 1.0, pa, () => {
+      const xf = (a, b) => life(t, a, b, 0.4);
+      ctx.save(); ctx.globalAlpha *= xf(5.8, 14.6); screenGo(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha *= xf(14.4, 21.8); screenDetect(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha *= xf(21.6, 31); screenHold(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha *= xf(37, 45.2); screenMessages(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha *= xf(45, 50.4); screenArrived(t); ctx.restore();
+    });
   }
+  say(t, 'Your School pickup', 'commute is already up.', 6.8, 14.2,
+    { note: ['It switches on in its time window:', 'take the A at 3:05, in at 3:27.'] });
+  say(t, 'You step on.', 'It knows which train.', 14.8, 21.4,
+    { note: ['It feels the train pull away and matches', 'it to the live feed. No tapping.'] });
+  say(t, '3:10. The train', 'is held.', 22.2, 29.6,
+    { colB: HELD, note: ['WhichWay sees the hold in the feed, and', 'how holds here usually end: 3:41 as usual,', '3:49 if it drags on.'] });
 
-  // 4: the gate, where someone will be waiting
-  const sa = life(t, 20.4, 28.4, 0.8);
-  school(t, sa, easeInOut(seg(t, 23, 26)));
+  // the gate, where someone will be waiting
+  const sa = life(t, 29.8, 37.2, 0.8);
+  school(t, sa, easeInOut(seg(t, 32, 35)));
   if (sa > 0) {
-    ctx.save(); ctx.globalAlpha = sa;
-    person(1140, 870, 0.9, '#fff', true);
-    ctx.restore();
-    riseText(t, 'You’ll be 11 minutes late.', 140, 300, 21, 27.8, { size: 66, weight: 800 });
-    riseText(t, 'Maya will be at the gate,', 140, 385, 22.4, 27.8, { size: 66, weight: 800, color: WARM });
-    riseText(t, 'looking for you.', 140, 470, 23.2, 27.8, { size: 66, weight: 800, color: WARM });
+    ctx.save(); ctx.globalAlpha = sa; person(1140, 870, 0.9, '#fff', true); ctx.restore();
+    riseText(t, 'You’ll be about 11 minutes late.', 140, 300, 30.4, 36.6, { size: 62, weight: 800 });
+    riseText(t, 'Maya will be at the gate,', 140, 382, 31.6, 36.6, { size: 62, weight: 800, color: WARM });
+    riseText(t, 'looking for you.', 140, 464, 32.4, 36.6, { size: 62, weight: 800, color: WARM });
   }
 
-  // 5: there's still time to ask
-  const ma = life(t, 28.4, 38.2, 0.7);
-  if (ma > 0) {
-    phone(lerp(1640, 1460, easeOut(seg(t, 28.4, 29.6))), 540, 1.0, ma, () => screenMessages(t));
-    riseText(t, 'But it’s only 3:12.', 180, 470, 28.8, 37.6, { size: 80, weight: 800 });
-    riseText(t, 'There’s still time to ask.', 180, 565, 29.6, 37.6, { size: 80, weight: 800, color: C.ice });
-  }
+  say(t, 'It’s only 3:12.', 'Enough time to ask.', 37.8, 44.6,
+    { note: ['With a real arrival time to give,', 'not a guess.'] });
+  say(t, '3:41.', 'Right when it said.', 45.4, 49.6, { colB: C.ok });
 
-  // 6: the walk to the park
-  const wa = life(t, 38, 50.4, 0.8);
+  // the park
+  const wa = life(t, 49.8, 55, 0.7);
   if (wa > 0) {
     ctx.save(); ctx.globalAlpha = wa;
     ctx.fillStyle = '#1a1426'; ctx.fillRect(0, 870, W, H - 870);
-    // trees
     for (let i = 0; i < 6; i++) {
       const x = 200 + i * 320;
       ctx.fillStyle = '#231c33'; ctx.fillRect(x - 8, 700, 16, 170);
       ctx.fillStyle = '#2b2a45'; ctx.beginPath(); ctx.arc(x, 670, 90, 0, Math.PI * 2); ctx.fill();
     }
-    const walk = (t - 38) * 46;
-    person(500 + walk, 870, 1.1, '#fff');
-    person(560 + walk, 870, 0.75, '#ffe7c2', true);
-    person(620 + walk, 870, 0.8, '#fff', true);
-    // and you, catching up
-    const catchK = easeInOut(seg(t, 45.4, 48.4));
-    if (t > 45) person(lerp(-60, 440 + walk, catchK), 870, 1.1, WARM);
+    const walk = (t - 49.8) * 40;
+    person(700 + walk, 870, 1.1, '#fff');
+    person(760 + walk, 870, 0.75, '#ffe7c2', true);
+    person(820 + walk, 870, 0.8, '#fff', true);
+    const catchK = easeInOut(seg(t, 51.6, 54));
+    person(lerp(-60, 640 + walk, catchK), 870, 1.1, WARM);
     ctx.restore();
-    riseText(t, 'Being late is a problem.', W / 2, 330, 39, 45, { size: 70, weight: 800, align: 'center' });
-    riseText(t, 'Knowing early is a plan.', W / 2, 420, 40.6, 45, { size: 70, weight: 800, align: 'center', color: WARM });
-    riseText(t, '3:44. You catch up.', W / 2, 380, 45.8, 50, { size: 70, weight: 800, align: 'center' });
+    riseText(t, 'Being late is a problem.', W / 2, 330, 50.2, 54.4, { size: 70, weight: 800, align: 'center' });
+    riseText(t, 'Knowing early is a plan.', W / 2, 420, 51, 54.4, { size: 70, weight: 800, align: 'center', color: WARM });
   }
 
-  endCard(t, 50.6, 'Know before it matters.', null);
+  endCard(t, 54.8, 'Know before it matters.', null);
   vignette(0.5);
   blackFades(t, DURATION);
   ctx.restore();

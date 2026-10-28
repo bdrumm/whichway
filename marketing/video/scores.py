@@ -53,14 +53,14 @@ SPECS = {
     ),
     # a story: calm ride, the hold (pulse stops), the ask, relief; Eb - Bb - Cm - Ab at 96 bpm
     'pickup': dict(
-        dur=56, beat=60 / 96, bar=4 * 60 / 96, hit=50.6, bells=[(87, 52.7), (94, 53.4)],
+        dur=60, beat=60 / 96, bar=4 * 60 / 96, hit=54.8, bells=[(87, 56.9), (94, 57.6)],
         chords=[[39, 55, 58, 63, 67], [34, 53, 58, 62, 65], [36, 55, 60, 63, 67], [32, 56, 60, 63, 68]],
         hit_notes=[27, 39, 51, 58, 63, 67, 70, 75, 79],
-        pad=[(0, 0.5), (7, 0.7), (13.6, 0.9), (20, 0.7), (28.4, 0.8), (38, 1.0), (50, 1.1)],
-        arp=dict(start=6.6, sub=[(0, 2), (13.6, 1), (28.4, 2), (33.6, 4)],
-                 vel=[(6.6, 0.55), (13.6, 0.4), (28.4, 0.6), (33.6, 0.9), (38, 1.0)], soft=True),
-        kick=(7.0, 0.55), hats=(38.0, 0.6), bass=(7.0, 0.7), riser=2.4,
-        mute=[(13.6, 33.6)],  # the pulse stops with the train and comes back with Sam's answer
+        pad=[(0, 0.5), (7, 0.7), (22.4, 0.9), (30, 0.7), (37.4, 0.8), (45, 1.0), (54, 1.1)],
+        arp=dict(start=6.6, sub=[(0, 2), (22.4, 1), (37.4, 2), (41.8, 4)],
+                 vel=[(6.6, 0.55), (22.4, 0.4), (37.4, 0.6), (41.8, 0.9), (45, 1.0)], soft=True),
+        kick=(14.8, 0.55), hats=(45.0, 0.6), bass=(14.8, 0.7), riser=2.4,
+        mute=[(22.4, 41.8)],  # the pulse stops with the train and comes back with Sam's answer
     ),
 }
 
