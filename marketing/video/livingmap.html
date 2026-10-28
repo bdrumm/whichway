@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: The Living Map</title>
+<style>html, body { margin: 0; background: #05070d; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+// "The Living Map": the whole subway as light, what every train tells the model, and how that fits in a pocket. 48 s.
+const DURATION = 48;
+
+// A diagrammatic network (not to scale), stretched to the frame.
+const NET = [
+  ['1', [[760, 60], [760, 700], [700, 820], [700, 1020]]],
+  ['4', [[900, 60], [880, 200], [880, 640], [960, 760], [1060, 900], [1060, 1020]]],
+  ['A', [[680, 40], [680, 400], [720, 520], [720, 700], [820, 820], [1200, 900], [1560, 900]]],
+  ['F', [[1440, 280], [1100, 400], [840, 500], [800, 660], [860, 800], [860, 1020]]],
+  ['N', [[1320, 420], [1000, 470], [860, 560], [840, 720], [780, 880], [620, 1020]]],
+  ['7', [[1620, 380], [1300, 420], [1000, 480], [760, 500]]],
+  ['L', [[600, 600], [1000, 620], [1300, 760], [1540, 820]]],
+  ['G', [[1250, 480], [1200, 640], [1100, 760], [960, 900]]],
+  ['6', [[980, 40], [960, 200], [940, 600], [900, 700]]],
+  ['J', [[1540, 600], [1200, 700], [980, 720], [900, 740]]],
+  ['Q', [[1180, 300], [1020, 360], [900, 560], [920, 860], [980, 1020]]],
+].map(([n, pts]) => {
+  const P = pts.map(([x, y]) => [(x - 1090) * 1.3 + 960, (y - 540) * 1.0 + 540]);
+  const lens = [0]; for (let i = 1; i < P.length; i++) lens.push(lens[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]));
+  const path = new Path2D(); P.forEach(([x, y], i) => (i ? path.lineTo(x, y) : path.moveTo(x, y)));
+  return { n, P, lens, len: lens[lens.length - 1], path };
+});
+function at(line, f) {
+  const d = clamp(f) * line.len; let i = 1;
+  while (i < line.lens.length - 1 && line.lens[i] < d) i++;
+  const k = (d - line.lens[i - 1]) / (line.lens[i] - line.lens[i - 1] || 1);
+  return [lerp(line.P[i - 1][0], line.P[i][0], k), lerp(line.P[i - 1][1], line.P[i][1], k)];
+}
+const SIX = NET.find(l => l.n === '6');
+const SLOW = [0.32, 0.46];   // the stretch of the 6 where time is lost
+
+/** Train dots on every line. On the 6 they crawl through the slow stretch and bunch behind it. */
+function trains(t, alpha, slowK) {
+  NET.forEach((l, li) => {
+    const r = rng(li + 3), n = Math.round(l.len / 140);
+    for (let i = 0; i < n; i++) {
+      const dir = i % 2 ? 1 : -1, speed = 0.018 + r() * 0.01, ph = r();
+      let f = ((ph + dir * t * speed) % 1 + 1) % 1;
+      if (l === SIX && slowK > 0) {
+        // compress positions into the slow stretch: trains pile up at its far end
+        const into = f > SLOW[0] - 0.12 && f < SLOW[1] ? lerp(f, SLOW[0] + (f - SLOW[0] + 0.12) * 0.4, slowK) : f;
+        f = into;
+      }
+      const [x, y] = at(l, f);
+      const late = l === SIX && slowK > 0 && f > SLOW[0] - 0.05 && f < SLOW[1];
+      ctx.save(); ctx.globalAlpha *= alpha;
+      ctx.shadowColor = late ? C.red : '#fff'; ctx.shadowBlur = 14;
+      ctx.fillStyle = late ? '#ffd0c8' : '#ffffff';
+      ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    }
+  });
+}
+function network(t, draw, glow = 1, alpha = 1) {
+  NET.forEach((l, i) => {
+    const k = easeInOut(clamp(draw * 1.4 - i * 0.04));
+    if (k <= 0) return;
+    ctx.save(); ctx.setLineDash([l.len * k, l.len * 2]);
+    glowStroke(l.path, L[l.n], 7, 12 * glow, alpha * 0.9);
+    ctx.restore();
+  });
+}
+/** Lower-third caption over a soft dark band. */
+function caption(t, s, at, out, { y = 960, size = 54, color = C.ink, weight = 700 } = {}) {
+  const a = life(t, at, out, 0.6);
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a * 0.85;
+  const g = ctx.createLinearGradient(0, y - 160, 0, H); g.addColorStop(0, 'rgba(5,7,13,0)'); g.addColorStop(0.6, 'rgba(5,7,13,0.9)');
+  ctx.fillStyle = g; ctx.fillRect(0, y - 160, W, H - y + 160); ctx.restore();
+  riseText(t, s, W / 2, y, at, out, { size, weight, align: 'center', color });
+}
+
+function render(t) {
+  ctx.save(); ctx.clearRect(0, 0, W, H);
+  background(t, 0.3);
+
+  // the camera: out, in on the 6's slow stretch, back out
+  const zoomIn = easeInOut(seg(t, 14.6, 16.6)), zoomOut = easeInOut(seg(t, 23.4, 25.2));
+  const z = 1 + 1.7 * zoomIn * (1 - zoomOut);
+  const focus = at(SIX, (SLOW[0] + SLOW[1]) / 2);
+  const fx = lerp(W / 2, focus[0], zoomIn * (1 - zoomOut)), fy = lerp(H / 2, focus[1], zoomIn * (1 - zoomOut));
+  // in the last act the map shrinks into the phone
+  const shrink = easeInOut(seg(t, 35.4, 37.6));
+  const mapA = 1 - seg(t, 37.4, 38) ;
+  ctx.save();
+  ctx.translate(W / 2, H / 2); ctx.scale(z * lerp(1, 0.3, shrink), z * lerp(1, 0.3, shrink)); ctx.translate(-fx, -fy);
+  const dim = lerp(1, 0.45, seg(t, 25, 26.4) * (1 - seg(t, 31.6, 33)));
+
+  // 1: dust gathers into the lines
+  if (t < 7.5) {
+    const k = easeInOut(seg(t, 0.4, 5.2)), r = rng(5);
+    for (let i = 0; i < 900; i++) {
+      const l = NET[Math.floor(r() * NET.length)], [tx, ty] = at(l, r());
+      const sx = r() * W, sy = r() * H, d = r() * 0.3;
+      const kk = easeInOut(clamp((k - d) / (1 - d)));
+      ctx.globalAlpha = (0.25 + 0.6 * kk) * (1 - seg(t, 5.4, 7.2));
+      ctx.fillStyle = kk > 0.9 ? L[l.n] : C.ice;
+      ctx.fillRect(lerp(sx, tx, kk) - 1.5, lerp(sy, ty, kk) - 1.5, 3, 3);
+    }
+    ctx.globalAlpha = 1;
+  }
+  const glowK = 1 + 0.8 * seg(t, 32.6, 33.4) * (1 - seg(t, 34, 36));
+  network(t, seg(t, 4.2, 7), glowK, dim * mapA);
+  trains(t, seg(t, 6, 7.5) * dim * mapA, easeInOut(seg(t, 16, 18)) * (1 - seg(t, 24, 25)));
+  // the slow stretch, picked out
+  const hl = seg(t, 17.2, 18.2) * (1 - seg(t, 23, 24));
+  if (hl > 0) {
+    const p = new Path2D(); for (let f = SLOW[0]; f <= SLOW[1] + 1e-6; f += 0.01) { const [x, y] = at(SIX, f); f === SLOW[0] ? p.moveTo(x, y) : p.lineTo(x, y); }
+    glowStroke(p, C.red, 9, 30, hl);
+  }
+  ctx.restore();
+
+  // labels for the zoom, in screen space
+  if (hl > 0) {
+    const sx = W / 2 + 60, sy = H / 2 - 40;
+    chip(sx + 40, sy - 70, '28 St → 33 St · losing 4 min a train', C.red, seg(t, 18, 18.6) * (1 - seg(t, 23, 23.6)), 26);
+    chip(sx + 40, sy, 'Signal problem, most likely', C.late, seg(t, 19, 19.6) * (1 - seg(t, 23, 23.6)), 26);
+    chip(sx + 40, sy + 70, 'Flagged before any alert', C.ok, seg(t, 20, 20.6) * (1 - seg(t, 23, 23.6)), 26);
+  }
+
+  // 4: riders feed the model
+  const coreA = seg(t, 25.4, 26.6) * (1 - seg(t, 34.6, 35.6));
+  if (coreA > 0) {
+    const cx = W / 2, cy = H / 2 - 60;
+    const r = rng(77);
+    for (let i = 0; i < 160; i++) {
+      const l = NET[Math.floor(r() * NET.length)], [sx, sy] = at(l, r());
+      const start = 25.6 + r() * 6.4, k = seg(t, start, start + 1.6 + r());
+      if (k <= 0 || k >= 1) continue;
+      const e = easeIn(k), bend = (r() - 0.5) * 300;
+      const x = lerp(sx, cx, e) + Math.sin(k * Math.PI) * bend, y = lerp(sy, cy, e);
+      ctx.save(); ctx.globalAlpha = coreA * Math.sin(k * Math.PI); ctx.fillStyle = '#fff'; ctx.shadowColor = C.sky; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    }
+    const grow = easeOut(seg(t, 25.6, 32)), pulse = Math.exp(-Math.pow((t - 33) * 3, 2));
+    const rad = 30 + 60 * grow + 120 * pulse;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad * 2.2);
+    g.addColorStop(0, `rgba(220,235,255,${coreA})`); g.addColorStop(0.3, `rgba(91,155,255,${0.7 * coreA})`); g.addColorStop(1, 'rgba(46,124,255,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, rad * 2.2, 0, Math.PI * 2); ctx.fill();
+    // the ring that goes back out to the network
+    const ring = seg(t, 33, 35);
+    if (ring > 0 && ring < 1) {
+      ctx.save(); ctx.globalAlpha = (1 - ring) * coreA; ctx.strokeStyle = C.ice; ctx.lineWidth = 3; ctx.shadowColor = C.sky; ctx.shadowBlur = 20;
+      ctx.beginPath(); ctx.arc(cx, cy, 40 + ring * 1100, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+    }
+  }
+
+  // 5: in your pocket
+  const ph = seg(t, 37.2, 38.2) * (1 - seg(t, 41, 41.8));
+  if (ph > 0) {
+    phone(W / 2, 520, 0.9, ph, () => {
+      ctx.save(); ctx.translate(PW / 2, PH / 2 + 20); ctx.scale(0.3, 0.3); ctx.translate(-W / 2, -H / 2);
+      network(t, 1, 1, 0.9); trains(t, 0.9, 0);
+      ctx.restore();
+      ctx.save(); ctx.globalAlpha = seg(t, 38.4, 39);
+      rrect(18, PH - 150, PW - 36, 110, 26); ctx.fillStyle = C.blue; ctx.fill();
+      bullet(64, PH - 95, 24, 'A');
+      text('Take the 8:52 A', 104, PH - 102, { size: 25, weight: 700 });
+      text('Arrive 9:03 · 4 min sooner', 104, PH - 72, { size: 19, weight: 500, color: 'rgba(255,255,255,0.8)', display: false });
+      ctx.restore();
+    });
+  }
+
+  caption(t, 'Right now, under New York, hundreds of trains are on the move.', 1.2, 7.4);
+  caption(t, 'Each one is telling a story.', 7.8, 11.2);
+  caption(t, 'Where it slowed. How long it stood. What held it.', 11.4, 14.6, { color: C.ice, size: 48 });
+  caption(t, 'WhichWay listens to all of it, every 30 seconds,', 15.2, 19.2);
+  caption(t, 'and learns where time is lost, and why.', 19.6, 24.2, { color: C.ice });
+  caption(t, 'Every trip a rider chooses to share', 25.4, 29.2);
+  caption(t, 'makes tomorrow’s prediction sharper.', 29.6, 33.6, { color: C.ice });
+  caption(t, 'So the whole subway’s knowledge', 34.2, 37.2);
+  caption(t, 'fits in your pocket.', 37.6, 41.4, { color: C.ice, size: 64 });
+  endCard(t, 42, 'The subway, understood.', null);
+
+  vignette(0.55);
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

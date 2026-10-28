@@ -1,4 +1,4 @@
-// Render video.html to frames piped into ffmpeg, or to stills.
+// Render video.html (or the page named by FILM=…) to frames piped into ffmpeg, or to stills.
 //   node render.mjs out.mp4 [fps] [from to] the whole film, or frames [from, to) (silent; mux the music in afterwards)
 //   node render.mjs --stills dir t1 t2 ...  PNG stills at those seconds
 import { chromium } from 'playwright';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-await page.goto('file://' + path.join(here, 'video.html') + '?static');
+await page.goto('file://' + path.join(here, process.env.FILM || 'video.html') + '?static');
 await page.evaluate(() => window.ready);
 const shot = async t => {
   await page.evaluate(t => window.render(t), t);

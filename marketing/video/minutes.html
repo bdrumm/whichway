@@ -1,0 +1,207 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Minutes</title>
+<style>html, body { margin: 0; background: #05070d; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+// "Minutes": the minutes saved underground become the moments that matter above it. 46 s.
+const DURATION = 47;
+const AMBER = '#ffb547', WARM = '#ffd89a';
+
+/** A centred line made of coloured parts, rising in at `at` and leaving at `out`. */
+function headline(t, parts, y, at, out, size = 72) {
+  const k = easeOut(seg(t, at, at + 0.9)), o = out == null ? 1 : 1 - easeIn(seg(t, out, out + 0.6));
+  if (k * o <= 0) return;
+  const total = parts.reduce((w, [s]) => w + measure(s, size, 700), 0);
+  let x = W / 2 - total / 2;
+  ctx.save(); ctx.filter = `blur(${(1 - k) * 8}px)`;
+  parts.forEach(([s, col]) => { text(s, x, y + (1 - k) * 24, { size, weight: 700, color: col || C.ink, alpha: k * o }); x += measure(s, size, 700); });
+  ctx.restore();
+}
+function warmBackground(t, warm) {
+  const g = ctx.createRadialGradient(W / 2, H * 0.7, 40, W / 2, H * 0.6, W * 0.8);
+  g.addColorStop(0, `rgb(${lerp(14, 70, warm)},${lerp(24, 40, warm)},${lerp(54, 40, warm)})`);
+  g.addColorStop(1, C.bg0);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+function train(x, y, cars, color, doors) {
+  const cw = 150, gap = 10;
+  for (let i = 0; i < cars; i++) {
+    const cx = x + i * (cw + gap);
+    ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = 18;
+    rrect(cx, y - 34, cw, 52, 14); ctx.fillStyle = color; ctx.fill(); ctx.restore();
+    // windows
+    ctx.fillStyle = 'rgba(255,240,210,0.85)';
+    [12, 40, 90, 118].forEach(wx => { rrect(cx + wx, y - 24, 20, 16, 4); ctx.fill(); });
+    // the door in the middle of each car, sliding open
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(cx + cw / 2 - 1, y - 30, 2, 44);
+    if (doors > 0) { ctx.fillStyle = 'rgba(255,226,170,0.95)'; ctx.fillRect(cx + cw / 2 - 11 * doors, y - 30, 22 * doors, 44); }
+  }
+}
+function rider(x, y, glow = 1) {
+  ctx.save(); ctx.shadowColor = WARM; ctx.shadowBlur = 24 * glow; ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+}
+
+// 2: the train you didn't miss
+function sceneTrain(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a;
+  const y = 650;
+  ctx.fillStyle = 'rgba(156,196,255,0.25)'; ctx.fillRect(160, y + 24, W - 320, 3);   // platform edge
+  ctx.fillStyle = 'rgba(156,196,255,0.08)'; ctx.fillRect(160, y + 27, W - 320, 70);
+  // the train arrives, stands, leaves
+  const arrive = easeOut(seg(t, 6.4, 8.6)), leave = easeIn(seg(t, 11.2, 12.8));
+  const tx = lerp(-1000, 420, arrive) + leave * 1800;
+  const doors = seg(t, 8.8, 9.2) * (1 - seg(t, 10.6, 11));
+  train(tx, y, 6, L.F, doors);
+  // the rider walks in from the right and steps aboard as the doors close
+  const walk = easeInOut(seg(t, 7.2, 10.4));
+  const rx = lerp(1700, 420 + 3 * 160 + 75, walk), ry = y + 56 - easeInOut(seg(t, 10.2, 10.6)) * 56;
+  if (t < 11.1) rider(rx, ry);
+  chip(1700 - 120, y + 120, 'On time', C.ok, seg(t, 10.6, 11.2) * (1 - seg(t, 12.4, 12.9)), 22);
+  ctx.restore();
+}
+// 3: the change you didn't run for
+function sceneChange(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a;
+  const y1 = 560, y2 = 760;
+  const draw = easeInOut(seg(t, 13, 14.4));
+  ctx.save(); ctx.setLineDash([1600 * draw, 3000]);
+  const p1 = new Path2D(); p1.moveTo(160, y1); p1.lineTo(1760, y1); glowStroke(p1, '#ff6319', 8, 14);
+  const p2 = new Path2D(); p2.moveTo(160, y2); p2.lineTo(1760, y2); glowStroke(p2, '#2e6bff', 8, 14);
+  ctx.restore();
+  bullet(120, y1, 26, 'F', draw); bullet(120, y2, 26, 'A', draw);
+  // the station, a cross-platform change
+  ctx.fillStyle = 'rgba(255,255,255,0.12)'; rrect(900, y1 - 40, 120, y2 - y1 + 80, 30); ctx.fill();
+  text('Jay St', 960, y1 - 60, { size: 26, weight: 600, color: C.dim, align: 'center', alpha: draw, display: false });
+  // the rider rides the F in, steps across, waits calmly, boards the A
+  const ride = easeInOut(seg(t, 14.2, 16));
+  const cross = easeInOut(seg(t, 16.2, 17));
+  const away = easeIn(seg(t, 18.4, 19.6));
+  const rx = lerp(260, 960, ride) + away * 900, ry = lerp(y1, y2, cross);
+  const pulse = t > 17 && t < 18.4 ? 1 + 0.6 * Math.sin((t - 17) * 6) ** 2 : 1;
+  rider(rx, ry, pulse);
+  chip(1040, y2 - 80, '2 min to spare', C.ok, seg(t, 17, 17.5) * (1 - seg(t, 18.6, 19)), 22);
+  ctx.restore();
+}
+// 4: a bedtime story, read to the end
+function sceneStory(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a;
+  const r = rng(21), base = 900;
+  // a row of brownstones
+  for (let i = 0; i < 7; i++) {
+    const bx = 120 + i * 245, bh = 360 + r() * 120, bw = 230;
+    ctx.fillStyle = '#0d1428'; ctx.fillRect(bx, base - bh, bw, bh);
+    ctx.fillStyle = '#0a1022'; ctx.fillRect(bx - 6, base - bh - 14, bw + 12, 18);   // cornice
+    for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) {
+      const wx = bx + 24 + col * 68, wy = base - bh + 40 + row * 100;
+      const isStory = i === 3 && row === 1 && col === 1;
+      const lit = isStory ? easeInOut(seg(t, 21.4, 22.6)) : (r() < 0.25 ? 0.35 : 0);
+      ctx.fillStyle = lit > 0 ? `rgba(255,190,100,${lit})` : 'rgba(156,196,255,0.06)';
+      if (isStory && lit > 0) { ctx.save(); ctx.shadowColor = AMBER; ctx.shadowBlur = 60 * lit; }
+      rrect(wx, wy, 44, 64, 4); ctx.fill();
+      if (isStory && lit > 0) ctx.restore();
+    }
+  }
+  // the moon
+  ctx.save(); ctx.shadowColor = WARM; ctx.shadowBlur = 40; ctx.fillStyle = '#fff4dc';
+  ctx.beginPath(); ctx.arc(1620, 380, 38, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  ctx.fillStyle = '#0b1226'; ctx.beginPath(); ctx.arc(1640, 368, 34, 0, Math.PI * 2); ctx.fill();
+  // the rider comes home up the street
+  const walk = easeOut(seg(t, 20, 21.6));
+  rider(lerp(-20, 120 + 3 * 245 + 115, walk), base + 30, 1);
+  ctx.restore();
+}
+// 5: dinner, still warm
+function sceneDinner(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a;
+  const cx = W / 2, cy = 760;
+  ctx.fillStyle = 'rgba(255,216,154,0.12)'; ctx.beginPath(); ctx.ellipse(cx, cy + 40, 360, 46, 0, 0, Math.PI * 2); ctx.fill();
+  // the bowl
+  ctx.beginPath(); ctx.moveTo(cx - 200, cy - 40); ctx.quadraticCurveTo(cx - 190, cy + 70, cx, cy + 74); ctx.quadraticCurveTo(cx + 190, cy + 70, cx + 200, cy - 40); ctx.closePath();
+  ctx.fillStyle = '#f4ead8'; ctx.fill();
+  ctx.fillStyle = '#e4a654'; ctx.beginPath(); ctx.ellipse(cx, cy - 40, 200, 26, 0, 0, Math.PI * 2); ctx.fill();
+  // steam
+  for (let i = 0; i < 3; i++) {
+    const p = new Path2D(), x0 = cx - 70 + i * 70;
+    for (let k = 0; k <= 40; k++) {
+      const y = cy - 80 - k * 7, x = x0 + Math.sin(k * 0.25 + t * 2 + i) * 16;
+      k ? p.lineTo(x, y) : p.moveTo(x, y);
+    }
+    ctx.save(); ctx.setLineDash([300 * easeOut(seg(t, 27.6 + i * 0.3, 29)), 600]);
+    glowStroke(p, 'rgba(255,240,220,0.6)', 5, 16, 0.8); ctx.restore();
+  }
+  // a second place set, someone is waiting
+  rider(cx - 420, cy - 10, 1); rider(cx + 420, cy - 10, 1);
+  ctx.restore();
+}
+// 6: the whole city's minutes
+function sceneCity(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a;
+  const r = rng(99), base = H;
+  // a skyline, windows lighting up outward from the middle
+  for (let bx = 20; bx < W - 20;) {
+    const bw = 70 + r() * 110, mid = 1 - Math.abs(bx + bw / 2 - W / 2) / (W / 2);
+    const bh = 220 + r() * 260 + mid * 260;
+    ctx.fillStyle = '#0c1226'; ctx.fillRect(bx, base - bh, bw, bh);
+    if (r() < 0.25) ctx.fillRect(bx + bw / 2 - 3, base - bh - 40, 6, 40);   // a mast
+    for (let wy = base - bh + 18; wy < base - 20; wy += 24) for (let wx = bx + 10; wx < bx + bw - 16; wx += 18) {
+      const d = Math.hypot(wx - W / 2, (wy - H) * 1.4) / W;
+      const at = 34.4 + d * 4.2 + r() * 0.9, on = easeOut(seg(t, at, at + 0.5));
+      const keep = r() < 0.8;
+      if (!keep) continue;
+      ctx.fillStyle = on > 0 ? `rgba(255,${185 + r() * 45},${95 + r() * 55},${0.12 + 0.8 * on})` : 'rgba(156,196,255,0.05)';
+      ctx.fillRect(wx, wy, 8, 12);
+    }
+    bx += bw + 6 + r() * 10;
+  }
+  ctx.restore();
+}
+
+function render(t) {
+  ctx.save(); ctx.clearRect(0, 0, W, H);
+  warmBackground(t, seg(t, 19, 24) * 0.6 + seg(t, 33, 38) * 0.4);
+  dust(t, 0.35);
+
+  // 1: the line
+  {
+    const a = life(t, 0.6, 6, 0.6);
+    if (a > 0) {
+      ctx.save(); ctx.globalAlpha = a;
+      const pulse = 1 + 0.25 * Math.sin(t * 3);
+      ctx.shadowColor = AMBER; ctx.shadowBlur = 40 * pulse; ctx.fillStyle = WARM;
+      ctx.beginPath(); ctx.arc(W / 2, 640, 9 * pulse, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    }
+    headline(t, [["It's never just ", null], ['two minutes.', AMBER]], 520, 1.2, 5.4, 84);
+  }
+  sceneTrain(t, life(t, 6, 13.2, 0.6));
+  headline(t, [['Two minutes', AMBER], [' is the train you didn’t miss.', null]], 300, 6.4, 12.6);
+  sceneChange(t, life(t, 13, 20, 0.6));
+  headline(t, [['Four minutes', AMBER], [' is the change you didn’t run for.', null]], 300, 13.4, 19.4);
+  sceneStory(t, life(t, 19.8, 27.2, 0.7));
+  headline(t, [['Six minutes', AMBER], [' is a bedtime story, read to the end.', null]], 250, 20.4, 26.6);
+  sceneDinner(t, life(t, 26.8, 34, 0.7));
+  headline(t, [['Ten minutes', AMBER], [' is dinner, still warm.', null]], 300, 27.4, 33.4);
+  sceneCity(t, life(t, 33.8, 41, 0.8));
+  headline(t, [['Across a city of millions, the minutes add up.', null]], 210, 34.4, 40.2, 64);
+  headline(t, [['WhichWay finds them for you, every ride.', WARM]], 290, 36.2, 40.2, 48);
+  endCard(t, 40.4, 'Your time, given back.', null);
+
+  vignette(0.6);
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

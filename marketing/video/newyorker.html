@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: New Once</title>
+<style>html, body { margin: 0; background: #05070d; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+// "Every New Yorker was new once": a newcomer's first ride, their thirtieth, their hundredth. Night to sunrise. 47 s.
+const DURATION = 47;
+const GOLD = '#ffc76b';
+
+function sky(t) {
+  // pre-dawn navy warming to sunrise over the film
+  const k = easeInOut(seg(t, 4, 44));
+  const top = [lerp(8, 30, k), lerp(12, 44, k), lerp(30, 92, k)], low = [lerp(14, 255, k * k), lerp(24, 150, k * k), lerp(56, 90, k * k)];
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `rgb(${top})`); g.addColorStop(0.65, `rgb(${top.map((v, i) => lerp(v, low[i], 0.45))})`); g.addColorStop(1, `rgb(${low})`);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // the sun coming up behind everything at the end
+  const s = easeOut(seg(t, 30, 46));
+  if (s > 0) {
+    const sy = lerp(H + 200, H - 60, s), gg = ctx.createRadialGradient(W * 0.72, sy, 0, W * 0.72, sy, 700);
+    gg.addColorStop(0, `rgba(255,214,140,${0.55 * s})`); gg.addColorStop(1, 'rgba(255,170,90,0)');
+    ctx.fillStyle = gg; ctx.fillRect(0, 0, W, H);
+  }
+}
+function dayCounter(t) {
+  const marks = [[0.6, 'DAY 1'], [26.4, 'DAY 2'], [26.8, 'DAY 5'], [27.2, 'DAY 12'], [27.6, 'DAY 30'], [33.2, 'DAY 61'], [33.6, 'DAY 100']];
+  let cur = null; marks.forEach(m => { if (t >= m[0]) cur = m; });
+  if (!cur || t > 39.6) return;
+  const flash = Math.exp(-Math.pow((t - cur[0]) * 5, 2));
+  text(cur[1], 180, 210, { size: 30, weight: 700, color: flash > 0.3 ? '#fff' : GOLD, spacing: 8, alpha: seg(t, 0.6, 1.4) * (1 - seg(t, 39, 39.6)), display: false });
+}
+
+// phone screens
+function screenPlan(t) {
+  text('Go', 32, 120, { size: 22, weight: 600, color: C.dim, display: false });
+  text('Your first day', 32, 162, { size: 36, weight: 700 });
+  screenCard(20, 196, PW - 40, 270);
+  text('TAKE THE', 44, 238, { size: 15, weight: 700, color: C.faint, spacing: 2, display: false });
+  bullet(80, 300, 38, 'F');
+  text('8:41', 136, 296, { size: 44, weight: 700 });
+  text('from 4 Av–9 St', 136, 326, { size: 20, weight: 500, color: C.dim, display: false });
+  const left = Math.max(0, 180 - (t - 7) * 14);
+  const mm = Math.floor(left / 60), ss = String(Math.floor(left % 60)).padStart(2, '0');
+  text(`Leave in ${mm}:${ss}`, 44, 400, { size: 30, weight: 700, color: C.ok });
+  text('Arrive 9:01 · change at Jay St', 44, 438, { size: 19, weight: 500, color: C.dim, display: false });
+}
+function screenRide(t) {
+  // a lock screen with the Live Activity
+  text('8:47', PW / 2, 220, { size: 96, weight: 300, align: 'center', display: false });
+  text('Tuesday', PW / 2, 112, { size: 22, weight: 600, color: C.dim, align: 'center', display: false });
+  const k = easeOut(seg(t, 14.2, 15)), base = ctx.globalAlpha;
+  ctx.save(); ctx.globalAlpha = base * k; ctx.translate(0, (1 - k) * 40);
+  rrect(16, 560, PW - 32, 190, 34); ctx.fillStyle = 'rgba(16,22,40,0.92)'; ctx.fill();
+  bullet(62, 612, 24, 'F');
+  text("You're on the F", 100, 606, { size: 24, weight: 700 });
+  text('Off at Jay St 8:52', 100, 634, { size: 18, weight: 500, color: C.dim, display: false });
+  const c = easeOut(seg(t, 17, 17.8));
+  ctx.globalAlpha = base * k * c;
+  text('Change to the', 40, 694, { size: 20, weight: 500, color: C.dim, display: false });
+  bullet(188, 688, 18, 'A');
+  text('across the platform', 214, 694, { size: 20, weight: 600, display: false });
+  rrect(40, 716, PW - 80, 8, 4); ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fill();
+  rrect(40, 716, (PW - 80) * clamp((t - 14) / 7), 8, 4); ctx.fillStyle = L.F; ctx.fill();
+  ctx.restore();
+}
+function screenArrive(t) {
+  const k = easeOut(seg(t, 21.2, 22.2));
+  ctx.save(); ctx.globalAlpha *= k;
+  ctx.shadowColor = C.ok; ctx.shadowBlur = 40;
+  ctx.fillStyle = C.ok; ctx.beginPath(); ctx.arc(PW / 2, 340, 70 * expoOut(k), 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#08321f'; ctx.lineWidth = 12; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.setLineDash([140 * easeOut(seg(t, 21.6, 22.4)), 300]);
+  ctx.beginPath(); ctx.moveTo(PW / 2 - 30, 342); ctx.lineTo(PW / 2 - 6, 366); ctx.lineTo(PW / 2 + 34, 316); ctx.stroke(); ctx.setLineDash([]);
+  text('Arrived 9:01', PW / 2, 480, { size: 40, weight: 700, align: 'center' });
+  text('4 minutes early', PW / 2, 524, { size: 24, weight: 600, color: C.ok, align: 'center', display: false });
+  ctx.restore();
+}
+function screenUsual(t) {
+  text('Good morning', 32, 140, { size: 34, weight: 700 });
+  const k = easeOut(seg(t, 28, 28.8));
+  ctx.save(); ctx.globalAlpha *= k; ctx.translate(0, (1 - k) * 30);
+  screenCard(20, 180, PW - 40, 200);
+  text('YOUR USUAL', 44, 222, { size: 15, weight: 700, color: C.faint, spacing: 2, display: false });
+  bullet(76, 282, 30, 'F');
+  text('8:40 to work', 124, 278, { size: 30, weight: 700 });
+  text('Already counted down', 124, 308, { size: 19, weight: 500, color: C.dim, display: false });
+  text('Leave in 4:00', 44, 356, { size: 24, weight: 700, color: C.ok });
+  ctx.restore();
+  // the week of rides, ticked off
+  ['M', 'T', 'W', 'T', 'F'].forEach((d, i) => {
+    const kk = easeOut(seg(t, 29 + i * 0.25, 29.5 + i * 0.25));
+    text(d, 58 + i * 76, 446, { size: 18, weight: 600, color: C.faint, align: 'center', display: false });
+    bullet(58 + i * 76, 490, 22 * (0.5 + 0.5 * kk), 'F', kk);
+  });
+}
+
+/** Two lines of narration on the left, rising in. */
+function say(t, a, b, at, out, colB = GOLD) {
+  riseText(t, a, 180, 480, at, out, { size: 68, weight: 800 });
+  if (b) riseText(t, b, 180, 566, at + 0.7, out, { size: 68, weight: 800, color: colB });
+}
+
+function render(t) {
+  ctx.save(); ctx.clearRect(0, 0, W, H);
+  sky(t);
+  dust(t, 0.3);
+  dayCounter(t);
+
+  // the phone, its screen changing with the story
+  const pa = life(t, 6.2, 33, 0.8);
+  if (pa > 0) {
+    const slide = easeOut(seg(t, 6.2, 7.6));
+    phone(lerp(1700, 1540, slide), 540, 1.0, pa, () => {
+      const xf = (from, to) => life(t, from, to, 0.4);
+      ctx.save(); ctx.globalAlpha = xf(5.8, 13.6); screenPlan(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha = xf(13.4, 21.2); screenRide(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha = xf(21, 26.6); screenArrive(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha = xf(26.4, 34); screenUsual(t); ctx.restore();
+    });
+  }
+
+  riseText(t, 'New city. New job.', 180, 470, 1.2, 5.8, { size: 92, weight: 800 });
+  riseText(t, '472 stations.', 180, 580, 2.2, 5.8, { size: 92, weight: 800, color: GOLD });
+  say(t, 'Which way is uptown?', 'You don’t have to know yet.', 6.6, 13);
+  say(t, 'It notices you’re on the train,', 'and tells you where to change.', 13.8, 20.6);
+  say(t, 'You walk in early.', 'On day one.', 21.6, 26);
+  say(t, 'By day thirty,', 'it knows your usual.', 27.8, 32.8);
+  {
+    // day 100: someone asks the way
+    const a = life(t, 33.8, 39.4, 0.6);
+    if (a > 0) {
+      riseText(t, 'Someone on the platform', W / 2, 420, 34, 38.8, { size: 64, weight: 700, align: 'center' });
+      riseText(t, 'asks you which way.', W / 2, 500, 34.6, 38.8, { size: 64, weight: 700, align: 'center' });
+      riseText(t, 'You know.', W / 2, 660, 36.2, 38.8, { size: 120, weight: 800, align: 'center', color: GOLD, blur: true });
+    }
+  }
+  riseText(t, 'Every New Yorker was new once.', W / 2, 560, 39.6, 41.8, { size: 80, weight: 800, align: 'center' });
+  endCard(t, 42.2, 'Find your way.', null);
+
+  vignette(0.5);
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>
