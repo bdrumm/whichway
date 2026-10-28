@@ -1,0 +1,241 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Curtain</title>
+<style>html, body { margin: 0; background: #05070d; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script>
+// "Curtain": a school play at 6:30, one line, a promise. The 2 starts crawling; the app finds the faster way mid-trip
+// and times the change; a parent slides into the third row as the lights go down. 60 s.
+const DURATION = 60;
+const GREEN = L['4'], RED2 = L['2'];
+
+function stageGlow(t) {
+  // navy for the ride, a warm theatre for the play
+  const warm = seg(t, 37.6, 39.4);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `rgb(${lerp(8, 30, warm)},${lerp(12, 14, warm)},${lerp(30, 24, warm)})`);
+  g.addColorStop(1, `rgb(${lerp(10, 60, warm)},${lerp(18, 24, warm)},${lerp(44, 30, warm)})`);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+function program(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  ctx.translate(W / 2, 470); ctx.rotate(-0.04 + 0.01 * Math.sin(t)); ctx.scale(lerp(0.94, 1, easeOut(seg(t, 0.4, 2))), lerp(0.94, 1, easeOut(seg(t, 0.4, 2))));
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 50;
+  rrect(-260, -300, 520, 600, 10); ctx.fillStyle = '#f6eedd'; ctx.fill(); ctx.shadowBlur = 0;
+  const ink = '#3a2c22';
+  text('HILLSIDE ELEMENTARY', 0, -220, { size: 20, weight: 700, color: ink, align: 'center', spacing: 4, display: false });
+  text('The Spring Play', 0, -160, { size: 46, weight: 800, color: ink, align: 'center' });
+  text('Tonight · 6:30 PM', 0, -116, { size: 22, weight: 500, color: ink, align: 'center', display: false });
+  ctx.fillStyle = 'rgba(58,44,34,0.3)'; ctx.fillRect(-180, -80, 360, 2);
+  [['The Moon', 'Ava'], ['Tree #1', 'Noor'], ['Tree #2', 'Leo'], ['The Wind', 'Sofia'], ['Narrator', 'Jun']].forEach(([role, who], i) => {
+    const y = -20 + i * 54, me = who === 'Leo';
+    const hl = me ? easeOut(seg(t, 2.6, 3.4)) : 0;
+    if (hl > 0) { ctx.save(); ctx.globalAlpha *= hl * 0.5; ctx.fillStyle = '#ffd34d'; rrect(-200, y - 32, 400 * hl, 44, 8); ctx.fill(); ctx.restore(); }
+    text(role, -180, y, { size: 26, weight: me ? 700 : 500, color: ink, display: false });
+    text(who, 180, y, { size: 26, weight: me ? 700 : 500, color: ink, align: 'right', display: false });
+  });
+  ctx.restore();
+}
+
+// phone screens
+function screenPlan(t) {
+  text('Go', 32, 120, { size: 34, weight: 700 });
+  text('Fulton St  →  Franklin Av', 32, 164, { size: 20, weight: 500, color: C.dim, display: false });
+  screenCard(20, 190, PW - 40, 300);
+  text('TAKE THE', 44, 230, { size: 14, weight: 700, color: C.faint, spacing: 2, display: false });
+  bullet(84, 290, 38, '2');
+  text('at 6:02', 140, 302, { size: 44, weight: 700 });
+  text('Arrive 6:24', 44, 400, { size: 30, weight: 700 });
+  text('80% window 6:22–6:27', 44, 434, { size: 18, weight: 500, color: C.dim, display: false });
+  text('6 min before curtain', 44, 470, { size: 18, weight: 600, color: C.ok, display: false });
+}
+function screenRide(t) {
+  const late = easeOut(seg(t, 15, 15.8));
+  ctx.save(); ctx.globalAlpha *= 1 - seg(t, 22.2, 22.6);
+  text('On the 2', 32, 120, { size: 22, weight: 600, color: C.dim, display: false });
+  text(late > 0.5 ? 'Arrive 6:33' : 'Arrive 6:24', 32, 166, { size: 42, weight: 700, color: late > 0.5 ? AMBER : C.ink });
+  if (late > 0) { ctx.save(); ctx.globalAlpha *= late; chip(270, 136, '+9 min', AMBER, 1, 22); ctx.restore(); }
+  ctx.restore();
+  screenCard(20, 196, PW - 40, 330);
+  const stops = ['Fulton St', 'Borough Hall', 'Hoyt St', 'Nevins St', 'Atlantic Av', 'Bergen St', 'Franklin Av'];
+  const prog = 1.2 + clamp((t - 14) / 20) * 1.8 - (late > 0 ? 0.3 * seg(t, 15, 19) : 0);
+  stops.forEach((s, i) => {
+    const y = 230 + i * 44;
+    ctx.fillStyle = i <= prog ? RED2 : 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.arc(60, y, i === 3 ? 10 : 7, 0, Math.PI * 2); ctx.fill();
+    if (i < 6) ctx.fillRect(57, y, 6, 44);
+    text(s, 86, y + 7, { size: 19, weight: i === 3 || i === 6 ? 700 : 500, color: i === 6 ? C.ink : C.dim, display: false });
+  });
+  const ty = 230 + prog * 44;
+  ctx.save(); ctx.shadowColor = '#fff'; ctx.shadowBlur = 18; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(60, ty, 9, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  // the faster way
+  const bk = easeOut(seg(t, 22.2, 23));
+  if (bk > 0) {
+    const pulse = 0.5 + 0.5 * Math.sin((t - 22.2) * 5);
+    ctx.save(); ctx.translate(0, (1 - bk) * -140); ctx.globalAlpha *= bk;
+    ctx.shadowColor = C.ok; ctx.shadowBlur = 20 + pulse * 20;
+    rrect(16, 56, PW - 32, 116, 28); ctx.fillStyle = '#123a2c'; ctx.fill(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = C.ok + 'aa'; ctx.lineWidth = 2; ctx.stroke();
+    text('6 min sooner', 40, 100, { size: 27, weight: 700, color: C.ok });
+    text('At Nevins St, cross to the 4 · in 6:27', 40, 138, { size: 19, weight: 500, color: 'rgba(255,255,255,0.88)', display: false });
+    ctx.restore();
+  }
+  // the change, timed
+  const ck = easeOut(seg(t, 31.2, 32));
+  if (ck > 0) {
+    ctx.save(); ctx.globalAlpha *= ck; ctx.translate(0, (1 - ck) * 30);
+    screenCard(20, 548, PW - 40, 230);
+    text('CHANGE AT NEVINS ST', 44, 590, { size: 14, weight: 700, color: C.faint, spacing: 2, display: false });
+    bullet(62, 640, 22, '2'); text('→', 96, 648, { size: 26, weight: 500, color: C.dim }); bullet(146, 640, 22, '4');
+    text('Across the platform', 186, 648, { size: 20, weight: 600, display: false });
+    text('4 arrives 6:16 · 1 min to spare', 44, 706, { size: 20, weight: 500, color: C.dim, display: false });
+    rrect(44, 730, PW - 88, 10, 5); ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fill();
+    rrect(44, 730, (PW - 88) * clamp((t - 32) / 5), 10, 5); ctx.fillStyle = C.ok; ctx.fill();
+    if (t > 36.4) text('On the 4 · arrive 6:27', 44, 768, { size: 18, weight: 700, color: C.ok, alpha: seg(t, 36.4, 36.8), display: false });
+    ctx.restore();
+  }
+}
+/** The map behind the phone: the 2 crawling on the local, the 4 on the express from Nevins St. */
+function routeMap(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  const nevins = [1260, 560], end = [1760, 140];
+  const p2 = new Path2D(); p2.moveTo(1170, 676); p2.bezierCurveTo(1200, 630, 1230, 590, nevins[0], nevins[1]); p2.bezierCurveTo(1420, 470, 1500, 300, end[0], end[1]);
+  const p4 = new Path2D(); p4.moveTo(nevins[0], nevins[1]); p4.bezierCurveTo(1440, 520, 1620, 380, end[0] + 10, end[1] + 10);
+  ctx.setLineDash([1600 * easeInOut(seg(t, 21, 22.6)), 3000]);
+  glowStroke(p2, RED2, 9, 16, 0.6 - 0.3 * seg(t, 23, 24));
+  ctx.setLineDash([900 * easeInOut(seg(t, 22.6, 24.4)), 2000]);
+  glowStroke(p4, '#18c45b', 12, 30, 1);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#fff';
+  [nevins, end].forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.fill(); });
+  text('Nevins St', nevins[0] - 26, nevins[1] - 18, { size: 24, weight: 600, color: C.dim, align: 'right', alpha: seg(t, 22, 23) });
+  text('Franklin Av', end[0] - 30, end[1] - 30, { size: 24, weight: 600, color: C.dim, align: 'right', alpha: seg(t, 22, 23) });
+  text('−6 min', 1600, 470, { size: 46, weight: 700, color: C.ok, alpha: easeOut(seg(t, 23.6, 24.4)) });
+  ctx.restore();
+}
+/** The school auditorium: rows of heads, a stage, a red curtain, one empty seat in the third row. */
+function theatre(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  const dim = easeInOut(seg(t, 43, 44.6));
+  // stage and curtain
+  const open = easeInOut(seg(t, 44.4, 46.8));
+  ctx.fillStyle = `rgba(255,214,150,${0.12 + 0.35 * open})`; ctx.fillRect(360, 160, 1200, 520);
+  const spot = open * (1 - dim * 0.2);
+  if (spot > 0) {
+    const g = ctx.createRadialGradient(960, 520, 0, 960, 520, 520);
+    g.addColorStop(0, `rgba(255,236,190,${0.5 * spot})`); g.addColorStop(1, 'rgba(255,236,190,0)');
+    ctx.fillStyle = g; ctx.fillRect(360, 160, 1200, 520);
+  }
+  // the kids on stage
+  if (open > 0.3) {
+    ctx.save(); ctx.globalAlpha *= seg(open, 0.3, 0.8);
+    person(620, 660, 1.2, '#e6eeff');            // the moon
+    ctx.fillStyle = '#ffe8a0'; ctx.beginPath(); ctx.arc(620, 520, 34, 0, Math.PI * 2); ctx.fill();
+    person(1300, 660, 1.2, '#fff');              // tree #1
+    ctx.fillStyle = '#2f8a46'; ctx.beginPath(); ctx.arc(1300, 560, 70, 0, Math.PI * 2); ctx.fill();
+    const leo = 1 + 0.06 * Math.max(0, Math.sin((t - 48) * 6)) * seg(t, 48, 48.4) * (1 - seg(t, 51, 51.4));
+    ctx.save(); ctx.translate(960, 660); ctx.scale(leo, leo); ctx.translate(-960, -660);
+    person(960, 660, 1.2, '#fff');               // Leo, tree #2
+    ctx.fillStyle = '#3fae5c'; ctx.beginPath(); ctx.arc(960, 560, 74, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(960, 590, 18, 0, Math.PI * 2); ctx.fill();   // the face in the costume
+    ctx.restore();
+    ctx.restore();
+  }
+  // curtains
+  ctx.fillStyle = '#7a1424';
+  const cw = 600 * (1 - open * 0.82);
+  ctx.fillRect(360, 160, cw, 520); ctx.fillRect(1560 - cw, 160, cw, 520);
+  ctx.fillStyle = '#5c0f1b'; ctx.fillRect(340, 130, 1240, 50);
+  // house lights dimming
+  ctx.fillStyle = `rgba(0,0,0,${0.45 * dim})`; ctx.fillRect(0, 0, W, 160); ctx.fillRect(0, 680, W, H - 680);
+  // rows of heads
+  for (let row = 0; row < 5; row++) {
+    const y = 760 + row * 70, n = 14 + row;
+    for (let i = 0; i < n; i++) {
+      const x = 960 + (i - (n - 1) / 2) * (110 + row * 4);
+      const empty = row === 2 && i === 8;
+      if (empty) {
+        // the seat you were promised
+        const sit = easeOut(seg(t, 40.6, 42.4));
+        const sx = lerp(W + 80, x, sit);
+        if (t < 40.6) { ctx.fillStyle = `rgba(255,214,140,${0.25 + 0.2 * Math.sin(t * 3)})`; rrect(x - 26, y - 20, 52, 50, 10); ctx.fill(); }
+        else { ctx.save(); ctx.fillStyle = WARM; ctx.shadowColor = WARM; ctx.shadowBlur = 30; ctx.beginPath(); ctx.arc(sx, y - 14, 22, 0, Math.PI * 2); ctx.fill(); rrect(sx - 30, y + 6, 60, 60, 20); ctx.fill(); ctx.restore(); }
+        continue;
+      }
+      ctx.fillStyle = `rgba(14,10,18,${0.95})`; ctx.beginPath(); ctx.arc(x, y - 14, 22, 0, Math.PI * 2); ctx.fill();
+      rrect(x - 30, y + 6, 60, 60, 20); ctx.fill();
+    }
+  }
+  // Leo's line
+  const b = seg(t, 48, 48.5) * (1 - seg(t, 52.8, 53.4));
+  if (b > 0) {
+    ctx.save(); ctx.globalAlpha *= b;
+    rrect(1010, 300, 470, 100, 30); ctx.fillStyle = 'rgba(255,255,255,0.94)'; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(1040, 398); ctx.lineTo(1010, 440); ctx.lineTo(1080, 398); ctx.fill();
+    text('“I’m the tree that', 1040, 344, { size: 30, weight: 700, color: '#2a2140', display: false });
+    text('saw everything!”', 1040, 380, { size: 30, weight: 700, color: '#2a2140', display: false });
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function say(t, a, b, at, out, { colB = C.ice, note = null } = {}) {
+  riseText(t, a, 180, 440, at, out, { size: 70, weight: 800 });
+  if (b) riseText(t, b, 180, 526, at + 0.6, out, { size: 70, weight: 800, color: colB });
+  if (note) note.forEach((n, i) => riseText(t, n, 184, 620 + i * 42, at + 1.6 + i * 0.2, out, { size: 30, weight: 500, color: C.dim, display: false }));
+}
+
+function render(t) {
+  ctx.save(); ctx.clearRect(0, 0, W, H);
+  stageGlow(t);
+  dust(t, 0.3);
+
+  // 1: the program, the one line, the promise
+  program(t, life(t, 0.4, 7.4, 0.7));
+  riseText(t, 'Leo has one line.', W / 2, 900, 3.2, 7, { size: 60, weight: 800, align: 'center' });
+  riseText(t, 'You promised you’d be there.', W / 2, 980, 4.6, 7, { size: 46, weight: 700, align: 'center', color: WARM });
+
+  // 2-4: the ride
+  routeMap(t, life(t, 21, 31.4, 0.8));
+  const pa = life(t, 7.4, 38, 0.7);
+  if (pa > 0) {
+    // the phone moves left when the map comes in
+    const px = lerp(1460, 640, easeInOut(seg(t, 20.6, 21.8))) - (t > 30.6 ? lerp(0, -820, easeInOut(seg(t, 30.6, 31.6))) : 0);
+    phone(lerp(1640, px, easeOut(seg(t, 7.4, 8.8))), 540, 1.0, pa, () => {
+      ctx.save(); ctx.globalAlpha *= life(t, 7, 14.6, 0.4); screenPlan(t); ctx.restore();
+      ctx.save(); ctx.globalAlpha *= life(t, 14.4, 40, 0.4); screenRide(t); ctx.restore();
+    });
+  }
+  say(t, '6:00. Curtain at 6:30.', 'The 2 gets you there at 6:24.', 8, 14.2, { note: ['Six minutes to spare.'] });
+  say(t, 'Then the 2', 'starts crawling.', 14.8, 20.6, { colB: AMBER, note: ['6:33. Three minutes after the curtain.'] });
+  // with the phone on the left, the words go top right
+  riseText(t, 'A faster way,', 1000, 760, 22.6, 30.4, { size: 70, weight: 800 });
+  riseText(t, 'from right where you are.', 1000, 846, 23.2, 30.4, { size: 70, weight: 800, color: C.ok });
+  riseText(t, 'WhichWay weighs every route from your seat', 1004, 920, 24.6, 30.4, { size: 28, weight: 500, color: C.dim, display: false });
+  riseText(t, 'on the train, with the trains in the live feed.', 1004, 960, 24.8, 30.4, { size: 28, weight: 500, color: C.dim, display: false });
+  say(t, 'One platform.', 'One minute.', 31.8, 37.6, { colB: C.ok, note: ['Every change, timed.'] });
+
+  // 5: the theatre
+  theatre(t, life(t, 37.8, 54.6, 0.8));
+  riseText(t, '6:29. Third row.', W / 2, 100, 39.2, 43.4, { size: 56, weight: 800, align: 'center' });
+  riseText(t, 'Lights down.', W / 2, 100, 43.8, 47.4, { size: 56, weight: 800, align: 'center', color: WARM });
+  riseText(t, 'You were there for it.', W / 2, 100, 50.4, 54.2, { size: 64, weight: 800, align: 'center', color: WARM, blur: true });
+
+  endCard(t, 54.8, 'Be there.', null);
+  vignette(0.5);
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

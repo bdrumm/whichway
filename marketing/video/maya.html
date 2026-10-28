@@ -1,0 +1,156 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Maya</title>
+<style>html, body { margin: 0; background: #05070d; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script>
+// "Maya": the pickup story from the gate. Every kid looks for one face; under Brooklyn that face's train is held,
+// the app says so early enough to ask a friend, and nobody waits alone. 60 s.
+const DURATION = 60;
+
+function sky(t) {
+  // afternoon at the school and the park, underground navy for the flashback
+  const under = seg(t, 13.2, 14.2) * (1 - seg(t, 32.6, 33.6));
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `rgb(${lerp(44, 8, under)},${lerp(46, 12, under)},${lerp(84, 30, under)})`);
+  g.addColorStop(1, `rgb(${lerp(214, 10, under)},${lerp(128, 18, under)},${lerp(84, 44, under)})`);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+/** A grown-up with arms that can wave. */
+function adult(x, y, color, wave = 0) {
+  person(x, y, 1.1, color);
+  if (wave > 0) {
+    ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.shadowColor = WARM; ctx.shadowBlur = 12;
+    const a = -2.2 + Math.sin(wave * 14) * 0.35;
+    ctx.beginPath(); ctx.moveTo(x + 14, y - 30); ctx.lineTo(x + 14 + Math.cos(a) * 36, y - 30 + Math.sin(a) * 36); ctx.stroke(); ctx.restore();
+  }
+}
+/** Kids come out of the gate one by one, each meets their grown-up and they walk off together. */
+const PAIRS = (() => {
+  const r = rng(13), out = [];
+  for (let i = 0; i < 9; i++) {
+    const side = i % 2 ? 1 : -1;
+    out.push({ at: 1.2 + i * 0.9 + r() * 0.3, ax: 1140 + side * (180 + r() * 520), side, tint: ['#fff', '#ffe7c2', '#e6eeff'][i % 3] });
+  }
+  return out;
+})();
+function gateCrowd(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  PAIRS.forEach(p => {
+    const meet = seg(t, p.at, p.at + 1.2), leave = Math.max(0, t - p.at - 1.6);
+    const kx = lerp(1140, p.ax - p.side * 30, easeInOut(meet)) + p.side * leave * 150;
+    const ax = p.ax + p.side * leave * 150;
+    if (t > p.at - 2) adult(ax, 900, 'rgba(255,255,255,0.75)');
+    if (t > p.at) person(kx, 900, 0.75, p.tint, true);
+  });
+  ctx.restore();
+}
+
+function render(t) {
+  ctx.save(); ctx.clearRect(0, 0, W, H);
+  sky(t);
+  dust(t, 0.3);
+
+  // 1: the gate opens; one by one the faces come
+  const g1 = life(t, 0, 13.4, 0.6);
+  if (g1 > 0) {
+    school(t, g1, clamp((t - 2) / 11) * 3 / 14);
+    gateCrowd(t, g1);
+    ctx.save(); ctx.globalAlpha = g1;
+    const look = Math.sin(t * 1.4) * 6;   // Maya, turning to look
+    person(1140 + look, 900, 0.75, '#ffe7c2', true);
+    ctx.restore();
+    riseText(t, '3:30. The gate opens.', 140, 280, 0.8, 6.6, { size: 70, weight: 800 });
+    riseText(t, 'Every kid is looking for one face.', 140, 370, 2.6, 6.6, { size: 52, weight: 700, color: WARM });
+    riseText(t, 'One by one, the faces come.', 140, 280, 7.2, 12.8, { size: 70, weight: 800 });
+    riseText(t, 'Maya’s hasn’t yet.', 140, 370, 9.2, 12.8, { size: 70, weight: 800, color: WARM });
+  }
+
+  // 2: eighteen minutes earlier, under Brooklyn
+  riseText(t, 'Eighteen minutes earlier.', W / 2, 560, 13.8, 16, { size: 64, weight: 700, align: 'center', color: C.ice, blur: true });
+  const holdT = t + 5.6;    // Pickup's hold screen, mapped onto this film
+  const msgT = t + 12.6;    // Pickup's messages screen
+  const pa = Math.max(life(t, 16, 25.4, 0.6), life(t, 24.8, 32.6, 0.6));
+  if (pa > 0) {
+    phone(lerp(1640, 1460, easeOut(seg(t, 16, 17.2))), 540, 1.0, pa, () => {
+      ctx.save(); ctx.globalAlpha *= life(t, 15.8, 25.4, 0.4); screenHold(holdT); ctx.restore();
+      ctx.save(); ctx.globalAlpha *= life(t, 25, 33, 0.4); screenMessages(msgT); ctx.restore();
+    });
+    riseText(t, 'Held under Brooklyn.', 180, 440, 16.8, 24.8, { size: 70, weight: 800 });
+    riseText(t, 'In at 3:41 at best.', 180, 526, 17.4, 24.8, { size: 70, weight: 800, color: HELD });
+    riseText(t, 'WhichWay sees the hold in the live feed,', 184, 620, 18.6, 24.8, { size: 30, weight: 500, color: C.dim, display: false });
+    riseText(t, 'and how holds here usually end.', 184, 662, 18.8, 24.8, { size: 30, weight: 500, color: C.dim, display: false });
+    riseText(t, 'Too late to make it.', 180, 440, 25.4, 32.2, { size: 70, weight: 800 });
+    riseText(t, 'Not too late to ask.', 180, 526, 26.4, 32.2, { size: 70, weight: 800, color: C.ice });
+  }
+
+  // 3: back at the gate, someone comes for Maya
+  const g3 = life(t, 33, 42.4, 0.8);
+  if (g3 > 0) {
+    school(t, g3, 3 / 14);
+    ctx.save(); ctx.globalAlpha = g3;
+    const arrive = easeOut(seg(t, 34.4, 36.6)), leave = easeIn(seg(t, 39.6, 42.4)) * 700;
+    const look = t < 36 ? Math.sin(t * 1.4) * 6 : 0;
+    adult(lerp(1900, 1260, arrive) - leave, 900, WARM, seg(t, 35.4, 36.4) * (1 - seg(t, 37.4, 37.8)) > 0 ? t : 0);
+    person(lerp(1960, 1320, arrive) - leave, 900, 0.8, '#fff', true);   // Sam's own kid
+    person(1140 + look - leave, 900, 0.75, '#ffe7c2', true);
+    // Sam's words
+    const b = seg(t, 36.6, 37.1) * (1 - seg(t, 39.4, 39.8));
+    if (b > 0) {
+      ctx.save(); ctx.globalAlpha *= b;
+      rrect(1240, 700, 420, 96, 30); ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(1280, 794); ctx.lineTo(1262, 822); ctx.lineTo(1310, 794); ctx.fill();
+      text('Hey Maya! You’re with', 1268, 742, { size: 26, weight: 700, color: '#2a2140', display: false });
+      text('us today. Park first?', 1268, 774, { size: 26, weight: 700, color: '#2a2140', display: false });
+      ctx.restore();
+    }
+    ctx.restore();
+    riseText(t, 'Nobody waits alone.', 140, 300, 37.6, 42, { size: 76, weight: 800, color: WARM });
+  }
+
+  // 4: the park, and the face Maya was looking for
+  const g4 = life(t, 42.2, 54.6, 0.7);
+  if (g4 > 0) {
+    ctx.save(); ctx.globalAlpha = g4;
+    ctx.fillStyle = '#1a1426'; ctx.fillRect(0, 900, W, H - 900);
+    for (let i = 0; i < 6; i++) {
+      const x = 200 + i * 320;
+      ctx.fillStyle = '#231c33'; ctx.fillRect(x - 8, 730, 16, 170);
+      ctx.fillStyle = '#2b2a45'; ctx.beginPath(); ctx.arc(x, 700, 90, 0, Math.PI * 2); ctx.fill();
+    }
+    const stop = Math.min(t, 46) - 42.2;
+    adult(1100 + stop * 30, 900, WARM);
+    person(1170 + stop * 30, 900, 0.8, '#fff', true);
+    // the parent comes running; Maya runs to meet them
+    const run = easeInOut(seg(t, 45.6, 48.2)), meetX = 860;
+    const px = lerp(-80, meetX - 20, run), mx = lerp(1040 + stop * 30, meetX + 20, easeInOut(seg(t, 46.8, 48.2)));
+    const hug = seg(t, 48.2, 49);
+    if (hug > 0) {
+      const gg = ctx.createRadialGradient(meetX, 860, 0, meetX, 860, 260 * easeOut(hug));
+      gg.addColorStop(0, `rgba(255,214,140,${0.55 * hug})`); gg.addColorStop(1, 'rgba(255,214,140,0)');
+      ctx.fillStyle = gg; ctx.fillRect(meetX - 300, 560, 600, 520);
+    }
+    person(px, 900, 1.1, '#fff');
+    person(mx - (hug > 0 ? 12 * hug : 0), 900 - (hug > 0 ? 30 * Math.sin(hug * Math.PI) : 0), 0.75, '#ffe7c2', true);
+    ctx.restore();
+    riseText(t, '3:41. Right when it said.', W / 2, 260, 44, 47.4, { size: 50, weight: 700, align: 'center', color: C.ok });
+    riseText(t, 'There you are.', W / 2, 330, 48.4, 54, { size: 96, weight: 800, align: 'center', color: WARM, blur: true });
+    riseText(t, 'Late happens. Alone doesn’t have to.', W / 2, 430, 50.4, 54, { size: 50, weight: 700, align: 'center' });
+  }
+
+  endCard(t, 54.8, 'Know before it matters.', null);
+  vignette(0.5);
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

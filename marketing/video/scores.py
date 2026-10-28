@@ -62,6 +62,28 @@ SPECS = {
         kick=(14.8, 0.55), hats=(45.0, 0.6), bass=(14.8, 0.7), riser=2.4,
         mute=[(22.4, 41.8)],  # the pulse stops with the train and comes back with Sam's answer
     ),
+    # Maya: a music-box gate, a hush under Brooklyn, warmth when Sam comes, a swell on the hug; Db - Ab/C - Bbm - Gb
+    'maya': dict(
+        dur=60, beat=60 / 84, bar=4 * 60 / 84, hit=54.8, bells=[(85, 56.9), (92, 57.6)],
+        chords=[[37, 53, 56, 61, 65], [36, 51, 56, 60, 63], [34, 53, 58, 61, 65], [30, 54, 58, 61, 66]],
+        hit_notes=[25, 37, 49, 56, 61, 65, 68, 73, 77],
+        pad=[(0, 0.5), (13.4, 0.8), (24.8, 0.6), (33, 0.8), (37.6, 1.0), (48.2, 1.2), (54, 1.1)],
+        arp=dict(start=0.8, sub=[(0, 2), (13.4, 1), (33, 2), (42.2, 4)],
+                 vel=[(0.8, 0.5), (13.4, 0.35), (33, 0.6), (42.2, 0.85), (48.2, 1.0)], soft=True),
+        kick=(42.2, 0.45), hats=None, bass=(33.0, 0.6), riser=2.2,
+    ),
+    # Curtain: a tender opening, anxious and sparse when the 2 crawls, a lift with the faster way, a hush in the
+    # theatre and a swell on Leo's line; F - Dm - Bb - C at 100 bpm
+    'curtain': dict(
+        dur=60, beat=0.6, bar=2.4, hit=54.8, bells=[(84, 56.9), (89, 57.6)],
+        chords=[[41, 57, 60, 65, 69], [38, 57, 62, 65, 69], [34, 58, 62, 65, 70], [36, 55, 60, 64, 67]],
+        hit_notes=[29, 41, 53, 60, 65, 69, 72, 77, 81],
+        pad=[(0, 0.5), (14.8, 0.8), (22.2, 0.9), (37.8, 0.6), (44.4, 0.9), (48, 1.2), (54, 1.1)],
+        arp=dict(start=0.6, sub=[(0, 2), (14.8, 1), (22.2, 4), (37.8, 1), (44.4, 2)],
+                 vel=[(0.6, 0.5), (14.8, 0.4), (22.2, 0.9), (37.8, 0.45), (48, 1.0)], soft=True),
+        kick=(22.2, 0.6), hats=(26.0, 0.5), bass=(22.2, 0.7), riser=2.2,
+        mute=[(37.8, 48.0)],  # the theatre goes quiet until Leo's line
+    ),
 }
 
 
