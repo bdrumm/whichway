@@ -126,6 +126,7 @@ body.atlas button { font: inherit; }
 .feed-item .m { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; margin-top: 4px; color: var(--muted); }
 .feed-item .m.live { color: var(--status-critical); } .feed-item .m.warn { color: color-mix(in oklab, var(--status-warning) 60%, var(--text-primary)); } .feed-item .m.research { color: var(--series-1); }
 .feed-item.closed .t { color: var(--text-secondary); font-weight: 500; }
+.feed-item.disputed { opacity: .55; }
 .feed-item .icon { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--page); color: var(--text-secondary); font-size: 12px; }
 .feed-item b, .feed-item strong { font-weight: 600; }
 

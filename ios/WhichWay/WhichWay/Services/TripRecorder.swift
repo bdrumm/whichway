@@ -290,6 +290,8 @@ final class TripRecorder {
 
     /// The boarding time of the forecast the rider acted on, as the tracker holds it (frozen once that train left).
     var forecastBoardTs: Double? { tracker?.timeline.forecastBoardTs }
+    /// When the rider reached the platform (else the station), for the long-wait report prompt.
+    var platformTs: Double? { tracker.flatMap { $0.timeline.platformTs ?? $0.timeline.arrivedStationTs } }
 
     /// The train the forecast named has gone from the feed just before its predicted platform moment while the rider
     /// stood at the station: it left. Returns whether the forecast froze on it (see `TripTracker.forecastTrainDeparted`).

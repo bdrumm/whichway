@@ -20,7 +20,7 @@ final class TripRelay {
     private(set) var lastUpload: Date?
     private(set) var lastError: String?
 
-    enum Kind: String { case trip = "trips", trace = "traces" }
+    enum Kind: String { case trip = "trips", trace = "traces", report = "reports" }
 
     /// One document to the relay; the same document again is fine (the relay leaves an unchanged file alone).
     func put(_ kind: Kind, _ data: Data) async throws {
