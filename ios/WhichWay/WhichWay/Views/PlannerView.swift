@@ -70,6 +70,8 @@ struct PlannerView: View {
     private let autoSwitchConfidence = 0.75
     /// The rider's own word on the train they are on (and the line to take at the change).
     @State private var onTrainSheet = false
+    /// A note on how the app is behaving, about the moment the rider tapped (`DevNoteSheet`); nil while none is open.
+    @State private var noteMoment: NoteMoment? = nil
     /// Per leg, the line the rider said they will take where a leg allows several (the A rather than the C).
     @State private var preferredKeys: [Int: String] = [:]
     /// The earlier Go tab: the title, the pickers, the full card, the route list and the five views on one page.
@@ -173,6 +175,9 @@ struct PlannerView: View {
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
         .onChange(of: trip.changedEarly) { _, c in if let c { followEarlyChange(c) } }
         .sheet(isPresented: $onTrainSheet) { onTrainSheetView }
+        .sheet(item: $noteMoment) { m in noteSheet(m) }
+        // a moment marked from the Live Activity: its button counts the marks waiting for words
+        .onChange(of: trip.devNotes) { _, _ in if routeStarted { updateActivity() } }
         .onChange(of: trip.phase) { _, ph in
             if ph == .arrived { endTrip(by: trip.endReason ?? "arrived") }
             // on a train by the phone's own reading, with no departure to name it: ask which
@@ -869,7 +874,8 @@ struct PlannerView: View {
             changeAt: changeAhead ? p.transfer?.station : nil, changeRoutes: changeAhead ? p.legs[1].routesLabel : nil,
             extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline, routeLabel: p.label,
             riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, stopsToChange: stopsToChange,
-            changeHere: trip.earlyChange?.change.text)
+            changeHere: trip.earlyChange?.change.text,
+            notesMarked: trip.devNotes.pendingMarks.isEmpty ? nil : trip.devNotes.pendingMarks.count)
     }
 
     private func startActivity() {
@@ -949,11 +955,13 @@ struct PlannerView: View {
                             .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                             .accessibilityLabel("I'm not on the train")
                     }
+                    noteButton
                     Button("End route") { endTrip(by: "hand") }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                 } else {
                     Text(lastEndNote ?? "Starts by itself at \(originName)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
+                    noteButton          // the trip just taken can still take a note
                     Button("On a train?") { openOnTrain() }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                     Button("Start route") { startTrip(by: "hand") }
@@ -974,6 +982,35 @@ struct PlannerView: View {
                 lineChooser
             }
         }
+    }
+
+    /// A note on how the app is behaving, about this moment: the trip's record keeps it with what the phone believed then.
+    /// Counts the moments marked from the Live Activity that still want words.
+    @ViewBuilder private var noteButton: some View {
+        if trip.canNote(now: data.now) {
+            let marked = trip.notesInHand(now: data.now).pendingMarks.count
+            Button { noteMoment = NoteMoment(ts: Date().timeIntervalSince1970) } label: { Label("Note", systemImage: "square.and.pencil") }
+            .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
+            .labelStyle(.iconOnly).overlay(alignment: .topTrailing) {
+                if marked > 0 { Text("\(marked)").font(.caption2.bold()).foregroundStyle(.white).padding(3).background(Circle().fill(Color.orange)).offset(x: 6, y: -6) }
+            }
+            .accessibilityLabel(marked > 0 ? "Note on the app, \(marked) marked moments to describe" : "Note on the app")
+        }
+    }
+
+    private func noteSheet(_ m: NoteMoment) -> some View {
+        let context: String = {
+            guard routeStarted else { return "On the trip just taken" + (lastEndNote.map { " (\($0.lowercased()))" } ?? "") }
+            var bits: [String] = []
+            if trip.onTrain, let r = trip.currentBelief?.route { bits.append("On the \(r)") }
+            else if let ph = trip.phase { bits.append(phaseText(ph, originName: data.index?.stations[originId]?.name ?? "the station")) }
+            if (headline?.legs.count ?? 1) > 1 { bits.append("leg \(trip.currentLeg + 1)") }
+            return bits.joined(separator: " · ")
+        }()
+        return DevNoteSheet(moment: m.ts, context: context, notes: trip.notesInHand(now: data.now),
+                            onSave: { trip.addNote($0, preset: $1, via: "app", at: m.ts) },
+                            onWriteMark: { trip.writeMark(at: $0, text: $1, preset: $2) },
+                            onDropMark: { trip.dropMark(at: $0) })
     }
 
     /// The question when the phone is not sure which train the rider boarded, believes they boarded one off the
@@ -2114,4 +2151,10 @@ struct ItineraryRow: View {
         if let lr = leg.train.lastRun, let sp = lr.speedKmh { s += " · last run \(Fmt.mph(sp))" }
         return s
     }
+}
+
+/// The moment a note on the app is about: when the rider tapped the note button.
+struct NoteMoment: Identifiable {
+    let ts: Double
+    var id: Double { ts }
 }

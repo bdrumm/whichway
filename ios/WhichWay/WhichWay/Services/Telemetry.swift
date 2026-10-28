@@ -56,6 +56,8 @@ struct TripObservation: Codable, Identifiable {
     var changedEarlyTaps: [Double]? = nil
     /// Each faster route offered on the way, as the banner put it.
     var rerouteNotes: [RerouteNote]? = nil
+    /// The rider's notes on how the app behaved, each at its moment, with what the phone had in hand then.
+    var devNotes: [DevNote]? = nil
     var uploaded: Bool?
     /// Written to the private GitHub data repository.
     var uploadedGitHub: Bool?
@@ -194,6 +196,33 @@ final class Telemetry {
         }
     }
 
+    // MARK: - notes after the trip
+
+    /// How long after a trip ends a note still joins it.
+    static let noteAfterSec = 3 * 3600.0
+
+    /// The trip a note goes to when no route is in progress: the last one kept, ended within `noteAfterSec`.
+    func recentTrip(now: Double) -> TripObservation? {
+        guard optIn, current == nil, let o = observations.max(by: { $0.createdTs < $1.createdTs }),
+              now - (o.endedTs ?? o.createdTs) <= Telemetry.noteAfterSec else { return nil }
+        return o
+    }
+
+    /// A note, or the words for a mark, onto the trip just taken: the record is sent again with it (the data
+    /// repository, the relay and the local server all replace a trip by its id).
+    @discardableResult
+    func noteRecentTrip(now: Double, _ change: (inout [DevNote]) -> Bool) -> Bool {
+        guard let o = recentTrip(now: now), let i = observations.firstIndex(where: { $0.id == o.id }) else { return false }
+        var notes = observations[i].devNotes ?? []
+        guard change(&notes) else { return false }
+        observations[i].devNotes = notes.isEmpty ? nil : notes
+        observations[i].uploaded = nil
+        observations[i].uploadedGitHub = nil
+        save()
+        Task { await uploadToGitHub() }
+        return true
+    }
+
     /// The record with what the tracker has measured so far.
     private func merged(_ base: TripObservation, _ tl: TripTimeline) -> TripObservation {
         var o = base
@@ -220,6 +249,7 @@ final class Telemetry {
             o.notOnTrainTaps = tl.notOnTrainTaps
             o.changedEarlyTaps = tl.changedEarlyTaps
             o.rerouteNotes = tl.rerouteNotes
+            o.devNotes = tl.devNotes
             o.beliefLog = tl.beliefLog.isEmpty ? nil : tl.beliefLog
             if o.predictedBoardTs == nil { o.predictedBoardTs = tl.forecastBoardTs; o.predictedArriveTs = tl.forecastArriveTs }
         }
