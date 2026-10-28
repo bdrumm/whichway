@@ -192,3 +192,42 @@ def test_trips_from_the_github_data_repository_join_the_ledger(tmp_path):
     obs = trips.collect_observations(None, tmp_path / "trips")
     assert {o["id"] for o in obs} == {"a", "b"}
     assert trips.sync_data_repo(tmp_path / "trips", repo="") is False      # no repository named: nothing to pull
+
+
+def test_notes_from_the_phone_sit_beside_the_timeline_at_their_moment(static):
+    route, seq = _line(static)
+    a, b = seq[0], seq[3]
+    t0 = 1_700_000_000.0
+    arr = pd.DataFrame(_arrivals(route, seq, "0600_X..N1", t0))
+    m = trips.TrainMatcher(static, arr)
+    on_train = t0 + 200                                                  # between the train's second and third stops
+    obs = {"id": "t1", "createdTs": t0 - 400, "endedTs": t0 + 450, "endedBy": "alighted", "startedBy": "gps", "routeLabel": f"{route} direct",
+           "legs": [{"line": f"{route}_N", "from": a, "to": b}], "expectedSec": 900, "schedSec": 360,
+           "events": [{"kind": "departed", "ts": t0 + 50}, {"kind": "alighted", "ts": t0 + 385}],
+           "boarded": [{"leg": 0, "key": f"{route}_N", "trainId": f"{route}_N|0600_X..N1", "confidence": 0.9, "verdict": "onPlan"}],
+           "devNotes": [
+               {"ts": on_train, "text": "says 3 stops, it's 2", "via": "app", "phase": "riding", "motion": "riding", "leg": 0, "onTrain": True,
+                "line": f"{route}_N", "train": f"{route}_N|0600_X..N1", "confidence": 0.9},
+               {"ts": t0 + 20, "text": "", "preset": "boardingLate", "via": "activity", "writtenTs": t0 + 900, "phase": "atStation", "leg": 0, "onTrain": False},
+               {"ts": t0 + 400, "text": "", "via": "activity", "phase": "riding", "leg": 0, "onTrain": True},
+           ]}
+    r = trips.review_trip(obs, static, m)
+    notes = r["devNotes"]
+    assert [n["ts"] for n in notes] == [t0 + 20, on_train, t0 + 400]       # in the order of their moments
+    assert notes[0]["text"] == "Boarding caught late" and not notes[0]["pending"]
+    assert notes[2]["text"] == "(marked, no words)" and notes[2]["pending"]
+    n = notes[1]
+    assert n["eventBefore"] == {"kind": "departed", "agoSec": pytest.approx(150)}
+    assert n["eventAfter"] == {"kind": "alighted", "inSec": pytest.approx(185)}
+    ft = n["feedTrain"]
+    assert ft["trip_id"] == "0600_X..N1"
+    assert ft["lastStop"] == static.stop_name(seq[1]) and ft["nextStop"] == static.stop_name(seq[2])
+    assert ft["lastAgoSec"] == pytest.approx(on_train - trips.at_platform(t0 + 120, route))
+    s = trips.summarize([r])
+    assert any("3 note(s) written on the phone" in f and "1 marked" in f for f in s["findings"])
+    md = trips.render_markdown([r], s, pd.Timestamp(t0, unit="s", tz="UTC").to_pydatetime(), [])
+    assert "## Notes from the phone" in md and "says 3 stops, it's 2" in md and "Boarding caught late" in md
+    # a trip with no notes reads as before
+    plain = trips.review_trip(dict(obs, devNotes=None), static, m)
+    assert plain["devNotes"] == []
+    assert "Notes from the phone" not in trips.render_markdown([plain], trips.summarize([plain]), pd.Timestamp(t0, unit="s", tz="UTC").to_pydatetime(), [])

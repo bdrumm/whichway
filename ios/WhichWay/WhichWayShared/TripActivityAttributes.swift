@@ -34,6 +34,9 @@ struct TripActivityAttributes: ActivityAttributes {
         /// On the train: a change short of the route's own that can be made where the train is ("A/C at Jay St-MetroTech"),
         /// offered as one tap (`ChangedTrainIntent`); the sensors cannot tell two steps across the platform from staying on.
         var changeHere: String? = nil
+        /// Moments marked from the activity for a note, still without words (`MarkMomentIntent`): the button says so,
+        /// so the rider sees the tap was taken.
+        var notesMarked: Int? = nil
 
         /// On the train with a change ahead: when the connecting train leaves the change (the countdown runs to it).
         /// Nil with no change ahead, or no connecting train in the feeds yet (`boardTs` is then the arrival at the change).

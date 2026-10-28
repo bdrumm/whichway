@@ -40,6 +40,7 @@ struct TripLiveActivity: Widget {
                             Text(aheadText(context.state, destName: context.attributes.destName)).font(.subheadline.weight(.semibold)).lineLimit(1)
                             Spacer()
                             ExtraBadge(state: context.state)
+                            MarkMomentButton(marked: context.state.notesMarked ?? 0)
                         }
                         Text(subline(context.state)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                         if context.state.riding {
@@ -117,6 +118,21 @@ struct ChangedHereButton: View {
     }
 }
 
+/// Marks this moment for a note on how the app behaved (`MarkMomentIntent`); the words follow in the app. Small, beside
+/// the arrival, so it fits before and on the train alike.
+struct MarkMomentButton: View {
+    let marked: Int
+
+    var body: some View {
+        Button(intent: MarkMomentIntent()) {
+            Label(marked > 0 ? "\(marked)" : "Note", systemImage: marked > 0 ? "flag.fill" : "square.and.pencil")
+                .font(.caption2.weight(.semibold)).labelStyle(.titleAndIcon).lineLimit(1)
+        }
+        .buttonStyle(.bordered).tint(.white)
+        .accessibilityLabel(marked > 0 ? "Marked \(marked) for a note; mark this moment too" : "Mark this moment for a note")
+    }
+}
+
 struct ExtraBadge: View {
     let state: TripActivityAttributes.ContentState
 
@@ -175,6 +191,7 @@ struct LockScreenView: View {
                     Text("ETA \(Fmt.hhmm(state.arriveTs))").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 }
                 ExtraBadge(state: state)
+                MarkMomentButton(marked: state.notesMarked ?? 0)
             }
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             if state.riding {

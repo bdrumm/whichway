@@ -40,6 +40,7 @@ struct TripTimeline: Codable, Equatable {
     var rerouteNotes: [RerouteNote]? = nil // each faster route offered on the way, as the rider saw it
     var stopSpans: [FeltStop] = []        // every station stop felt on each ride: the train at rest, then moving again
     var beliefLog: [BeliefNote] = []      // each change in the train the phone believes the rider is on, as it happened
+    var devNotes: [DevNote]? = nil        // the rider's notes on how the app behaved, each at the moment it is about
 
     /// Legs ridden so far: the number of alightings the sensors saw.
     var legsRidden: Int { events.filter { $0.kind == .alighted }.count }
@@ -492,6 +493,33 @@ struct TripTracker {
     /// The rider said they changed short of the route's change, kept on the record.
     mutating func noteChangedEarly(at ts: Double) {
         timeline.changedEarlyTaps = (timeline.changedEarlyTaps ?? []) + [ts]
+    }
+
+    /// A note from the rider on how the app is behaving, or a mark from the Live Activity, at `ts`: on the record with
+    /// the phase, the motion and the leg as the tracker has them then. Changes nothing else.
+    @discardableResult
+    mutating func noteDev(_ text: String, preset: String? = nil, via: String, at ts: Double, belief: LineBelief? = nil) -> DevNote? {
+        let n = DevNote(ts: ts, text: text, preset: preset, via: via, phase: phase.rawValue, motion: motionState.rawValue,
+                        leg: timeline.legsRidden, onTrain: onTrain).believing(belief)
+        var notes = timeline.devNotes ?? []
+        guard notes.addNote(n) else { return nil }
+        timeline.devNotes = notes
+        return notes.last
+    }
+
+    /// The words for a mark made on the way.
+    @discardableResult
+    mutating func writeDevMark(at ts: Double, text: String, preset: String? = nil, now: Double) -> Bool {
+        guard var notes = timeline.devNotes, notes.writeMark(at: ts, text: text, preset: preset, now: now) else { return false }
+        timeline.devNotes = notes
+        return true
+    }
+
+    @discardableResult
+    mutating func dropDevMark(at ts: Double) -> Bool {
+        guard var notes = timeline.devNotes, notes.dropMark(at: ts) else { return false }
+        timeline.devNotes = notes.isEmpty ? nil : notes
+        return true
     }
 
     /// The rider said "not on the train", kept on the record whatever it changed.

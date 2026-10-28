@@ -30,3 +30,18 @@ struct ChangedTrainIntent: LiveActivityIntent {
         return .result()
     }
 }
+
+/// "Note" from the Live Activity: marks this moment on the trip for a note on how the app behaved. No words can be typed
+/// there, so the mark keeps the moment and the words follow in the app. Runs in the app's process, like `NotOnTrainIntent`.
+struct MarkMomentIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Mark this moment"
+    static var description = IntentDescription("Marks the moment on the trip in progress, for a note on how the app behaved.")
+
+    /// Set by the app (the extension leaves it nil).
+    @MainActor static var handler: (() -> Void)?
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { MarkMomentIntent.handler?() }
+        return .result()
+    }
+}
