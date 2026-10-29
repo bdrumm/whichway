@@ -85,6 +85,9 @@ SPECS = {
         mute=[(37.8, 48.0)],  # the theatre goes quiet until Leo's line
     ),
 }
+# engine cuts: the same scores, ending on the signature chime instead of the plucked bells
+SPECS['maya-engine'] = dict(SPECS['maya'], chime=61)
+SPECS['curtain-engine'] = dict(SPECS['curtain'], chime=65)
 
 
 class Score:
@@ -218,11 +221,37 @@ class Score:
             i0 = int(hit * SR)
             seg = (sig * e)[: self.n - i0]
             out[i0:i0 + len(seg), side] += seg * 0.085
+        if 'chime' in self.s:
+            return out * 0.6 + self.chime()
         kt = np.arange(int(0.45 * SR)) / SR
         ph = 2 * np.pi * np.cumsum(48 + 90 * np.exp(-kt * 30)) / SR
         self.add(out, hit, np.sin(ph) * np.exp(-kt * 7) * 0.2)
         for m, at in self.s['bells']:
             self.add(out, at, self.pluck(hz(m), 3.0, False) * 0.02)
+        return out
+
+    def bell(self, f, length, index=2.2):
+        """An FM bell: an inharmonic modulator with a decaying index, so it strikes bright and settles pure."""
+        t = np.arange(int(length * SR)) / SR
+        idx = index * np.exp(-t * 2.4)
+        s = np.sin(2 * np.pi * f * t + idx * np.sin(2 * np.pi * f * 1.4 * t))
+        s += 0.25 * np.sin(2 * np.pi * f * 2.76 * t) * np.exp(-t * 5)
+        return s * np.exp(-t * 1.1) * np.minimum(1, t / 0.004)
+
+    def chime(self):
+        """The WhichWay signature: three bells timed to the icon drawing itself (stem, branch, dot), the last one
+        highest, with a shimmer above and a sine an octave below."""
+        out = np.zeros((self.n, 2))
+        root, hit = self.s['chime'], self.s['hit']
+        left = self.s['dur'] - hit
+        for (iv, dt, g, pan) in ((0, 0.45, 0.05, -0.3), (7, 1.05, 0.05, 0.3), (16, 2.05, 0.065, 0.0)):
+            f = hz(root + iv)
+            sig = self.bell(f, left - dt)
+            if iv == 16:
+                t = np.arange(len(sig)) / SR
+                sig = sig + 0.35 * np.sin(2 * np.pi * f / 2 * t) * np.exp(-t * 0.6) * np.minimum(1, t / 0.05)
+                sig = sig + 0.12 * self.bell(f * 2, left - dt, 1.2) * np.sin(2 * np.pi * 5.5 * t) ** 2
+            self.add(out, hit + dt, sig * g, gain=(1 - pan, 1 + pan))
         return out
 
     def reverb(self, x, mix=0.35):

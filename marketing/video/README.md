@@ -25,3 +25,13 @@ python3 scores.py minutes minutes.wav
 ffmpeg -i minutes_silent.mp4 -i minutes.wav -c:v copy -c:a aac -b:a 256k -shortest minutes.mp4
 FILM=minutes.html node render.mjs --stills stills 3 20 44  # stills from one film
 ```
+
+## Engine cuts
+
+`engine.js` draws the prediction engine as graphics instead of phone screens: a stringline of every train on the
+line with the hold and the trains stuck behind it (`engineMarey`), how long holds on a stretch last (`holdCurve`),
+the arrival window tightening against a deadline (`arrivalWindow`), the odds of each route (`routeOdds`), the
+local and express race to a cross-platform change (`expressLocal`), and the moving network behind the logo
+(`endCardData`). `maya-engine.html` and `curtain-engine.html` are the Maya and Curtain films told with them, and
+their scores (`maya-engine`, `curtain-engine`) end on the signature chime: three FM bells timed to the icon
+drawing its stem, branch and dot.
