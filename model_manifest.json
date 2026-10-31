@@ -1,0 +1,58 @@
+{
+ "version": "20261031-1354",
+ "built_at": "2026-10-31T13:54:02.261407-04:00",
+ "built_ts": 1793469242.261407,
+ "lake": {
+  "span": {
+   "first": "2026-08-29",
+   "last": "2026-10-31",
+   "days": 64
+  },
+  "archive_days": 63
+ },
+ "models": {
+  "client_model": {
+   "generated_at": "2026-10-31T13:54:02.261407-04:00",
+   "eta_samples": 4830319,
+   "routes_calibrated": 21,
+   "holds": 538031,
+   "carry_pairs": 12580132,
+   "routes_carry": 29,
+   "fitted_on": {
+    "first_day": "2026-09-17",
+    "last_day": "2026-10-31",
+    "arrivals": 9672328,
+    "carry_arrivals": 1495929,
+    "eta_samples": 4846653,
+    "holds": 644180,
+    "source": "lake"
+   }
+  },
+  "delay_model": {
+   "generated_at": 1791839847.0191202,
+   "version": 1
+  },
+  "arrival_model": {
+   "status": "ok",
+   "trained_at": 1791514604.582691,
+   "n_train": 6000000,
+   "mae_model": 70.0852572914714,
+   "mae_schedule": 84.29411735891671,
+   "coverage_p10_p90": 0.8000001093358612
+  }
+ },
+ "files": {
+  "arrival.card.json": {
+   "sha256": "25e13879dd2f89782546c0a4fe8011f7d50ed6beec7b78d157d37b0d89aa6692",
+   "bytes": 35287
+  },
+  "client_model.json": {
+   "sha256": "95aeb9b06f22f60e763f9aa7ea97c024445e8c433d8d7e08f57baa5db508e112",
+   "bytes": 88316
+  },
+  "delay_model.json": {
+   "sha256": "e693574790796a18ee29b1f1c3ff06200b21873181380afcec198eb44560b414",
+   "bytes": 140389
+  }
+ }
+}
