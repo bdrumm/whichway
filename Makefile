@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch map-dev serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures ios-seed
+.PHONY: help local venv gtfs site-synthetic site data-branch map-dev serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures ios-seed lake lake-status lake-nightly lake-sql model-lake bundle bundle-publish
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -18,7 +18,7 @@ local: ## Everything for a Mac in one go: env, offline data, Xcode config, local
 
 venv: ## Python environment with the package and the dev tools
 	test -x $(PYTHON) || $(PY) -m venv $(VENV)
-	$(PIP) install -q -U pip && $(PIP) install -q -e ".[dev]"
+	$(PIP) install -q -U pip && $(PIP) install -q -e ".[dev,lake]"
 
 gtfs: data/gtfs_subway.zip ## The MTA static schedule (downloaded once into data/)
 data/gtfs_subway.zip:
@@ -35,6 +35,30 @@ site: gtfs data-branch ## Full site build from the collected history: engine tab
 
 model: gtfs data-branch ## Train the arrival model on the archive + collected history with weather, alerts and day patterns (writes data/arrival.joblib)
 	$(PYTHON) -m pipeline.train_model --data-dir data-branch --db data/mta.sqlite --out data --skip-ablation --max-iter 1500 --max-leaf-nodes 255 --min-samples-leaf 200
+
+LAKE_DAYS ?= 365
+LAKE_FETCH ?= 30
+lake: gtfs ## Pull what the gatherers collected into the local lake (data/lake): the data branch, the subwaydata.nyc archive back LAKE_DAYS days (LAKE_FETCH a run), this Mac's store
+	$(PYTHON) -m pipeline.lake sync --lake data/lake --db data/mta.sqlite --archive-days $(LAKE_DAYS) --max-fetch $(LAKE_FETCH)
+
+lake-status: ## Coverage of the lake by table, source and day
+	$(PYTHON) -m pipeline.lake status --days 14
+
+lake-sql: ## A DuckDB query over the lake (Q='select source, count(*) from arrivals group by 1')
+	$(PYTHON) -m pipeline.lake sql "$(Q)"
+
+lake-nightly: ## Install a launchd agent that runs `make lake` every night at 03:20 (remove with scripts/lake_agent.sh remove)
+	scripts/lake_agent.sh install
+
+model-lake: gtfs ## Train the arrival model from the lake (months of history) into data/models_lake; END=YYYY-MM-DD TEST_FROM=YYYY-MM-DD narrow it
+	$(PYTHON) -m pipeline.train_model --lake data/lake --out data/models_lake --cache data/models_lake/rows.pkl $(if $(START),--start $(START)) $(if $(END),--end $(END)) $(if $(TEST_FROM),--test-from $(TEST_FROM)) --skip-ablation --max-iter 1500 --max-leaf-nodes 255 --min-samples-leaf 200
+
+bundle: gtfs ## Build the model bundle the site and the app take from this Mac (data/bundle): the client engine's tables from the lake, the delay model, the arrival model's card
+	$(PYTHON) -m pipeline.bundle build --lake data/lake --out data/bundle
+
+bundle-publish: ## Push data/bundle to the models branch; the hourly site build installs it and the app reads it from the published site
+	$(PYTHON) -m pipeline.bundle publish --bundle data/bundle
+
 
 trips: ## Pull the phone's trips (when it is connected), merge them with the uploads, review them against the trains → data/trips/trip_review.md (IMPORT=file.json takes an export from the app)
 	$(PYTHON) -m pipeline.trip_review --pull $(if $(IMPORT),--import "$(IMPORT)") --db data/mta.sqlite --out data/trips

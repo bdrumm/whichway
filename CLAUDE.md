@@ -9,6 +9,11 @@ This repository is public. The rider's trips, motion traces and rider notes live
 private `bdrumm/whichway-data` repository. Never commit trip times, traces or trip-derived fixtures; tests use
 synthetic data. Station names already in code comments are fine; a trip's own timeline is not.
 
+The lake (`data/lake/`, `make lake`) holds only what the public gatherers produced; trips stay out of it. A model
+bundle (`make bundle`) must pass `pipeline.bundle check` (no rider legs, install ids or trip records) before
+`make bundle-publish` pushes it to the public `models` branch; publish only when the owner asks. The design is in
+`docs/LOCAL_MODELING.md`.
+
 ## Transfers and trip sensing
 
 A change between trains is where the app has failed the rider most (post mortems in `docs/postmortems/`). Before a
