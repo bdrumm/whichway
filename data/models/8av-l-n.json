@@ -1,0 +1,1 @@
+{"target_id": "8av-l-n", "stop_id": "L01N", "routes": ["L"], "fitted_at": "2026-10-31T09:05:47.815226-04:00", "n_arrivals": 2834, "n_days": 20, "eta_bias": {}, "lateness_carry": {}, "gap_persistence": {"L": {"p": 0.9113043478260869, "n": 575}}, "alert_effect": {}, "sched_headway_by_hour": {}}
