@@ -67,6 +67,14 @@ jobs:
         run: pipeline/data_branch.sh commit
       - name: Build site
         run: python -m pipeline.build_site --out _site
+      - name: Install the model bundle trained on the Mac (models branch), when fresh
+        run: |
+          if git ls-remote --exit-code --heads origin models >/dev/null 2>&1; then
+            git fetch origin models --depth 1 && git worktree add models-branch origin/models
+            python -m pipeline.bundle install --bundle models-branch --site _site/data --max-age-days 30
+          else
+            echo "no models branch yet: the build's own tables are published"
+          fi
       - name: Commit training export
         run: pipeline/data_branch.sh commit
       # Publishing path 1: the gh-pages branch (works with Pages source "Deploy from a branch").

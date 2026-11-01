@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-cov"]
+lake = ["pyarrow>=15", "duckdb>=1.0"]
 
 [project.scripts]
 mta-insights = "mta_delay_insights.cli:main"

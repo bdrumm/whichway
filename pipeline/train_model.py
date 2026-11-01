@@ -1,6 +1,7 @@
 """Train and evaluate the arrival model on the pooled history with the full context.
 
     python -m pipeline.train_model --data-dir data-branch --db data/mta.sqlite --out data/models --test-from 2026-09-28
+    python -m pipeline.train_model --lake data/lake --out data/models_lake --test-from 2026-10-20      # from the local lake
 
 Steps: assemble each day's arrivals (the subwaydata archive when it has the day, otherwise our collector),
 build the training rows day by day with the shared context (hourly weather, alerts, events, NWS, climatology),
@@ -71,7 +72,8 @@ def ensure_weather_hourly(data_dir: Path, start: date, end: date) -> pd.DataFram
     return df
 
 
-def load_frames(data_dir: Path, db: Path | None, start: date, end: date) -> dict:
+def load_frames(data_dir: Path, db: Path | None, start: date, end: date, lake=None) -> dict:
+    """The context frames; with a lake, its alerts, ETA samples and context tables stand in for the branch's and the store's."""
     ctx: dict = {}
     ctx["weather_hourly"] = ensure_weather_hourly(data_dir, start, end)
     wd = lib.load_context(data_dir, "weather_daily")
@@ -82,8 +84,8 @@ def load_frames(data_dir: Path, db: Path | None, start: date, end: date) -> dict
     ctx["weather_daily"] = wd
     ctx["events"] = lib.load_events(data_dir)
     ctx["nws_alerts"] = lib.load_context(data_dir, "nws_alerts")
-    live = lib.load_alerts(data_dir)
-    store = Store(db) if db and Path(db).exists() else None
+    live = lake.alerts() if lake is not None else lib.load_alerts(data_dir)
+    store = Store(db) if db and Path(db).exists() and lake is None else None
     if store is not None:
         sa = store.alerts()
         if sa is not None and len(sa):
@@ -97,7 +99,7 @@ def load_frames(data_dir: Path, db: Path | None, start: date, end: date) -> dict
         ctx["climatology"] = aa.climatology(aa.events(arch)) if arch is not None and len(arch) else None
     except Exception as exc:
         log.warning("climatology failed: %s", exc); ctx["climatology"] = None
-    es = lib.load_eta_samples(data_dir)
+    es = lake.eta_samples() if lake is not None else lib.load_eta_samples(data_dir)
     if store is not None:
         se = store.eta_samples(None, None, None)
         if se is not None and len(se):
@@ -282,6 +284,7 @@ def evaluate_legs(model: ArrivalModel, rows: pd.DataFrame, legs: list[dict], car
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default=str(lib.DEFAULT_DATA_DIR))
+    ap.add_argument("--lake", default=None, help="train from the local lake (data/lake, see pipeline.lake) instead of the data branch and the store")
     ap.add_argument("--db", default="data/mta.sqlite")
     ap.add_argument("--gtfs", default="data/gtfs_subway.zip")
     ap.add_argument("--targets", default=None)
@@ -306,14 +309,26 @@ def main(argv=None) -> int:
     data_dir = Path(args.data_dir); out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     static = lib.load_static(args.gtfs)
     targets = lib.load_targets(args.targets)
-    files = sorted((data_dir / "arrivals_all").glob("20*.csv.gz"))
-    first = date.fromisoformat(args.start) if args.start else date.fromisoformat(files[0].stem[:10])
-    last = date.fromisoformat(args.end) if args.end else min(date.fromisoformat(files[-1].stem[:10]), date.today())
+    lake = None
+    if args.lake:
+        from mta_delay_insights.lake import Lake
+        lake = Lake(args.lake)
+        data_dir = lake.root          # the lake lays out alerts/ and context/ as the branch does
+        lake_days = lake.days("arrivals")
+        if not lake_days:
+            log.error("the lake at %s has no arrivals: run `make lake` first", lake.root)
+            return 2
+        first = date.fromisoformat(args.start) if args.start else lake_days[0]
+        last = date.fromisoformat(args.end) if args.end else min(lake_days[-1], date.today() - timedelta(days=1))
+    else:
+        files = sorted((data_dir / "arrivals_all").glob("20*.csv.gz"))
+        first = date.fromisoformat(args.start) if args.start else date.fromisoformat(files[0].stem[:10])
+        last = date.fromisoformat(args.end) if args.end else min(date.fromisoformat(files[-1].stem[:10]), date.today())
     days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
     test_from = date.fromisoformat(args.test_from) if args.test_from else days[int(len(days) * 0.7)]
     split_ts = _day_bounds(test_from)[0]
     log.info("days %s..%s, held out from %s", first, last, test_from)
-    ctx = load_frames(data_dir, Path(args.db) if args.db else None, first, last)
+    ctx = load_frames(data_dir, Path(args.db) if args.db and lake is None else None, first, last, lake=lake)
     fc = feature_context(ctx)
     legs = leg_specs(static, targets, rider_legs(args.legs))
     k_set = tuple(sorted(set(K_SET) | {lg["k"] for lg in legs}))
@@ -324,7 +339,8 @@ def main(argv=None) -> int:
         manifest = json.loads(cache.with_suffix(".manifest.json").read_text()) if cache.with_suffix(".manifest.json").exists() else []
         log.info("rows from cache: %d", len(rows))
     else:
-        rows, manifest = build_rows_for_days(days, lambda d: day_arrivals(data_dir, ctx["_store"], d)[0], static, fc, ctx["eta_samples"], k_set, args.sample, args.seed)
+        loader = (lambda d: lake.arrivals(d)) if lake is not None else (lambda d: day_arrivals(data_dir, ctx["_store"], d)[0])
+        rows, manifest = build_rows_for_days(days, loader, static, fc, ctx["eta_samples"], k_set, args.sample, args.seed)
         if cache:
             rows.to_pickle(cache)
             cache.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=1))
@@ -358,7 +374,8 @@ def main(argv=None) -> int:
     model.card["legs"] = evaluate_legs(model, test_rows, legs, carry)
     # collector rows for the held-out days: the data the live server actually has
     coll_days = [d for d in days if d >= test_from]
-    crow, cman = build_rows_for_days(coll_days, lambda d: collector_arrivals(data_dir, ctx["_store"], d), static, fc, ctx["eta_samples"], k_set, 1.0, args.seed, min_arrivals=3000)
+    coll_loader = (lambda d: lake.arrivals(d, prefer_archive=False)) if lake is not None else (lambda d: collector_arrivals(data_dir, ctx["_store"], d))
+    crow, cman = build_rows_for_days(coll_days, coll_loader, static, fc, ctx["eta_samples"], k_set, 1.0, args.seed, min_arrivals=3000)
     if len(crow):
         model.card["evaluation_collector"] = evaluate(model, crow, carry)
         model.card["evaluation_collector"]["days"] = cman
