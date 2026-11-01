@@ -3,6 +3,9 @@
     python -m pipeline.train_model --data-dir data-branch --db data/mta.sqlite --out data/models --test-from 2026-09-28
     python -m pipeline.train_model --lake data/lake --out data/models_lake --test-from 2026-10-20      # from the local lake
 
+The per-day row build runs one worker process per day (``--jobs``, default one per day up to the CPU count and the
+memory; ``--jobs 1`` builds in this process); the rows are the same either way.
+
 Steps: assemble each day's arrivals (the subwaydata archive when it has the day, otherwise our collector),
 build the training rows day by day with the shared context (hourly weather, alerts, events, NWS, climatology),
 cache them, run the feature-group ablation (p50 only), fit the final three-quantile model on everything,
@@ -12,8 +15,10 @@ check the configured commutes' legs (destination arrival), and write ``experimen
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
+import os
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -150,45 +155,165 @@ def collector_arrivals(data_dir: Path, store: Store | None, day: date) -> pd.Dat
     return df
 
 
-def build_rows_for_days(days: list[date], loader, static: StaticGTFS, fc: FeatureContext, eta_samples, k_set, sample: float, seed: int = 1,
-                        min_arrivals: int = 5000) -> tuple[pd.DataFrame, list[dict]]:
-    """Rows for each day, built with two hours of context either side so the stream features see the neighbours."""
-    frames, manifest = [], []
-    cache: dict[date, pd.DataFrame] = {}
+class LakeArrivals:
+    """A day's arrivals from the lake. Picklable, so each worker process of the row build opens its own ``Lake``."""
 
-    def get(d: date) -> pd.DataFrame:
-        if d not in cache:
-            cache[d] = loader(d)
-        return cache[d]
-    for d in days:
-        t0 = time.time()
-        cur = get(d)
-        if cur is None or len(cur) < min_arrivals:
-            manifest.append({"day": d.isoformat(), "arrivals": 0 if cur is None else int(len(cur)), "rows": 0, "skipped": True})
-            continue
-        lo, hi = _day_bounds(d)
-        prev = get(d - timedelta(days=1)); nxt = get(d + timedelta(days=1))
-        parts = [cur]
-        if prev is not None and len(prev):
-            parts.insert(0, prev[prev["arrival_ts"] >= lo - 7200])
-        if nxt is not None and len(nxt):
-            parts.append(nxt[nxt["arrival_ts"] < hi + 7200])
-        arr = pd.concat(parts, ignore_index=True).drop_duplicates(["trip_key", "stop_id"], keep="first")
-        rows = build_training_rows(arr, static, eta_samples=eta_samples, k_set=k_set, ctx=fc)
-        rows = rows[(rows["t"] >= lo) & (rows["t"] < hi)]
-        n_full = len(rows)
-        if sample < 1.0 and len(rows):
-            h = pd.util.hash_pandas_object(rows["trip_key"], index=False).values % 10_000
-            rows = rows[h < int(sample * 10_000)]
-        for c in FLOAT_COLS:
-            rows[c] = rows[c].astype(np.float32)
-        rows["day"] = d.isoformat()
-        frames.append(rows.reset_index(drop=True))
-        manifest.append({"day": d.isoformat(), "arrivals": int(len(cur)), "rows_full": int(n_full), "rows": int(len(rows)), "seconds": round(time.time() - t0, 1),
-                         "source": str(cur["source"].iloc[0]) if "source" in cur and len(cur) else None})
-        log.info("rows %s: %d arrivals -> %d rows (kept %d) in %.0fs", d, len(cur), n_full, len(rows), time.time() - t0)
-        for k in [x for x in cache if x < d - timedelta(days=1)]:
-            cache.pop(k, None)
+    def __init__(self, root: str | Path, prefer_archive: bool = True):
+        self.root, self.prefer_archive, self._lake = str(root), prefer_archive, None
+
+    def __getstate__(self) -> dict:
+        return {"root": self.root, "prefer_archive": self.prefer_archive}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__init__(**state)
+
+    def __call__(self, d: date) -> pd.DataFrame:
+        if self._lake is None:
+            from mta_delay_insights.lake import Lake
+            self._lake = Lake(self.root)
+        return self._lake.arrivals(d, prefer_archive=self.prefer_archive)
+
+
+class BranchArrivals:
+    """A day's arrivals from the data branch and the store (``day_arrivals``). Picklable: an open store stays in the
+    process that opened it, and a worker opens the database for itself (read-only where ``Store`` offers it)."""
+
+    def __init__(self, data_dir: str | Path, db: str | Path | None, prefer_archive: bool = True, store: Store | None = None):
+        self.data_dir, self.db, self.prefer_archive, self._store = Path(data_dir), (str(db) if db else None), prefer_archive, store
+
+    def __getstate__(self) -> dict:
+        return {"data_dir": str(self.data_dir), "db": self.db, "prefer_archive": self.prefer_archive}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__init__(**state)
+
+    def __call__(self, d: date) -> pd.DataFrame:
+        if self._store is None and self.db and Path(self.db).exists():
+            ro = "read_only" in inspect.signature(Store).parameters
+            self._store = Store(self.db, read_only=True) if ro else Store(self.db)
+        return day_arrivals(self.data_dir, self._store, d, prefer_archive=self.prefer_archive)[0]
+
+
+def rows_for_day(d: date, get, static: StaticGTFS, fc: FeatureContext, eta_samples, k_set, sample: float,
+                 min_arrivals: int = 5000) -> tuple[pd.DataFrame | None, dict]:
+    """One day's rows, built with two hours of context either side so the stream features see the neighbours.
+    ``get`` loads a day's arrivals. Returns the rows (None when the day is skipped) and the day's manifest entry.
+    The sample keeps whole trips by a hash of the trip key, so a day samples the same in any process and order."""
+    t0 = time.time()
+    cur = get(d)
+    if cur is None or len(cur) < min_arrivals:
+        return None, {"day": d.isoformat(), "arrivals": 0 if cur is None else int(len(cur)), "rows": 0, "skipped": True}
+    lo, hi = _day_bounds(d)
+    prev = get(d - timedelta(days=1)); nxt = get(d + timedelta(days=1))
+    parts = [cur]
+    if prev is not None and len(prev):
+        parts.insert(0, prev[prev["arrival_ts"] >= lo - 7200])
+    if nxt is not None and len(nxt):
+        parts.append(nxt[nxt["arrival_ts"] < hi + 7200])
+    arr = pd.concat(parts, ignore_index=True).drop_duplicates(["trip_key", "stop_id"], keep="first")
+    rows = build_training_rows(arr, static, eta_samples=eta_samples, k_set=k_set, ctx=fc)
+    rows = rows[(rows["t"] >= lo) & (rows["t"] < hi)]
+    n_full = len(rows)
+    if sample < 1.0 and len(rows):
+        h = pd.util.hash_pandas_object(rows["trip_key"], index=False).values % 10_000
+        rows = rows[h < int(sample * 10_000)]
+    for c in FLOAT_COLS:
+        rows[c] = rows[c].astype(np.float32)
+    rows["day"] = d.isoformat()
+    return rows.reset_index(drop=True), {"day": d.isoformat(), "arrivals": int(len(cur)), "rows_full": int(n_full), "rows": int(len(rows)),
+                                         "seconds": round(time.time() - t0, 1),
+                                         "source": str(cur["source"].iloc[0]) if "source" in cur and len(cur) else None}
+
+
+def _log_day(entry: dict) -> None:
+    log.info("rows %s: %d arrivals -> %d rows (kept %d) in %.0fs", entry["day"], entry["arrivals"], entry["rows_full"], entry["rows"], entry["seconds"])
+
+
+# memory budgeted per worker: one building an archive day (2.1 M rows before the sample) peaked at 2.9 GB resident
+# on 2026-10-31; the rest leaves room for longer k sets and the parent's growing pile of kept rows
+WORKER_GB = 6.0
+
+
+def default_jobs(n_days: int) -> int:
+    """Worker processes for the row build: one per day, up to the CPU count and what the memory holds."""
+    try:
+        mem_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except (ValueError, OSError, AttributeError):
+        mem_gb = 0.0
+    by_mem = max(1, int(mem_gb // WORKER_GB)) if mem_gb else n_days
+    return max(1, min(os.cpu_count() or 1, n_days, by_mem))
+
+
+_WORKER: dict = {}
+
+
+def _worker_init(loader, static: StaticGTFS, fc: FeatureContext, eta_samples, k_set) -> None:
+    """Runs once in each worker process: the shared static GTFS and context tables arrive pickled, once per worker."""
+    _WORKER.update(loader=loader, static=static, fc=fc, eta_samples=eta_samples, k_set=k_set)
+
+
+def _worker_day(d: date, sample: float, min_arrivals: int) -> tuple[pd.DataFrame | None, dict]:
+    w, loaded = _WORKER, {}
+
+    def get(x: date) -> pd.DataFrame:
+        if x not in loaded:
+            loaded[x] = w["loader"](x)
+        return loaded[x]
+    return rows_for_day(d, get, w["static"], w["fc"], w["eta_samples"], w["k_set"], sample, min_arrivals)
+
+
+def _rows_by_day_parallel(days: list[date], loader, static: StaticGTFS, fc: FeatureContext, eta_samples, k_set, sample: float,
+                          min_arrivals: int, jobs: int) -> list[tuple[pd.DataFrame | None, dict]]:
+    """Each day in its own worker process (spawned, so the loader and the shared tables go over by pickle and each
+    worker opens its own lake or store). Results come back per day and land in day order."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    results: list = [None] * len(days)
+    ex = ProcessPoolExecutor(max_workers=jobs, mp_context=multiprocessing.get_context("spawn"), initializer=_worker_init,
+                             initargs=(loader, static, fc, eta_samples, tuple(k_set)))
+    try:
+        pending = {ex.submit(_worker_day, d, sample, min_arrivals): i for i, d in enumerate(days)}
+        for fut in as_completed(pending):
+            i = pending.pop(fut)
+            results[i] = fut.result()
+            if results[i][0] is not None:
+                _log_day(results[i][1])
+    except BaseException:
+        ex.shutdown(wait=False, cancel_futures=True)
+        raise
+    ex.shutdown(wait=True)
+    return results
+
+
+def build_rows_for_days(days: list[date], loader, static: StaticGTFS, fc: FeatureContext, eta_samples, k_set, sample: float, seed: int = 1,
+                        min_arrivals: int = 5000, jobs: int = 1) -> tuple[pd.DataFrame, list[dict]]:
+    """Rows for each day (``rows_for_day``) concatenated in day order, with the per-day manifest. ``jobs`` > 1 builds
+    the days in that many worker processes and needs a picklable loader (``LakeArrivals``, ``BranchArrivals``); the
+    rows are the same as the serial build's, only the manifest's seconds differ."""
+    jobs = max(1, min(int(jobs or 1), len(days)))
+    if jobs > 1:
+        log.info("row build: %d days in %d worker processes", len(days), jobs)
+        results = _rows_by_day_parallel(days, loader, static, fc, eta_samples, k_set, sample, min_arrivals, jobs)
+        frames = [f for f, _ in results if f is not None]
+        manifest = [m for _, m in results]
+        del results
+    else:
+        frames, manifest = [], []
+        cache: dict[date, pd.DataFrame] = {}
+
+        def get(d: date) -> pd.DataFrame:
+            if d not in cache:
+                cache[d] = loader(d)
+            return cache[d]
+        for d in days:
+            frame, entry = rows_for_day(d, get, static, fc, eta_samples, k_set, sample, min_arrivals)
+            manifest.append(entry)
+            if frame is None:
+                continue
+            frames.append(frame)
+            _log_day(entry)
+            for k in [x for x in cache if x < d - timedelta(days=1)]:
+                cache.pop(k, None)
     out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["trip_key"] + FEATURES)
     return out, manifest
 
@@ -304,6 +429,8 @@ def main(argv=None) -> int:
     ap.add_argument("--skip-ablation", action="store_true")
     ap.add_argument("--skip-final", action="store_true")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--jobs", type=int, default=None,
+                    help="worker processes for the per-day row build (default: one per day, up to the CPU count and the memory); 1 builds in this process")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     data_dir = Path(args.data_dir); out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
@@ -333,14 +460,20 @@ def main(argv=None) -> int:
     legs = leg_specs(static, targets, rider_legs(args.legs))
     k_set = tuple(sorted(set(K_SET) | {lg["k"] for lg in legs}))
     log.info("k set %s (legs: %s)", k_set, [(lg["from_name"], lg["to_name"], lg["k"]) for lg in legs])
+    jobs = args.jobs if args.jobs else default_jobs(len(days))
+    db = Path(args.db) if args.db and lake is None else None
+    if lake is not None:
+        loader, coll_loader = LakeArrivals(lake.root), LakeArrivals(lake.root, prefer_archive=False)
+    else:
+        loader = BranchArrivals(data_dir, db, store=ctx["_store"])
+        coll_loader = BranchArrivals(data_dir, db, prefer_archive=False, store=ctx["_store"])
     cache = Path(args.cache) if args.cache else None
     if cache and cache.exists():
         rows = pd.read_pickle(cache)
         manifest = json.loads(cache.with_suffix(".manifest.json").read_text()) if cache.with_suffix(".manifest.json").exists() else []
         log.info("rows from cache: %d", len(rows))
     else:
-        loader = (lambda d: lake.arrivals(d)) if lake is not None else (lambda d: day_arrivals(data_dir, ctx["_store"], d)[0])
-        rows, manifest = build_rows_for_days(days, loader, static, fc, ctx["eta_samples"], k_set, args.sample, args.seed)
+        rows, manifest = build_rows_for_days(days, loader, static, fc, ctx["eta_samples"], k_set, args.sample, args.seed, jobs=jobs)
         if cache:
             rows.to_pickle(cache)
             cache.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=1))
@@ -374,8 +507,7 @@ def main(argv=None) -> int:
     model.card["legs"] = evaluate_legs(model, test_rows, legs, carry)
     # collector rows for the held-out days: the data the live server actually has
     coll_days = [d for d in days if d >= test_from]
-    coll_loader = (lambda d: lake.arrivals(d, prefer_archive=False)) if lake is not None else (lambda d: collector_arrivals(data_dir, ctx["_store"], d))
-    crow, cman = build_rows_for_days(coll_days, coll_loader, static, fc, ctx["eta_samples"], k_set, 1.0, args.seed, min_arrivals=3000)
+    crow, cman = build_rows_for_days(coll_days, coll_loader, static, fc, ctx["eta_samples"], k_set, 1.0, args.seed, min_arrivals=3000, jobs=jobs)
     if len(crow):
         model.card["evaluation_collector"] = evaluate(model, crow, carry)
         model.card["evaluation_collector"]["days"] = cman

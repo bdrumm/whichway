@@ -50,8 +50,8 @@ lake-sql: ## A DuckDB query over the lake (Q='select source, count(*) from arriv
 lake-nightly: ## Install a launchd agent that runs `make lake` every night at 03:20 (remove with scripts/lake_agent.sh remove)
 	scripts/lake_agent.sh install
 
-model-lake: gtfs ## Train the arrival model from the lake (months of history) into data/models_lake; END=YYYY-MM-DD TEST_FROM=YYYY-MM-DD narrow it
-	$(PYTHON) -m pipeline.train_model --lake data/lake --out data/models_lake --cache data/models_lake/rows.pkl $(if $(START),--start $(START)) $(if $(END),--end $(END)) $(if $(TEST_FROM),--test-from $(TEST_FROM)) --skip-ablation --max-iter 1500 --max-leaf-nodes 255 --min-samples-leaf 200
+model-lake: gtfs ## Train the arrival model from the lake (months of history) into data/models_lake; END=YYYY-MM-DD TEST_FROM=YYYY-MM-DD narrow it, JOBS=N sets the row build's worker processes
+	$(PYTHON) -m pipeline.train_model --lake data/lake --out data/models_lake --cache data/models_lake/rows.pkl $(if $(START),--start $(START)) $(if $(END),--end $(END)) $(if $(TEST_FROM),--test-from $(TEST_FROM)) $(if $(JOBS),--jobs $(JOBS)) --skip-ablation --max-iter 1500 --max-leaf-nodes 255 --min-samples-leaf 200
 
 bundle: gtfs ## Build the model bundle the site and the app take from this Mac (data/bundle): the client engine's tables from the lake, the delay model, the arrival model's card
 	$(PYTHON) -m pipeline.bundle build --lake data/lake --out data/bundle
