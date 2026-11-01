@@ -85,6 +85,8 @@ def private_findings(bundle: Path) -> list[str]:
                 out.append(f"{p.name}: text at {path}")
         walk(obj, "")
     for p in bundle.iterdir():
+        if p.name.startswith("."):      # git's own files: the Action checks the models branch out as a worktree, which leaves a .git file
+            continue
         if p.is_file() and p.suffix not in (".json", ".md"):
             out.append(f"{p.name}: not a JSON table")
     return out
