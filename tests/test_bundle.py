@@ -54,6 +54,7 @@ def test_install_copies_a_fresh_bundle_and_skips_a_stale_one(static, tmp_path, m
     out, m, _ = _build(static, tmp_path, monkeypatch)
     site = tmp_path / "site" / "data"; site.mkdir(parents=True)
     (site / "client_model.json").write_text("{}")
+    (out / ".git").write_text("gitdir: /somewhere/.git/worktrees/models-branch\n")     # what `git worktree add` leaves in the Action's checkout
     rep = bd.install(out, site, max_age_days=30, now=m["built_ts"] + 86400)
     assert rep["installed"] and (site / "models" / "arrival.card.json").exists() and (site / "model_manifest.json").exists()
     assert json.loads((site / "client_model.json").read_text())["fitted_on"]["source"] == "lake"
