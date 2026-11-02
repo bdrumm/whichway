@@ -132,10 +132,24 @@ fair comparison between two runs.
 (scikit-learn histogram boosting, 255 leaves, 1 500 rounds) took 35 min on 6 M rows, so a year wants one of:
 a lower per-day sample for the span and the full sample for the last months; LightGBM (a wheel exists for this
 Python; it needs Homebrew's `libomp`) which is several times faster on this many cores and converts to Core ML;
-building the stream features in DuckDB instead of pandas, or at least one process per day (the row build is
-single-threaded pandas and took 108 s an archive day in the first lake run: 230 k arrivals become 2.1 M rows, so 60
-days are 1.8 h before the fit starts, cached in `rows.pkl` at 80 MB a day). PyTorch's MPS backend is there for
-sequence models over a line's state if trees plateau.
+building the stream features in DuckDB instead of pandas. PyTorch's MPS backend is there for sequence models over a
+line's state if trees plateau.
+
+**The row build runs one process per day.** Each archive day is single-threaded pandas (230 k arrivals become 2.1 M
+rows before the 30 % sample), so `train_model.py` builds the days in worker processes: `--jobs N` (`JOBS=N` for
+`make model-lake`), by default one per day up to the CPU count and 6 GB of memory a worker (10 workers for 10 days
+on this Mac, 11 for 60); `--jobs 1` is the old serial loop. The rows are the same either way: the days land in day
+order and the sample keeps whole trips by a hash of the trip key, so `rows.pkl` comes out byte for byte the same.
+Measured on 2026-10-31 over 2026-10-20..29 with `make model-lake`'s flags:
+
+| row build, 10 archive days | wall time | per day | peak memory |
+|---|---|---|---|
+| serial (`--jobs 1`) | 13 min 15 s | 67–90 s | 6.0 GB, one process |
+| 10 workers (default) | 2 min 16 s | 91–116 s | 2.9 GB a worker, 4.0 GB the parent |
+
+`rows.pkl` is 2.2 GB for the ten days (about 220 MB a day at the 30 % sample), and the parent holds every day's
+kept rows until the cache is written. Sixty days should take about 11 minutes instead of 80 (estimated from this
+run, not measured).
 
 The first run through the lake path, three days (2026-10-27..29, the last held out) at 50 rounds and a 10 % sample,
 ended at an MAE of 78.7 s against the schedule's 88.1 s with the p10–p90 range covering 80 %, and 78.1 s on that
