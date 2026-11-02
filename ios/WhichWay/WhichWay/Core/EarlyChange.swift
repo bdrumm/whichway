@@ -51,8 +51,8 @@ func earlyChangeOffer(_ changes: [EarlyChange], train c: BoardingCandidate, now:
 }
 
 /// When the rider stepped off at `ch`, as the ride's record has it: the train's arrival there by the feed, put back to
-/// the platform, plus the step to the doors; failing a time for that stop, now.
+/// its doors opening, plus the step across; failing a time for that stop, now.
 func earlyChangeAlightTs(_ ch: EarlyChange, train c: BoardingCandidate?, now: Double) -> Double {
     guard let c = c, let feedTs = c.stopTs[ch.stopIdx] else { return now }
-    return min(now, PlatformTiming.atPlatform(feedTs, route: c.route) + TransferTiming.stepAcrossSec)
+    return min(now, PlatformTiming.doorsOpen(feedTs, route: c.route) + TransferTiming.stepAcrossSec)
 }

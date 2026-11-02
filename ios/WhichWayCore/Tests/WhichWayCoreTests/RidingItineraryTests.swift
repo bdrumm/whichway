@@ -45,18 +45,18 @@ final class RidingItineraryTests: XCTestCase {
         let gone = ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1100)
         XCTAssertNotNil(gone, "followed from what the log kept")
         XCTAssertEqual(gone?.legs.first?.key, "G_N")
-        XCTAssertEqual(gone?.legs.first?.arriveTs ?? 0, 1690 - lagG, accuracy: 0.5)
+        XCTAssertEqual(gone?.legs.first?.arriveTs ?? 0, 1690 - lagG + PlatformTiming.doorsOpenSec, accuracy: 0.5)
         // felt leaving at 1500, long after the feed's 1000: the ride runs on from then, the scheduled 240 s at least
         let late = ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1600, departedTs: 1500)
         XCTAssertEqual(late?.legs.first?.boardTs, 1500)
         XCTAssertEqual(late?.legs.first?.arriveTs ?? 0, 1740, accuracy: 0.5)
         // a pull-away within a minute of the feed's time changes nothing
         let onTime = ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: boardedG, now: 1100, departedTs: 1000 - lagG + 30)
-        XCTAssertEqual(onTime?.legs.first?.arriveTs ?? 0, 1690 - lagG, accuracy: 0.5)
+        XCTAssertEqual(onTime?.legs.first?.arriveTs ?? 0, 1690 - lagG + PlatformTiming.doorsOpenSec, accuracy: 0.5)
         // with nothing kept at the alighting stop, the scheduled run from the platform moment
         var bare = boardedG; bare.stopTs = [:]; bare.alightTs = nil
         XCTAssertEqual(ridingItinerary(boards: [:], schedule: sched, option: p, leg: 0, boarded: bare, now: 1100)?.legs.first?.arriveTs ?? 0,
-                       1000 + 240 - lagG, accuracy: 0.5)
+                       1000 + 240 - lagG + PlatformTiming.doorsOpenSec, accuracy: 0.5)
     }
 
     func testAcrossThePlatformTheConnectionIsTimedFromTheEarlyEndOfTheArrival() {
@@ -167,10 +167,10 @@ final class RidingItineraryTests: XCTestCase {
                                            train("c3", key: "C_N", points: [(1, gAt + 120 + lagC + 280), (3, 2400)])])]
         let it = try XCTUnwrap(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 0, boarded: boardedG, now: 1500))
         XCTAssertEqual(it.legs.count, 2)
-        XCTAssertEqual(it.boardTs, 1000 - lagG)
-        XCTAssertEqual(it.legs[0].arriveTs, gAt)                // the feed's latest for Hoyt, not the log's older 1690
+        XCTAssertEqual(it.boardTs, 1000 - lagG + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(it.legs[0].arriveTs, gAt + PlatformTiming.doorsOpenSec)                // the feed's latest for Hoyt, not the log's older 1690
         XCTAssertEqual(it.legs[1].train.tripId, "c2")
-        XCTAssertEqual(it.arriveTs, 2200 - lagC)
+        XCTAssertEqual(it.arriveTs, 2200 - lagC + PlatformTiming.doorsOpenSec)
         XCTAssertEqual(it.walkSec, 120)
         XCTAssertEqual(it.connectionMarginSec, 80)
         XCTAssertEqual(it.nextIfMissedSec, 200)
@@ -184,13 +184,13 @@ final class RidingItineraryTests: XCTestCase {
         // connection is the schedule's: the walk from now, half a headway, the scheduled ride
         let it = try XCTUnwrap(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 0, boarded: boardedG, now: 1750))
         XCTAssertEqual(it.legs.count, 1)
-        XCTAssertEqual(it.legs[0].arriveTs, 1690 - lagG)
-        XCTAssertEqual(it.arriveTs, max(1690 - lagG + 120, 1750) + 300 + 300)
+        XCTAssertEqual(it.legs[0].arriveTs, 1690 - lagG + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(it.arriveTs, max(1690 - lagG + PlatformTiming.doorsOpenSec + 120, 1750) + 300 + 300)
         XCTAssertNil(it.connectionMarginSec)
         // the G gone from the feed: the same ride, from the times the log kept
         boards["G_N"] = board("G_N", [])
         let kept = try XCTUnwrap(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 0, boarded: boardedG, now: 1750))
-        XCTAssertEqual(kept.legs[0].arriveTs, 1690 - lagG)
+        XCTAssertEqual(kept.legs[0].arriveTs, 1690 - lagG + PlatformTiming.doorsOpenSec)
         XCTAssertEqual(kept.arriveTs, it.arriveTs)
     }
 
@@ -201,9 +201,9 @@ final class RidingItineraryTests: XCTestCase {
                                   boardIdx: 1, alightIdx: 3, stopTs: [2: 2050, 3: 2200])
         let it = try XCTUnwrap(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 1, boarded: c, now: 2000))
         XCTAssertEqual(it.legs.count, 1)
-        XCTAssertEqual(it.boardTs, 1900 - lagC)
-        XCTAssertEqual(it.arriveTs, 2210 - lagC)
-        XCTAssertEqual(it.totalSec, 210 - lagC)
+        XCTAssertEqual(it.boardTs, 1900 - lagC + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(it.arriveTs, 2210 - lagC + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(it.totalSec, 210 - lagC + PlatformTiming.doorsOpenSec)
         XCTAssertEqual(it.rideVsSchedSec, 310 - 660)
     }
 
@@ -228,7 +228,7 @@ final class RidingItineraryTests: XCTestCase {
         // the ride it describes: the G's own arrival at Hoyt and the C it makes there
         let ride = try XCTUnwrap(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 0, boarded: pc, now: 1100))
         XCTAssertEqual(ride.legs.count, 2)
-        XCTAssertEqual(ride.legs[0].arriveTs, 1690, accuracy: 1e-6)
+        XCTAssertEqual(ride.legs[0].arriveTs, 1690 + PlatformTiming.doorsOpenSec, accuracy: 1e-6)
         XCTAssertEqual(ride.legs[1].train.id, "C_N|c1")
         XCTAssertEqual(ride.nextIfMissedSec!, 300, accuracy: 1e-6)
         // an itinerary carrying only the leg in hand names its train at index 0
@@ -237,8 +237,8 @@ final class RidingItineraryTests: XCTestCase {
         let conn = try XCTUnwrap(connectionItinerary(boards: boards, schedule: sched, option: option, leg: 1, now: 1750))
         XCTAssertEqual(conn.legs.count, 1)
         XCTAssertEqual(conn.legs[0].train.id, "C_N|c1")
-        XCTAssertEqual(conn.boardTs, 1900, accuracy: 1e-6)
-        XCTAssertEqual(conn.arriveTs, 2500, accuracy: 1e-6)
+        XCTAssertEqual(conn.boardTs, 1900 + PlatformTiming.doorsOpenSec, accuracy: 1e-6)
+        XCTAssertEqual(conn.arriveTs, 2500 + PlatformTiming.doorsOpenSec, accuracy: 1e-6)
         XCTAssertEqual(conn.nextIfMissedSec!, 300, accuracy: 1e-6)
         // once the first C has pulled away the next one is the connection
         XCTAssertEqual(connectionItinerary(boards: boards, schedule: sched, option: option, leg: 1, now: 1900 + PlatformTiming.dwellSec + 1)?.legs[0].train.id, "C_N|c2")

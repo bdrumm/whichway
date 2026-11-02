@@ -63,6 +63,7 @@ struct DevNotePreset: Equatable, Identifiable {
         DevNotePreset(id: "stayedOn", label: "Thinks I stayed on", symbol: "arrow.forward.circle"),
         DevNotePreset(id: "endedEarly", label: "Trip ended too soon", symbol: "stop.circle"),             // Oct 27: ended a minute before 7 Av
         DevNotePreset(id: "etaWrong", label: "Arrival time wrong", symbol: "clock"),
+        DevNotePreset(id: "doorsOpened", label: "Doors opened now", symbol: "door.sliding.left.hand.open"),  // Nov 2: zero read as the train came in; times PlatformTiming.doorsOpenSec
         DevNotePreset(id: "activityStale", label: "Live Activity stale", symbol: "lock.rectangle"),
     ]
     static let byId: [String: DevNotePreset] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })

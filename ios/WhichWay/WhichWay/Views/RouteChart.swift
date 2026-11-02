@@ -79,17 +79,17 @@ struct RouteChart: View {
             if let id = leg.trainId, let t = board.trains.first(where: { $0.id == id }), let p = pred.train(t.tripId) {
                 chosen = (t, p)
             } else {
-                // compared at the platform: each line's feed time runs late by its own amount (PlatformTiming)
+                // compared at the doors opening: each line's feed time runs late by its own amount (PlatformTiming)
                 let candidates = board.trains.compactMap { t -> (LiveTrain, PredictedTrain, Double)? in
                     guard t.nextIdx <= boardIdx, let p = pred.train(t.tripId), let b = p.point(at: boardIdx) else { return nil }
-                    let at = PlatformTiming.atPlatform(b.etaTs, route: t.route)
+                    let at = PlatformTiming.doorsOpen(b.etaTs, route: t.route)
                     return at >= earliest + leg.walkSec ? (t, p, at) : nil
                 }
                 if let c = candidates.min(by: { $0.2 < $1.2 }) { chosen = (c.0, c.1) }
             }
             if let c = chosen {
                 out[s.leg] = c
-                if let a = c.1.point(at: alightIdx) { earliest = PlatformTiming.atPlatform(a.etaTs, route: c.0.route) }
+                if let a = c.1.point(at: alightIdx) { earliest = PlatformTiming.doorsOpen(a.etaTs, route: c.0.route) }
             }
         }
         return out
@@ -100,7 +100,7 @@ struct RouteChart: View {
         let (rows, sections) = layout()
         guard let last = sections.last, let y = yourTrains(sections, now: now)[last.leg], let a = y.1.point(at: rows[last.alightRow].idx) else { return nil }
         let feed = (y.0.feedPoints ?? y.0.points).first { $0.idx == a.idx }?.ts
-        let at = { (ts: Double) in PlatformTiming.atPlatform(ts, route: y.0.route) }      // the moment at the platform, as on the Go tab
+        let at = { (ts: Double) in PlatformTiming.doorsOpen(ts, route: y.0.route) }      // the doors opening, as on the Go tab
         return (at(a.etaTs), at(a.loTs), at(a.hiTs), feed.map(at), rows[last.alightRow].name)
     }
 

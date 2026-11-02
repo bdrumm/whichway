@@ -58,7 +58,8 @@ DWELL_SEC = 40.0
 # The app's one-tap notes (Core/DevNotes.swift DevNotePreset carries the same table).
 DEV_NOTE_PRESETS = {"missedChange": "Missed my change", "wrongTrain": "Wrong train picked", "departureMissed": "Didn't see the train leave",
                     "boardingLate": "Boarding caught late", "stayedOn": "Thinks I stayed on", "endedEarly": "Trip ended too soon",
-                    "etaWrong": "Arrival time wrong", "activityStale": "Live Activity stale"}
+                    "etaWrong": "Arrival time wrong", "doorsOpened": "Doors opened now",
+                    "activityStale": "Live Activity stale"}
 
 
 def at_platform(ts: float, route: str | None) -> float:

@@ -55,7 +55,7 @@ struct PredictionChart: View {
         let idx = max(s.from, s.to)
         guard let a = p.point(at: idx) else { return nil }
         let feed = (t.feedPoints ?? t.points).first { $0.idx == idx }?.ts
-        let at = { (ts: Double) in PlatformTiming.atPlatform(ts, route: t.route) }      // the moment at the platform, as on the Go tab
+        let at = { (ts: Double) in PlatformTiming.doorsOpen(ts, route: t.route) }      // the doors opening, as on the Go tab
         return (at(a.etaTs), at(a.loTs), at(a.hiTs), feed.map(at), idx < line.names.count ? line.names[idx] : line.stops[idx])
     }
 
