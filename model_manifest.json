@@ -1,30 +1,30 @@
 {
- "version": "20261031-1354",
- "built_at": "2026-10-31T13:54:02.261407-04:00",
- "built_ts": 1793469242.261407,
+ "version": "20261102-0147",
+ "built_at": "2026-11-02T01:47:45.135112-05:00",
+ "built_ts": 1793602065.135112,
  "lake": {
   "span": {
-   "first": "2026-08-29",
-   "last": "2026-10-31",
-   "days": 64
+   "first": "2026-05-01",
+   "last": "2026-11-01",
+   "days": 185
   },
-  "archive_days": 63
+  "archive_days": 184
  },
  "models": {
   "client_model": {
-   "generated_at": "2026-10-31T13:54:02.261407-04:00",
-   "eta_samples": 4830319,
+   "generated_at": "2026-11-02T01:47:45.135112-05:00",
+   "eta_samples": 5004931,
    "routes_calibrated": 21,
-   "holds": 538031,
-   "carry_pairs": 12580132,
-   "routes_carry": 29,
+   "holds": 557537,
+   "carry_pairs": 48629,
+   "routes_carry": 17,
    "fitted_on": {
-    "first_day": "2026-09-17",
-    "last_day": "2026-10-31",
-    "arrivals": 9672328,
-    "carry_arrivals": 1495929,
-    "eta_samples": 4846653,
-    "holds": 644180,
+    "first_day": "2026-09-18",
+    "last_day": "2026-11-01",
+    "arrivals": 9682871,
+    "carry_arrivals": 1497967,
+    "eta_samples": 5021785,
+    "holds": 667405,
     "source": "lake"
    }
   },
@@ -34,21 +34,21 @@
   },
   "arrival_model": {
    "status": "ok",
-   "trained_at": 1791514604.582691,
+   "trained_at": 1793600465.896576,
    "n_train": 6000000,
-   "mae_model": 70.0852572914714,
-   "mae_schedule": 84.29411735891671,
-   "coverage_p10_p90": 0.8000001093358612
+   "mae_model": 72.77363605192053,
+   "mae_schedule": 94.89880930060598,
+   "coverage_p10_p90": 0.7999999486943876
   }
  },
  "files": {
   "arrival.card.json": {
-   "sha256": "25e13879dd2f89782546c0a4fe8011f7d50ed6beec7b78d157d37b0d89aa6692",
-   "bytes": 35287
+   "sha256": "ae944030c9555480dce3cad68912be7d0073912b88f2064ec3b47d39309d4641",
+   "bytes": 56519
   },
   "client_model.json": {
-   "sha256": "95aeb9b06f22f60e763f9aa7ea97c024445e8c433d8d7e08f57baa5db508e112",
-   "bytes": 88316
+   "sha256": "dc37ac80768fd19a84377c3ef89051c20082b5d854845db480caa8c89f7234ed",
+   "bytes": 26014
   },
   "delay_model.json": {
    "sha256": "e693574790796a18ee29b1f1c3ff06200b21873181380afcec198eb44560b414",
