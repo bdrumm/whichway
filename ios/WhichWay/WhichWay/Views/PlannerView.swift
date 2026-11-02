@@ -95,7 +95,9 @@ struct PlannerView: View {
     /// The planner's further options for this trip beyond the listed ones, timed once a trip, weighed with them.
     @State private var rerouteMore: [PathOption]? = nil
 
-    var body: some View {
+    // The body in three parts, each type-checked on its own: as one chain of modifiers it ran past the compiler's
+    // time limit on the CI runner's Xcode ("unable to type-check this expression in reasonable time").
+    private var navigation: some View {
         NavigationStack {
             Group {
                 if let sched = data.schedule, let index = data.index {
@@ -129,6 +131,10 @@ struct PlannerView: View {
                 }
             }
         }
+    }
+
+    private var withInputs: some View {
+        navigation
         .onAppear {
             if loc.authorized { loc.startTracking() }
             if !routeStarted { TripActivityService.shared.endAll() }
@@ -172,6 +178,10 @@ struct PlannerView: View {
             default: break
             }
         }
+    }
+
+    var body: some View {
+        withInputs
         .onChange(of: trip.beliefs) { _, _ in followBoarded() }
         // off one train and onto the next: the card and the Live Activity follow at once, not at the next poll
         .onChange(of: trip.currentLeg) { _, _ in followRide() }
