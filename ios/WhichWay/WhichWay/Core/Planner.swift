@@ -40,13 +40,15 @@ struct Itinerary: Identifiable {
     var schedRideSec: Double
     var rideVsSchedSec: Double
     /// The connection is a train already standing across the platform when the rider gets there; the margin is then
-    /// the time left before its doors close (TransferTiming.standingCatchSec after it pulled in).
+    /// the time left before its doors close (TransferTiming.standingCatchSec after they opened).
     var catchesStanding = false
 }
 
-/// The connection at a change for a rider ready to board at `ready`: the first train of the next leg that pulls in
+/// The connection at a change for a rider ready to board at `ready`: the first train of the next leg whose doors open
 /// after then, or, across the platform, one already standing there with its doors still open. The margin is what is
-/// left to spare: until the train pulls in, or until a standing one's doors close.
+/// left to spare: until the doors open, or until a standing one's doors close. `ready` counts from the doors of the
+/// train in hand opening (its `arriveTs`), so the doors-open shift at both ends leaves the choice and the margin as
+/// they were when both ends were the feed's entry.
 func connection(_ seconds: [TripCandidate], ready: Double, transfer: PathTransfer) -> (train: TripCandidate, marginSec: Double, standing: Bool)? {
     let from = transfer.acrossPlatform ? ready - TransferTiming.standingCatchSec : ready
     guard let b = seconds.first(where: { $0.boardTs >= from }) else { return nil }
@@ -55,17 +57,18 @@ func connection(_ seconds: [TripCandidate], ready: Double, transfer: PathTransfe
 }
 
 /// Trains of a line board that carry a rider from fromIdx to toIdx (feed ETAs at both stops). The times are the
-/// moments at the platform (PlatformTiming): the train pulling in to board, and pulling in at the far end, not
-/// the feed's later time for the stop that the engine is calibrated on.
+/// moments the doors open (PlatformTiming.doorsOpen): to board, and to get off at the far end, not the feed's entry
+/// into the station (Nov 2: the countdown read zero with the train just coming in) nor its later time for the stop
+/// that the engine is calibrated on.
 func segmentTrips(_ lb: LineBoard, line: LineTopology, fromIdx: Int, toIdx: Int, now: Double, maxN: Int = 6) -> [TripCandidate] {
     let sched = line.runBetween(fromIdx, toIdx).map(Double.init)
     var out: [TripCandidate] = []
     for t in lb.trains {
         guard let boardF = t.points.first(where: { $0.idx == fromIdx })?.ts, let arriveF = t.points.first(where: { $0.idx == toIdx })?.ts else { continue }
-        let at = { (ts: Double) in PlatformTiming.atPlatform(ts, route: t.route) }
+        let at = { (ts: Double) in PlatformTiming.doorsOpen(ts, route: t.route) }
         let board = at(boardF), arrive = at(arriveF)
-        // a train that has pulled away is gone: the countdown reaching zero (the train pulling in) keeps it for the dwell
-        if board + PlatformTiming.dwellSec < now || arrive <= board { continue }
+        // a train that has pulled away is gone: the countdown reaching zero (the doors opening) keeps it until it pulls away
+        if PlatformTiming.pullsAway(boardF, route: t.route) < now || arrive <= board { continue }
         var c = TripCandidate(train: t, key: lb.key, boardTs: board, arriveTs: arrive, rideSec: arrive - board, schedRideSec: sched, stopsToOrigin: max(1, fromIdx - t.nextIdx + 1))
         if let pt = t.pred?.point(at: toIdx) { c.arriveLoTs = at(pt.loTs); c.arriveHiTs = at(pt.hiTs); c.arriveSource = pt.source }
         c.feedArriveTs = t.feedPoints?.first(where: { $0.idx == toIdx }).map { at($0.ts) }
@@ -86,12 +89,13 @@ func legTrips(boards: [String: LineBoard], schedule: ClientSchedule, leg: PathLe
     return Array(out.prefix(maxN))
 }
 
-/// A rider reaching the platform this long after the train pulled in still makes it: the doors are open.
-let reachDoorsSec = 20.0
+/// A rider reaching the platform this long after the doors opened still makes it: they stand open about
+/// `dwellSec - doorsOpenSec` (20 s), and the last part of that is the chime.
+let reachDoorsSec = 10.0
 
 /// Live itineraries for a path option, earliest arrival first. `reachTs`: the moment the rider can be on the first
 /// platform, at their own pace from where the phone is; a first train that has pulled in and gone by then cannot be
-/// made and is skipped (one pulling in up to `reachDoorsSec` before is still caught), so the route offers the next
+/// made and is skipped (one whose doors opened up to `reachDoorsSec` before is still caught), so the route offers the next
 /// realistic one. Nil: the rider is at the station, or where they are is not known.
 func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: PathOption, now: Double, maxN: Int = 5, reachTs: Double? = nil) -> [Itinerary] {
     let sched = Double(option.schedSec)
@@ -147,11 +151,11 @@ func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, opti
     guard option.legs.indices.contains(leg), let ix = option.legs[leg].idx[c.key] else { return nil }
     let run = schedule.lines[c.key]?.runBetween(ix.from, ix.to).map(Double.init)
     let t = boards[c.key]?.trains.first(where: { $0.id == c.trainId }) ?? keptTrain(c)
-    let at = { (ts: Double) in PlatformTiming.atPlatform(ts, route: t.route) }
+    let at = { (ts: Double) in PlatformTiming.doorsOpen(ts, route: t.route) }
     guard let arriveF = t.points.first(where: { $0.idx == ix.to })?.ts ?? c.stopTs[ix.to] ?? c.alightTs ?? run.map({ c.boardTs + $0 }) else { return nil }
     var board = at(c.boardTs)
     var arriveTs = max(at(arriveF), board + 1)
-    if let dep = departedTs, dep > board + 60 {
+    if let dep = departedTs, dep > board - PlatformTiming.doorsOpenSec + 60 {
         arriveTs = max(arriveTs, dep + (run ?? arriveTs - board))
         board = dep
     }
@@ -206,8 +210,8 @@ func rideStopsLeft(_ c: TripCandidate, option p: PathOption, leg: Int) -> (left:
 }
 
 /// The train the planner's itinerary boards on leg `leg` of `option`, as a boarding candidate the departure log
-/// could have made for it: the feed's time at the boarding stop (the itinerary's platform moment plus the line's
-/// lag), the leg's stops and the train's times at them. The ride the plan has the rider on, when the sensors have
+/// could have made for it: the feed's time at the boarding stop (the itinerary's doors-open moment put back to the
+/// feed's, PlatformTiming.feedTs), the leg's stops and the train's times at them. The ride the plan has the rider on, when the sensors have
 /// not named a train (or the rider has not), so the card and the Live Activity follow it from the boarding time
 /// on instead of the planner's next train. `it` is the planner's full itinerary, or one carrying only this leg.
 func plannedCandidate(_ it: Itinerary, option: PathOption, leg: Int) -> BoardingCandidate? {
@@ -215,10 +219,10 @@ func plannedCandidate(_ it: Itinerary, option: PathOption, leg: Int) -> Boarding
     guard it.legs.indices.contains(i), option.legs.indices.contains(leg) else { return nil }
     let tc = it.legs[i]
     guard let ix = option.legs[leg].idx[tc.key] else { return nil }
-    let lag = PlatformTiming.recordedLag(route: tc.train.route)
+    let feed = { (ts: Double) in PlatformTiming.feedTs(doorsOpen: ts, route: tc.train.route) }
     var stopTs: [Int: Double] = [:]
     for p in tc.train.feedPoints ?? tc.train.points where p.idx > ix.from { stopTs[p.idx] = p.ts }
-    return BoardingCandidate(trainId: tc.train.id, key: tc.key, route: tc.train.route, boardTs: tc.boardTs + lag, alightTs: tc.arriveTs + lag,
+    return BoardingCandidate(trainId: tc.train.id, key: tc.key, route: tc.train.route, boardTs: feed(tc.boardTs), alightTs: feed(tc.arriveTs),
                              stopsToAlight: ix.to - ix.from, chosen: true, onLeg: true, boardIdx: ix.from, alightIdx: ix.to, stopTs: stopTs,
                              progressIdx: tc.train.nextIdx)
 }

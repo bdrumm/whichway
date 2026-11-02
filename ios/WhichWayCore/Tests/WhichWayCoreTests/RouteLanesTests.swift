@@ -82,10 +82,10 @@ final class RouteLanesTests: XCTestCase {
         let s = l.current.segments
         XCTAssertEqual(s.map(\.kind), [.wait, .ride(route: "G", estimated: false), .change(acrossPlatform: false), .wait, .ride(route: "C", estimated: false)])
         XCTAssertEqual(s[0].startTs, 1000, "the clock starts now")
-        XCTAssertEqual(s[1].startTs, 1100)
-        XCTAssertEqual(s[2].startTs, 1340)
-        XCTAssertEqual(s[2].endTs, 1460, "the change takes the planned walk")
-        XCTAssertEqual(s[4].endTs, 1900)
+        XCTAssertEqual(s[1].startTs, 1100 + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(s[2].startTs, 1340 + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(s[2].endTs, 1460 + PlatformTiming.doorsOpenSec, "the change takes the planned walk")
+        XCTAssertEqual(s[4].endTs, 1900 + PlatformTiming.doorsOpenSec)
         XCTAssertEqual(l.current.routes, ["G", "C"])
         XCTAssertEqual(l.current.changeAt, "Hoyt")
         XCTAssertGreaterThanOrEqual(l.endTs, 1900)
@@ -100,7 +100,7 @@ final class RouteLanesTests: XCTestCase {
         XCTAssertTrue(start.contains { $0.parting == .nextTrain && $0.optionId == "G>C" }, "the same route on the next G")
         XCTAssertFalse(start.contains { $0.optionId == "C" }, "the C from another station is not a way on from this platform")
         let hoyt = l.groups[1]
-        XCTAssertEqual(hoyt.ts, 1340, "the choice falls when the G gets to Hoyt")
+        XCTAssertEqual(hoyt.ts, 1340 + PlatformTiming.doorsOpenSec, "the choice falls when the G gets to Hoyt")
         XCTAssertEqual(hoyt.lanes.map(\.optionId), ["G>E", "G"], "earliest arrival first")
         XCTAssertEqual(hoyt.lanes[0].parting, .otherConnection(station: "Hoyt"))
         XCTAssertEqual(hoyt.lanes[0].deltaSec, -50, "the E gets in 50 s sooner")
@@ -130,7 +130,7 @@ final class RouteLanesTests: XCTestCase {
         let l = try lanes(change("C"), [change("C"), direct, change("E")], at: .onTrain(leg: 1, boarded: boardedC), now: 1700)
         XCTAssertTrue(l.groups.isEmpty)
         XCTAssertEqual(l.current.segments.map(\.kind), [.ride(route: "C", estimated: false)])
-        XCTAssertEqual(l.current.arriveTs, 1900)
+        XCTAssertEqual(l.current.arriveTs, 1900 + PlatformTiming.doorsOpenSec)
     }
 
     func testGettingOffSoonerAndTheSameTrainsAreNotTwoWays() throws {

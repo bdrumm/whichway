@@ -59,9 +59,9 @@ final class EarlyChangeTests: XCTestCase {
         XCTAssertEqual(earlyChangeOffer(early, train: f, now: atJay + 600)?.change.stationName, "Jay St-MetroTech")
         XCTAssertNil(earlyChangeOffer(early, train: f, now: atJay + 601), "well past Jay St")
         XCTAssertNil(earlyChangeOffer(early, train: theF(jayFeedTs: nil), now: atJay), "no time for Jay St: nothing to offer")
-        // stepped off as the F pulled in, plus the step to the doors; never after the tap
+        // stepped off as the F's doors opened, plus the step across; never after the tap
         let jay = try XCTUnwrap(early.first)
-        XCTAssertEqual(earlyChangeAlightTs(jay, train: f, now: atJay + 300), atJay + TransferTiming.stepAcrossSec)
+        XCTAssertEqual(earlyChangeAlightTs(jay, train: f, now: atJay + 300), atJay + PlatformTiming.doorsOpenSec + TransferTiming.stepAcrossSec)
         XCTAssertEqual(earlyChangeAlightTs(jay, train: f, now: atJay + 5), atJay + 5)
         XCTAssertEqual(earlyChangeAlightTs(jay, train: nil, now: 3000), 3000)
     }
