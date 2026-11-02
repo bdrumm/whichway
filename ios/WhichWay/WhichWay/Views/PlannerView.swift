@@ -76,6 +76,11 @@ struct PlannerView: View {
     @State private var preferredKeys: [Int: String] = [:]
     /// The earlier Go tab: the title, the pickers, the full card, the route list and the five views on one page.
     @AppStorage("classicGo") private var classicGo = false
+    /// The home's other ways as lanes on one clock, grouped where they leave the route (`RouteLanesView`); off, the
+    /// arrival, the change and three other ways as numbers.
+    @AppStorage("laneHome") private var laneHome = true
+    /// The home lanes' other ways, each with its itinerary from where the rider is (`updateLaneAlternatives`).
+    @State private var laneAlts: [(PathOption, Itinerary)] = []
     /// The paged Go tab's page: home, the line view, the routes.
     @State private var page = 0
     /// The five detail views, the itineraries and the departure board, as a sheet from the line view.
@@ -90,7 +95,9 @@ struct PlannerView: View {
     /// The planner's further options for this trip beyond the listed ones, timed once a trip, weighed with them.
     @State private var rerouteMore: [PathOption]? = nil
 
-    var body: some View {
+    // The body in three parts, each type-checked on its own: as one chain of modifiers it ran past the compiler's
+    // time limit on the CI runner's Xcode ("unable to type-check this expression in reasonable time").
+    private var navigation: some View {
         NavigationStack {
             Group {
                 if let sched = data.schedule, let index = data.index {
@@ -124,6 +131,10 @@ struct PlannerView: View {
                 }
             }
         }
+    }
+
+    private var withInputs: some View {
+        navigation
         .onAppear {
             if loc.authorized { loc.startTracking() }
             if !routeStarted { TripActivityService.shared.endAll() }
@@ -167,6 +178,10 @@ struct PlannerView: View {
             default: break
             }
         }
+    }
+
+    var body: some View {
+        withInputs
         .onChange(of: trip.beliefs) { _, _ in followBoarded() }
         // off one train and onto the next: the card and the Live Activity follow at once, not at the next poll
         .onChange(of: trip.currentLeg) { _, _ in followRide() }
@@ -260,14 +275,16 @@ struct PlannerView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         let now = data.now
                         let it = ride ?? p.live
-                        HomeCard(option: p, itinerary: it, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: now,
+                        let next = nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data)
+                        HomeCard(option: p, itinerary: it, next: next, now: now,
                                  originName: originName, destName: destName, phase: trip.phase, onTrain: trip.onTrain, rideLeg: trip.currentLeg,
                                  ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                                  walk: walkToOrigin.map { walkLineText($0, originId: originId, placeName: here?.name, placeUsualSec: placeUsualSec, boardTs: it?.boardTs, now: now) },
                                  alternatives: Array(others.prefix(3)), moreCount: max(0, others.count - 3),
                                  onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } },
                                  confidence: routeConfidence(p, itinerary: it, outlook: outlook, data: data),
-                                 tripControls: AnyView(tripBar(originName: originName.isEmpty ? "the station" : originName)))
+                                 tripControls: AnyView(tripBar(originName: originName.isEmpty ? "the station" : originName)),
+                                 lanes: homeLanes(p, itinerary: it, next: next, now: now, originName: originName))
                     }
                     .padding(.top, 10)
                 } else if !originId.isEmpty && !destId.isEmpty {
@@ -739,6 +756,7 @@ struct PlannerView: View {
         shownBoardTs = headline?.live?.boardTs
         outlook = holdOutlook(sched)
         if outlook == nil, data.scenario != "baseline" { data.setScenario("baseline") }
+        defer { updateLaneAlternatives(sched, now: now) }
         updateFocus()
         armBoardingTimer()
         if routeStarted {
@@ -1483,7 +1501,13 @@ struct PlannerView: View {
     /// still to board follow it (the train in hand is kept), and the trip, the card and the Live Activity follow it.
     private func takeReroute() {
         guard let o = reroute else { return }
-        let alt = o.faster.option
+        takeRoute(o.faster.option)
+    }
+
+    /// The trip goes on by `alt` from here: it joins the list if it was one of the planner's further options, the
+    /// trains still to board follow it (the train in hand is kept), and the trip, the card and the Live Activity
+    /// follow it. The faster-route banner's Switch and a lane tapped on the home both come here.
+    private func takeRoute(_ alt: PathOption) {
         if !paths.contains(where: { $0.id == alt.id }) {
             extraPaths.append(alt); paths.append(alt)
             data.setWanted(Set(paths.flatMap { $0.legs.flatMap { $0.keys } }), for: "planner")
@@ -1496,6 +1520,61 @@ struct PlannerView: View {
         withAnimation(.easeInOut(duration: 0.3)) { reroute = nil }
         switchRoute(to: alt)
         refreshLive()
+    }
+
+    // MARK: - the home's lanes
+
+    /// The other ways for the home's lanes, each timed from where the rider is: before the route starts, every listed
+    /// way on its next train from the first platform; on the way, the ways that go on from where the rider is
+    /// (`continuesFrom`), on the trains in the feeds (`itineraryFromHere`), so a station behind them drops out.
+    private func updateLaneAlternatives(_ sched: ClientSchedule, now: Double) {
+        guard laneHome, !classicGo, let sel = headline, let index = data.index else { laneAlts = []; return }
+        guard routeStarted else {
+            laneAlts = paths.compactMap { p in p.id == sel.id ? nil : p.live.map { (p, $0) } }
+            return
+        }
+        guard let pos = riderPosition else { laneAlts = []; return }
+        let station: (String) -> String = { index.stationOf($0) }
+        let listed = Set(paths.map(\.id))
+        let ways = (paths + (rerouteMore ?? []).filter { !listed.contains($0.id) })
+            .filter { $0.id != sel.id && continuesFrom($0, current: sel, at: pos, station: station) }
+        // the same few the faster-route check has the feeds of
+        let watched = ways.sorted { $0.expectedSec < $1.expectedSec }.prefix(6)
+        laneAlts = watched.compactMap { p in
+            itineraryFromHere(boards: data.predictedBoards, schedule: sched, option: p, at: pos, current: sel, now: now).map { (p, $0) }
+        }
+    }
+
+    /// The home's lanes for the route in hand on `it`; nil with the lanes off or no train to draw.
+    private func homeLanes(_ p: PathOption, itinerary it: Itinerary?, next: Itinerary?, now: Double, originName: String) -> AnyView? {
+        guard laneHome, let it, let index = data.index else { return nil }
+        let pos = routeStarted ? riderPosition : nil
+        let lanes = routeLanes(current: p, currentIt: it, nextIt: routeStarted ? nil : next, alternatives: laneAlts,
+                               at: pos, now: now, station: { index.stationOf($0) })
+        // the hold dragging on, while the times assume it ends as usual: how much later the route in hand would be in
+        let tail = data.scenario == "baseline" ? outlook?.dragsOn.flatMap { $0 > it.arriveTs + 30 ? $0 : nil } : nil
+        return AnyView(RouteLanesView(lanes: lanes, now: now, originName: originName, routeStarted: routeStarted, holdTailTs: tail, hold: outlook,
+                                      note: laneNote(p, it), onPick: pickLane, onLineView: { withAnimation { page = 1 } }))
+    }
+
+    /// Under the route in hand: the arrival's likely window and the model's word on it.
+    private func laneNote(_ p: PathOption, _ it: Itinerary) -> String? {
+        var bits: [String] = []
+        if let lo = it.legs.last?.arriveLoTs, let hi = it.legs.last?.arriveHiTs { bits.append("likely \(Fmt.hhmm(lo)) to \(Fmt.hhmm(hi))") }
+        let c: RouteConfidence? = routeConfidence(p, itinerary: it, outlook: outlook, data: data)
+        if let c { bits.append(c.label.lowercased()) }
+        return bits.isEmpty ? nil : bits.joined(separator: " · ")
+    }
+
+    /// A lane tapped: before the route starts, its route is selected; on the way, the trip goes on by it from here,
+    /// as the faster-route banner's Switch does (staying on past the change, or another line at it, said in one tap).
+    private func pickLane(_ id: String) {
+        guard id != headline?.id, let alt = paths.first(where: { $0.id == id }) ?? laneAlts.first(where: { $0.0.id == id })?.0 else { return }
+        if routeStarted {
+            takeRoute(alt)
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) { selectedPath = id }
+        }
     }
 
     /// The rider keeps their route: this faster one stays away unless it gets two minutes better still.
