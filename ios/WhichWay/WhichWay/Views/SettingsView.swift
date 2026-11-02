@@ -11,6 +11,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 CommutesSection()
+                OutlookSection()
                 PlacesSection()
                 PaceSection()
                 SharingSection()
