@@ -1,0 +1,125 @@
+name: pipeline
+# Runs in the PUBLIC repository bdrumm/bdrumm.github.io (the source of truth for this file is
+# deploy/public-site/ in the private bdrumm/whichway; copy it over when it changes).
+#
+# Collects MTA realtime arrivals for the configured targets, pulls Open Data context, runs the
+# station analyses and publishes the review site, the Atlas map and the app's data to GitHub Pages
+# at https://bdrumm.github.io/whichway/ (the URL the app and the map have always used).
+#
+# Why here: bdrumm/whichway is private. A private repository's Pages site needs a paid plan, and
+# this hourly ~55-minute job would use far more Actions minutes than a private repository gets.
+# Public repositories run standard runners for free, so the job runs here and reads the private
+# source with a deploy key (secret WHICHWAY_DEPLOY_KEY, write access: it also pushes the `data`
+# branch there and reads the `models` branch).
+on:
+  schedule:
+    - cron: "7 * * * *"          # hourly; each run collects for ~50 minutes
+  workflow_dispatch:
+    inputs:
+      collect_minutes:
+        description: "Minutes to poll the realtime feeds (0 to skip collection)"
+        default: "50"
+      refresh_context:
+        description: "Pull Open Data / weather context"
+        type: boolean
+        default: true
+      source_ref:
+        description: "Branch of bdrumm/whichway to build from"
+        default: "claude/train-delay-analysis-framework-auxzv1"
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_REPO: bdrumm/whichway
+  SITE_SUBDIR: whichway          # served at https://<owner>.github.io/whichway/
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Check out the private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ github.event.inputs.source_ref || 'claude/train-delay-analysis-framework-auxzv1' }}
+          ssh-key: ${{ secrets.WHICHWAY_DEPLOY_KEY }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e .
+      - name: Check out data branch (in the private source)
+        run: pipeline/data_branch.sh checkout
+      - name: Check out published site (models for live snapshots)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          url="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$url" gh-pages >/dev/null 2>&1; then
+            git clone -q --depth 1 --branch gh-pages "$url" pages-repo
+          else
+            mkdir -p pages-repo
+          fi
+          mkdir -p "pages-repo/${SITE_SUBDIR}"
+          # live_publish.sh and collect --models-dir read gh-pages-branch/: the site's own folder in the clone
+          ln -s "pages-repo/${SITE_SUBDIR}" gh-pages-branch
+      - name: Static GTFS
+        run: |
+          mkdir -p data
+          curl -sSL --retry 3 -o data/gtfs_subway.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip
+      - name: Collect realtime arrivals
+        env:
+          MINUTES: ${{ github.event.inputs.collect_minutes || '50' }}
+        run: |
+          if [ "$MINUTES" != "0" ]; then python -m pipeline.collect --minutes "$MINUTES" --live-every 360 --live-publish pipeline/live_publish.sh; else echo "collection skipped"; fi
+      - name: Backfill network history (subwaydata.nyc)
+        run: python -m pipeline.backfill --days 21 --max-fetch 6 || echo "backfill failed (non-fatal)"
+      - name: Pull Open Data and weather context
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.refresh_context == 'true' }}
+        run: python -m pipeline.context
+      - name: Commit data branch
+        run: pipeline/data_branch.sh commit
+      - name: Build site
+        run: python -m pipeline.build_site --out _site
+      - name: Install the model bundle trained on the Mac (models branch), when fresh
+        run: |
+          if git ls-remote --exit-code --heads origin models >/dev/null 2>&1; then
+            git fetch origin models --depth 1 && git worktree add models-branch origin/models
+            python -m pipeline.bundle install --bundle models-branch --site _site/data --max-age-days 30
+          else
+            echo "no models branch yet: the build's own tables are published"
+          fi
+      - name: Commit training export
+        run: pipeline/data_branch.sh commit
+      - name: Lay out the Pages tree
+        run: |
+          mkdir -p "_pages/${SITE_SUBDIR}"
+          cp -a _site/. "_pages/${SITE_SUBDIR}/"
+          # the user site's root has nothing of its own: send it to the app's site
+          printf '<!doctype html><meta charset="utf-8"><title>Whichway</title><meta http-equiv="refresh" content="0; url=%s/"><a href="%s/">Whichway</a>\n' "$SITE_SUBDIR" "$SITE_SUBDIR" > _pages/index.html
+      - name: Publish to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_pages
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: mta-insights-bot
+          user_email: mta-insights-bot@users.noreply.github.com
+      - name: Verify published site
+        continue-on-error: true
+        env:
+          URL: https://${{ github.repository_owner }}.github.io/${{ env.SITE_SUBDIR }}/
+        run: |
+          sleep 60
+          root=$(curl -sSL -o /dev/null -w "%{http_code}" "${URL}" || echo "000")
+          data=$(curl -sS -o /dev/null -w "%{http_code}" "${URL}data/index.json" || echo "000")
+          map=$(curl -sS -o /dev/null -w "%{http_code}" "${URL}map/" || echo "000")
+          echo "published site ${URL} -> root HTTP ${root}, data/index.json HTTP ${data}, map/ HTTP ${map}"
+          [ "$data" = "200" ] || echo "::warning::${URL}data/index.json is not served (HTTP ${data}). Check Settings > Pages: Deploy from a branch, gh-pages, / (root)."

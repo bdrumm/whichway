@@ -22,9 +22,8 @@ export async function resolveDataBase() {
     try { const r = await fetch(cand + "index.json", { cache: "no-cache", method: "HEAD" }); if (r.ok) return { base: cand, source: "same-origin" }; } catch {}
   }
   // GitHub Pages serving the source branch, or a local static server over the repository: the published data branch
-  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
-  const repo = m ? location.pathname.split("/").filter(Boolean)[0] : null;
-  return { base: `https://raw.githubusercontent.com/${m ? m[1] : "bdrumm"}/${repo || "whichway"}/gh-pages/data/`, source: "gh-pages" };
+  // (the source repository is private: the published site is the public user site's gh-pages branch, under whichway/)
+  return { base: "https://raw.githubusercontent.com/bdrumm/bdrumm.github.io/gh-pages/whichway/data/", source: "gh-pages" };
 }
 
 export function makeLoader(base) {

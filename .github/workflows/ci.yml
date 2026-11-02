@@ -1,13 +1,16 @@
 name: tests
+# The repository is private: Actions minutes are metered, so pushes to feature branches are covered by
+# their pull request and the suite runs on one Python (3.11, the pipeline's).
 on:
   push:
+    branches: [claude/train-delay-analysis-framework-auxzv1, main]
   pull_request:
 jobs:
   pytest:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

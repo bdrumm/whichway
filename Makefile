@@ -81,7 +81,7 @@ trips-nightly: ## Install a launchd agent that runs `make trips` every night at 
 	scripts/trips_agent.sh install
 
 map-dev: ## The Atlas live map (site/map/) against the published data on http://localhost:$(PORT)/map/
-	git fetch -q origin gh-pages && rm -rf site/data && git archive origin/gh-pages data | tar -x -C site
+	git fetch -q https://github.com/bdrumm/bdrumm.github.io gh-pages && rm -rf site/data && git archive FETCH_HEAD whichway/data | tar -x --strip-components=1 -C site
 	cd site && python3 -m http.server $(PORT)
 
 serve: gtfs ## Serve $(SITE) on http://localhost:$(PORT); live.json and the timetable extract refresh from the feeds
@@ -120,5 +120,5 @@ delay-model: ## Refit the delay-alert lifecycle model from this Mac's store: dat
 
 ios-seed: ## Refresh the tables built into the app (its last resort when the data site is unreachable) from gh-pages
 	@for f in client_schedule.json client_lines.json client_model.json holds.json segments.json client_geometry.json delay_model.json; do \
-	  curl -sfL -o ios/WhichWay/WhichWay/Resources/Seed/$$f https://raw.githubusercontent.com/bdrumm/whichway/gh-pages/data/$$f && echo "  $$f"; done
+	  curl -sfL -o ios/WhichWay/WhichWay/Resources/Seed/$$f https://raw.githubusercontent.com/bdrumm/bdrumm.github.io/gh-pages/whichway/data/$$f && echo "  $$f"; done
 	@du -sh ios/WhichWay/WhichWay/Resources/Seed
