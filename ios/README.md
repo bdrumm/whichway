@@ -39,7 +39,9 @@ every train, and layers the published data from this repository's site on top.
   with each train's feed and engine ETA, lateness against the timetable (`~` marks a nearest-trip match),
   position and time there, holds, overdue trains, feed-optimistic ETAs, track changes and the last measured
   segment speed.
-- **Settings**. Commutes (add, edit, reorder, delete), base URL of the published data (defaults to the GitHub
+- **Settings**. Commutes (add, edit, reorder, delete), the commute outlook (off until turned on: the trips expected
+  today and tomorrow from the saved commutes and the trips ridden, and a local notification a set time before the usual
+  leaving time with the usual way and how long it usually takes at that hour), base URL of the published data (defaults to the GitHub
   Pages site), poll interval, data status.
 
 ## The prediction engine
@@ -67,6 +69,7 @@ ios/WhichWay/
     Core/Planner.swift         trip candidates, itineraries with connections, headways, expected time
     Core/Predictor.swift       the prediction engine (port of client_model.py)
     Core/Presets.swift         commute presets (time windows, nearest-origin) and their store
+    Core/Outlook.swift         commute outlook: expected trips today and tomorrow, and the notification ahead of each
     Core/Format.swift          time and number formatting (New York local time)
     Services/DataService.swift loads the published data, polls the feeds the visible screens need, runs the engine
     Services/LocationService.swift one-shot location for the nearest station (when-in-use permission)

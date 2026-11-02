@@ -14,4 +14,5 @@ data-branch/
 ios/WhichWay/Config/Local.xcconfig
 .local/
 ios/WhichWay/build/
+models-branch/
 ios/WhichWay/build-phone/

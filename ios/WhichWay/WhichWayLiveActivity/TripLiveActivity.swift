@@ -40,9 +40,15 @@ struct TripLiveActivity: Widget {
                             Text(aheadText(context.state, destName: context.attributes.destName)).font(.subheadline.weight(.semibold)).lineLimit(1)
                             Spacer()
                             ExtraBadge(state: context.state)
+                            MarkMomentButton(marked: context.state.notesMarked ?? 0)
                         }
                         Text(subline(context.state)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                        if context.state.riding { NotOnTrainButton() }
+                        if context.state.riding {
+                            HStack(spacing: 6) {
+                                if let here = context.state.changeHere { ChangedHereButton(text: here) }
+                                NotOnTrainButton()
+                            }
+                        }
                     }
                     .padding(.horizontal, 6)
                 }
@@ -97,6 +103,33 @@ struct NotOnTrainButton: View {
             Label("Not on the train", systemImage: "xmark.circle").font(.caption.weight(.semibold))
         }
         .buttonStyle(.bordered).tint(.white)
+    }
+}
+
+/// On the train, at a station short of the route's change: the rider says they changed there (`ChangedTrainIntent`).
+struct ChangedHereButton: View {
+    let text: String
+
+    var body: some View {
+        Button(intent: ChangedTrainIntent()) {
+            Label("Changed to the \(text)", systemImage: "arrow.left.arrow.right").font(.caption.weight(.semibold)).lineLimit(1)
+        }
+        .buttonStyle(.borderedProminent).tint(.green)
+    }
+}
+
+/// Marks this moment for a note on how the app behaved (`MarkMomentIntent`); the words follow in the app. Small, beside
+/// the arrival, so it fits before and on the train alike.
+struct MarkMomentButton: View {
+    let marked: Int
+
+    var body: some View {
+        Button(intent: MarkMomentIntent()) {
+            Label(marked > 0 ? "\(marked)" : "Note", systemImage: marked > 0 ? "flag.fill" : "square.and.pencil")
+                .font(.caption2.weight(.semibold)).labelStyle(.titleAndIcon).lineLimit(1)
+        }
+        .buttonStyle(.bordered).tint(.white)
+        .accessibilityLabel(marked > 0 ? "Marked \(marked) for a note; mark this moment too" : "Mark this moment for a note")
     }
 }
 
@@ -158,9 +191,15 @@ struct LockScreenView: View {
                     Text("ETA \(Fmt.hhmm(state.arriveTs))").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 }
                 ExtraBadge(state: state)
+                MarkMomentButton(marked: state.notesMarked ?? 0)
             }
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            if state.riding { NotOnTrainButton() }
+            if state.riding {
+                HStack(spacing: 8) {
+                    if let here = state.changeHere { ChangedHereButton(text: here) }
+                    NotOnTrainButton()
+                }
+            }
         }
         .padding(14)
     }

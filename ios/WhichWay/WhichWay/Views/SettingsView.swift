@@ -5,20 +5,23 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(DataService.self) private var data
     @AppStorage("classicGo") private var classicGo = false
+    @AppStorage("laneHome") private var laneHome = true
 
     var body: some View {
         NavigationStack {
             Form {
                 CommutesSection()
+                OutlookSection()
                 PlacesSection()
                 PaceSection()
                 SharingSection()
                 Section {
                     Toggle("Classic layout", isOn: $classicGo)
+                    Toggle("Every way on one clock", isOn: $laneHome).disabled(classicGo)
                 } header: {
                     Text("Go tab")
                 } footer: {
-                    Text("Off: the countdown and the numbers, with the line view one swipe to the right and the other routes two. On: the earlier page with the full card, the route list and the five views together.")
+                    Text("Off: the countdown and the numbers, with the line view one swipe to the right and the other routes two. On: the earlier page with the full card, the route list and the five views together. Every way on one clock: under the countdown, your route and the other ways drawn to the clock, grouped by the station where each leaves yours; off, the arrival, the change and three other ways as numbers.")
                 }
                 Section {
                     NavigationLink("Developer") { DeveloperSettingsView() }
@@ -48,8 +51,8 @@ struct SettingsView: View {
 struct SharingSection: View {
     private var tele: Telemetry { Telemetry.shared }
     private var reports: ReportQueue { ReportQueue.shared }
-    @AppStorage(ReportQueue.enabledKey) private var reportsOn = true
-    @AppStorage(ReportQueue.promptsKey) private var reportPromptsOn = true
+    @AppStorage(ReportQueue.enabledKey) private var reportsOn = false
+    @AppStorage(ReportQueue.promptsKey) private var reportPromptsOn = false
 
     var body: some View {
         Section("Improve the predictions") {

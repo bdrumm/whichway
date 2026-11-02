@@ -60,9 +60,9 @@ final class RerouteTests: XCTestCase {
                                           station: station, now: 1500))
         XCTAssertEqual(f.option.id, "G>C")
         XCTAssertEqual(f.itinerary.legs[0].train.tripId, "g1", "the train in hand is kept")
-        XCTAssertEqual(f.itinerary.arriveTs, 2050 - lagC)
-        XCTAssertEqual(f.currentArriveTs, 2700 - lagG)
-        XCTAssertEqual(f.actionTs, gHoyt - lagG, "the first step: off the G at Hoyt")
+        XCTAssertEqual(f.itinerary.arriveTs, 2050 - lagC + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(f.currentArriveTs, 2700 - lagG + PlatformTiming.doorsOpenSec)
+        XCTAssertEqual(f.actionTs, gHoyt - lagG + PlatformTiming.doorsOpenSec, "the first step: off the G at Hoyt")
 
         // the G is already past Hoyt: the change can no longer be made, nothing to offer
         let past = ["G_N": board("G_N", [train("g1", key: "G_N", points: [(3, 2700)])]), "C_N": boards["C_N"]!]
@@ -102,7 +102,7 @@ final class RerouteTests: XCTestCase {
         let later = try XCTUnwrap(fasterRoute(current: direct, options: [direct, change("C")], at: .toOrigin(reachTs: 1200), boards: boards, schedule: sched,
                                               station: station, now: 1000))
         XCTAssertEqual(later.itinerary.legs[0].train.tripId, "g2")
-        XCTAssertEqual(later.itinerary.arriveTs, 2100)
+        XCTAssertEqual(later.itinerary.arriveTs, 2100 + PlatformTiming.doorsOpenSec)
         XCTAssertEqual(later.savedSec, 300)
     }
 

@@ -45,12 +45,19 @@ struct TripObservation: Codable, Identifiable {
     var stopSpans: [FeltStop]? = nil      // ultra training mode: each station stop felt, for the training corpus
     var beliefLog: [BeliefNote]? = nil    // each change in the train the phone believed the rider was on
     var ultraTraining: Bool? = nil
+    /// The build the trip ran on ("202610221741"): the version is 1.0 on every TestFlight build (Oct 27: which build
+    /// a trip ran on could only be told from the fields its record had).
+    var appBuild: String? = nil
     /// Pull-aways felt that no train made, withdrawn (the platform shaking).
     var withdrawnDepartures: [Double]?
     /// When the rider said "not on the train" by hand.
     var notOnTrainTaps: [Double]? = nil
+    /// When the rider said they changed short of the route's change.
+    var changedEarlyTaps: [Double]? = nil
     /// Each faster route offered on the way, as the banner put it.
     var rerouteNotes: [RerouteNote]? = nil
+    /// The rider's notes on how the app behaved, each at its moment, with what the phone had in hand then.
+    var devNotes: [DevNote]? = nil
     var uploaded: Bool?
     /// Written to the private GitHub data repository.
     var uploadedGitHub: Bool?
@@ -189,6 +196,33 @@ final class Telemetry {
         }
     }
 
+    // MARK: - notes after the trip
+
+    /// How long after a trip ends a note still joins it.
+    static let noteAfterSec = 3 * 3600.0
+
+    /// The trip a note goes to when no route is in progress: the last one kept, ended within `noteAfterSec`.
+    func recentTrip(now: Double) -> TripObservation? {
+        guard optIn, current == nil, let o = observations.max(by: { $0.createdTs < $1.createdTs }),
+              now - (o.endedTs ?? o.createdTs) <= Telemetry.noteAfterSec else { return nil }
+        return o
+    }
+
+    /// A note, or the words for a mark, onto the trip just taken: the record is sent again with it (the data
+    /// repository, the relay and the local server all replace a trip by its id).
+    @discardableResult
+    func noteRecentTrip(now: Double, _ change: (inout [DevNote]) -> Bool) -> Bool {
+        guard let o = recentTrip(now: now), let i = observations.firstIndex(where: { $0.id == o.id }) else { return false }
+        var notes = observations[i].devNotes ?? []
+        guard change(&notes) else { return false }
+        observations[i].devNotes = notes.isEmpty ? nil : notes
+        observations[i].uploaded = nil
+        observations[i].uploadedGitHub = nil
+        save()
+        Task { await uploadToGitHub() }
+        return true
+    }
+
     /// The record with what the tracker has measured so far.
     private func merged(_ base: TripObservation, _ tl: TripTimeline) -> TripObservation {
         var o = base
@@ -213,7 +247,9 @@ final class Telemetry {
             }
             o.withdrawnDepartures = tl.withdrawnDepartures
             o.notOnTrainTaps = tl.notOnTrainTaps
+            o.changedEarlyTaps = tl.changedEarlyTaps
             o.rerouteNotes = tl.rerouteNotes
+            o.devNotes = tl.devNotes
             o.beliefLog = tl.beliefLog.isEmpty ? nil : tl.beliefLog
             if o.predictedBoardTs == nil { o.predictedBoardTs = tl.forecastBoardTs; o.predictedArriveTs = tl.forecastArriveTs }
         }

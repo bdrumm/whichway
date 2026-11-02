@@ -29,6 +29,8 @@ struct HomeCard: View {
     /// The route's own controls (starts by itself / On a train? / Start route; on the way, Train and End route),
     /// right under the journey bar.
     var tripControls: AnyView? = nil
+    /// Every way on one clock (`RouteLanesView`): in place of the arrival, the change and the other ways as numbers.
+    var lanes: AnyView? = nil
 
     private let countdownFont = Font.system(size: 112, weight: .heavy)
     private let rule = Color.primary.opacity(0.1)
@@ -47,8 +49,21 @@ struct HomeCard: View {
                     .foregroundStyle(w.tight ? Color.orange : Color.secondary)
                     .lineLimit(1).padding(.top, 6)
             }
-            JourneyBar(option: option).padding(.top, 14)
+            // the lanes draw the route to the clock themselves
+            if lanes == nil { JourneyBar(option: option).padding(.top, 14) }
             if let c = tripControls { c.padding(.top, 12) }
+            if let l = lanes {
+                Rectangle().fill(rule).frame(height: 1).padding(.vertical, 18)
+                l
+            } else {
+                numbers
+            }
+        }
+    }
+
+    /// The arrival, the change and the other ways as numbers (the home before the lanes).
+    @ViewBuilder private var numbers: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
             arrive
             if let c = confidence {

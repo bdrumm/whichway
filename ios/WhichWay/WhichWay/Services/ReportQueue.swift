@@ -7,11 +7,11 @@ import Foundation
 @Observable
 final class ReportQueue {
     static let shared = ReportQueue()
-    /// The Report button on the Go tab; on unless the rider switches it off.
+    /// The Report button on the Go tab; off until the rider switches it on in Settings (the relay that takes reports is not set up yet).
     static let enabledKey = "riderReports"
-    /// Asking for a report when the train is held or the wait runs long; on unless the rider switches it off.
+    /// Asking for a report when the train is held or the wait runs long; off until the rider switches it on in Settings.
     static let promptsKey = "riderReportPrompts"
-    static var enabled: Bool { UserDefaults.standard.object(forKey: enabledKey) == nil ? true : UserDefaults.standard.bool(forKey: enabledKey) }
+    static var enabled: Bool { UserDefaults.standard.object(forKey: enabledKey) == nil ? false : UserDefaults.standard.bool(forKey: enabledKey) }
 
     private(set) var pending: [RiderReport] = []
     /// The last few sent, newest first, with the stop's name, for Settings.

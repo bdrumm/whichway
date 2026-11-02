@@ -55,6 +55,11 @@ RECORDED_LAG = {"1": 30, "2": 30, "3": 30, "4": 30, "5": 30, "6": 30, "6X": 30, 
                 "J": 75, "Z": 75, "FS": 30, "H": 50, "SI": 30}
 DEFAULT_LAG = 60.0
 DWELL_SEC = 40.0
+# The app's one-tap notes (Core/DevNotes.swift DevNotePreset carries the same table).
+DEV_NOTE_PRESETS = {"missedChange": "Missed my change", "wrongTrain": "Wrong train picked", "departureMissed": "Didn't see the train leave",
+                    "boardingLate": "Boarding caught late", "stayedOn": "Thinks I stayed on", "endedEarly": "Trip ended too soon",
+                    "etaWrong": "Arrival time wrong", "doorsOpened": "Doors opened now",
+                    "activityStale": "Live Activity stale"}
 
 
 def at_platform(ts: float, route: str | None) -> float:
@@ -462,6 +467,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
         "accessSec": o.get("accessSec"), "walkSpeedMPerMin": o.get("walkSpeedMPerMin"), "startDistanceM": o.get("startDistanceM"),
         "nDeparts": len(departs), "nAlights": len(alights), "legs": [],
         "withdrawnDepartures": o.get("withdrawnDepartures") or [], "phantomRides": phantoms,
+        "appBuild": o.get("appBuild"), "changedEarlyTaps": o.get("changedEarlyTaps") or [],
         "origin": legs_in[0].get("from") if legs_in and isinstance(legs_in[0], dict) else None,
     }
     truth = next((n["lines"] for n in notes or [] if n.get("lines")), None)
@@ -561,6 +567,7 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
                 leg["stopsFeltErr"] = int(leg["stopsFelt"]) - int(k)
         r["legs"].append(leg)
     r["actualArriveTs"] = r["legs"][-1].get("arriveTs") if r["legs"] else None
+    r["devNotes"] = review_dev_notes(o, r, events, matcher, static)
     dur = (float(ended) - created) if ended and created else None
     # a route ended by hand or changed within minutes is a false start (a test tap, a change of plan): kept, not scored
     r["falseStart"] = bool(dur is not None and dur < 300 and o.get("endedBy") not in ENDED_AT_DESTINATION)
@@ -572,6 +579,9 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
     if ended and o.get("endedBy") in ENDED_AT_DESTINATION and o.get("expectedSec") is not None and created:
         r["measuredSec"] = float(ended) - created
         r["doorToDoorErrSec"] = r["measuredSec"] - float(o["expectedSec"])
+    # a route that got to the destination on fewer rides than it had legs: the phone missed a change (Oct 22 and 27: the A
+    # taken across the platform at Jay St, the F "ridden" to W 4 St on the record and the trip ended at 14 St)
+    r["missedChange"] = bool(r["ranItsCourse"] and o.get("endedBy") in ENDED_AT_DESTINATION and len(legs_in) > 1 and len(departs) < len(legs_in))
     if o.get("transferWalkSec") is not None and o.get("measuredTransferSec") is not None:
         r["transferErrSec"] = float(o["measuredTransferSec"]) - float(o["transferWalkSec"])
     # the server's own forecast for the destination platform, as it stood when the route started and at the departure
@@ -588,6 +598,66 @@ def review_trip(o: dict, static, matcher: TrainMatcher, feval: pd.DataFrame | No
             if r["legs"][0].get("departedTs"):
                 r["serverForecast"]["atDeparture"] = nearest(r["legs"][0]["departedTs"])
     return r
+
+
+def dev_note_text(n: dict) -> str:
+    """The note as the rider meant it: the preset's label, then their words; a mark still without words says so."""
+    label = DEV_NOTE_PRESETS.get(n.get("preset") or "", n.get("preset"))
+    text = (n.get("text") or "").strip()
+    return ": ".join(x for x in (label, text) if x) or "(marked, no words)"
+
+
+def _train_around(matcher: TrainMatcher, static, trip_id: str, route: str | None, ts: float) -> dict | None:
+    """Where the feed had the train at `ts`: the last stop it had reached (at the platform) and the next."""
+    if matcher.arr.empty:
+        return None
+    own = matcher.arr[matcher.arr["trip_id"] == trip_id]
+    if own.empty:
+        return None
+    plat = own["arrival_ts"].astype(float).map(lambda x: at_platform(x, route))
+    own = own.assign(_p=plat)
+    own = own[(own["_p"] - ts).abs() <= 3 * 3600].sort_values("_p")
+    if own.empty:
+        return None
+    before, after = own[own["_p"] <= ts], own[own["_p"] > ts]
+    name = (lambda sid: static.stop_name(sid) if static is not None else sid)
+    out: dict = {"trip_id": trip_id, "route": route}
+    if not before.empty:
+        b = before.iloc[-1]
+        out["lastStop"], out["lastAgoSec"] = name(str(b["stop_id"])), ts - float(b["_p"])
+    if not after.empty:
+        a = after.iloc[0]
+        out["nextStop"], out["nextInSec"] = name(str(a["stop_id"])), float(a["_p"]) - ts
+    return out
+
+
+def review_dev_notes(o: dict, r: dict, events: list[dict], matcher: TrainMatcher, static) -> list[dict]:
+    """The rider's notes from the phone, each beside the timeline at its moment: what the phone believed, the sensors'
+    events either side, and where the feed had the leg's train."""
+    out = []
+    for n in sorted((n for n in (o.get("devNotes") or []) if isinstance(n, dict) and n.get("ts")), key=lambda n: n["ts"]):
+        ts = float(n["ts"])
+        d: dict = {"ts": ts, "text": dev_note_text(n), "preset": n.get("preset"), "pending": not (n.get("text") or n.get("preset")),
+                   "via": n.get("via"), "writtenTs": n.get("writtenTs"), "phase": n.get("phase"), "motion": n.get("motion"),
+                   "leg": n.get("leg"), "onTrain": n.get("onTrain"), "line": n.get("line"), "train": n.get("train"), "confidence": n.get("confidence")}
+        prev = [e for e in events if float(e["ts"]) <= ts]
+        nxt = [e for e in events if float(e["ts"]) > ts]
+        if prev:
+            d["eventBefore"] = {"kind": prev[-1].get("kind"), "agoSec": ts - float(prev[-1]["ts"])}
+        if nxt:
+            d["eventAfter"] = {"kind": nxt[0].get("kind"), "inSec": float(nxt[0]["ts"]) - ts}
+        legs = r.get("legs") or []
+        li = n.get("leg") if isinstance(n.get("leg"), int) else None
+        if li is not None and legs:
+            lg = legs[min(li, len(legs) - 1)]
+            t = lg.get("train") or {}
+            tid, route = t.get("trip_id"), t.get("route")
+            if not tid and n.get("train") and "|" in str(n["train"]):
+                tid, route = str(n["train"]).split("|", 1)[1], _split_line(n.get("line") or "")[0] or None
+            if tid:
+                d["feedTrain"] = _train_around(matcher, static, str(tid), route, ts)
+        out.append(d)
+    return out
 
 
 def _f(v):
@@ -698,6 +768,19 @@ def findings(s: dict, reviews: list[dict]) -> list[str]:
     if ar.get("riderLegs"):
         out.append(f"Against the rider's own account: the plan named the right line on {ar['planRight']} of {ar['riderLegs']} legs"
                    + (f", the phone's call on {ar['right']} of {ar['legs']} it made." if ar.get("legs") else "; the phone made no call on them."))
+    mc = [r for r in reviews if r.get("missedChange")]
+    if mc:
+        which = ", ".join(f"{r['day']} {_hm(r['createdTs'])}" + (f" build {r['appBuild']}" if r.get("appBuild") else "") for r in mc)
+        out.insert(0, f"**{len(mc)} trip(s) reached the destination on fewer rides than the route had legs: the phone missed a change** "
+                      f"({which}). "
+                      "Each is a hand-off the Live Activity never made; read the trip's trace at its stations short of the planned change.")
+    dn = [(r, n) for r in reviews for n in r.get("devNotes") or []]
+    if dn:
+        latest = max(dn, key=lambda x: x[1]["ts"])
+        pend = sum(1 for _, n in dn if n.get("pending"))
+        out.append(f"{len(dn)} note(s) written on the phone on {len({r['id'] for r, _ in dn})} trip(s), the latest {latest[0]['day']} {_hm(latest[1]['ts'])}"
+                      f" (\"{latest[1]['text'][:80]}\")" + (f"; {pend} marked from the Live Activity with no words yet" if pend else "")
+                      + ": see *Notes from the phone*.")
     nd = [r for r in reviews if not r.get("falseStart") and r.get("nDeparts", 0) == 0 and (r.get("startDistanceM") or 0) > 150]
     if nd:
         out.append(f"{len(nd)} trip(s) started more than 150 m from the station's point and never felt a departure: the tracker stayed "
@@ -757,9 +840,33 @@ def render_markdown(reviews: list[dict], s: dict, generated: datetime, legs: lis
                      f"{r.get('startedBy') or '?'} / {r.get('endedBy') or 'open'}" + ((" (restart)" if r.get("restart") else " (false start)") if r.get("falseStart") else "")
                      + (f" · {int(r['startDistanceM'])} m out" if r.get("startDistanceM") is not None else ""),
                      _hm(r.get("predictedArriveTs")), _hm(r.get("actualArriveTs")), _signed(r.get("forecastErrSec")), legs_txt,
-                     f"{r.get('nDeparts', 0)}/{r.get('nAlights', 0)}"])
+                     f"{r.get('nDeparts', 0)}/{r.get('nAlights', 0)}" + (" **missed change**" if r.get("missedChange") else "")])
     L.append(_table(["started", "route", "started / ended by", "forecast arrival", "train's arrival", "error", "lines ridden", "felt dep/alight"], rows))
     L.append("Error: the train's real arrival at the destination platform minus the arrival the app forecast when the route started (+ = arrived later than forecast).\n")
+    noted = [(r, n) for r in sorted(reviews, key=lambda r: -(r.get("createdTs") or 0)) for n in r.get("devNotes") or []]
+    if noted:
+        L.append("## Notes from the phone\n")
+        rows = []
+        for r, n in noted:
+            if n.get("phase"):
+                phone = ("on the " + (_split_line(n.get("line") or "")[0] or "train") if n.get("onTrain") else n["phase"]) \
+                        + (f" ({n['confidence']:.2f})" if n.get("onTrain") and n.get("confidence") is not None else "") \
+                        + (f", leg {n['leg'] + 1}" if n.get("leg") is not None and len(r.get("legs") or []) > 1 else "") + (f", {n['motion']}" if n.get("motion") else "")
+            else:
+                phone = "after the trip"
+            ev = "; ".join(x for x in (
+                f"{n['eventBefore']['kind']} {_mmss(n['eventBefore']['agoSec'])} before" if n.get("eventBefore") else "",
+                f"{n['eventAfter']['kind']} in {_mmss(n['eventAfter']['inSec'])}" if n.get("eventAfter") else "") if x) or "–"
+            ft = n.get("feedTrain") or {}
+            feed = (f"{ft.get('route') or ''} {ft.get('trip_id')}".strip()
+                    + (f": {ft['lastStop']} {_mmss(ft['lastAgoSec'])} before" if ft.get("lastStop") else "")
+                    + (f", {ft['nextStop']} in {_mmss(ft['nextInSec'])}" if ft.get("nextStop") else "")) if ft else "–"
+            when = f"{r['day']} {_hm(n['ts'])}" + (" (marked)" if n.get("via") == "activity" else "")
+            rows.append([when, f"{_hm(r['createdTs'])} {r.get('routeLabel') or ''}".strip(), phone, ev, feed,
+                         n["text"].replace("|", "/").replace("\n", " ")])
+        L.append(_table(["at", "trip", "the phone then", "sensors either side", "the train by the feed", "note"], rows))
+        L.append("Each note at the moment the rider tapped (from the Live Activity, the words may have come later). The phone's line and confidence are what it "
+                 "believed then; the feed's train is the leg's matched train (else the one the phone named), with the stop it had reached at the platform.\n")
     if notes:
         L.append("## The rider's account\n")
         by_id = {r["id"]: r for r in reviews}

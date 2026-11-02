@@ -72,16 +72,23 @@ struct PlannerView: View {
     @State private var onTrainSheet = false
     /// The rider's report, pinned where `reportContext` says; set when the sheet opens.
     @State private var reporting: ReportContext?
-    @AppStorage(ReportQueue.enabledKey) private var reportsOn = true
-    @AppStorage(ReportQueue.promptsKey) private var reportPromptsOn = true
+    @AppStorage(ReportQueue.enabledKey) private var reportsOn = false
+    @AppStorage(ReportQueue.promptsKey) private var reportPromptsOn = false
     /// The question up now ("Held at Jay St?"), the moments already asked about, and when the last one showed.
     @State private var reportPrompt: ReportPrompt?
     @State private var reportPromptsAsked: Set<String> = []
     @State private var reportPromptLastTs: Double?
+    /// A note on how the app is behaving, about the moment the rider tapped (`DevNoteSheet`); nil while none is open.
+    @State private var noteMoment: NoteMoment? = nil
     /// Per leg, the line the rider said they will take where a leg allows several (the A rather than the C).
     @State private var preferredKeys: [Int: String] = [:]
     /// The earlier Go tab: the title, the pickers, the full card, the route list and the five views on one page.
     @AppStorage("classicGo") private var classicGo = false
+    /// The home's other ways as lanes on one clock, grouped where they leave the route (`RouteLanesView`); off, the
+    /// arrival, the change and three other ways as numbers.
+    @AppStorage("laneHome") private var laneHome = true
+    /// The home lanes' other ways, each with its itinerary from where the rider is (`updateLaneAlternatives`).
+    @State private var laneAlts: [(PathOption, Itinerary)] = []
     /// The paged Go tab's page: home, the line view, the routes.
     @State private var page = 0
     /// The five detail views, the itineraries and the departure board, as a sheet from the line view.
@@ -96,7 +103,9 @@ struct PlannerView: View {
     /// The planner's further options for this trip beyond the listed ones, timed once a trip, weighed with them.
     @State private var rerouteMore: [PathOption]? = nil
 
-    var body: some View {
+    // The body in three parts, each type-checked on its own: as one chain of modifiers it ran past the compiler's
+    // time limit on the CI runner's Xcode ("unable to type-check this expression in reasonable time").
+    private var navigation: some View {
         NavigationStack {
             Group {
                 if let sched = data.schedule, let index = data.index {
@@ -130,6 +139,10 @@ struct PlannerView: View {
                 }
             }
         }
+    }
+
+    private var withInputs: some View {
+        navigation
         .onAppear {
             if loc.authorized { loc.startTracking() }
             if !routeStarted { TripActivityService.shared.endAll() }
@@ -173,16 +186,24 @@ struct PlannerView: View {
             default: break
             }
         }
+    }
+
+    var body: some View {
+        withInputs
         .onChange(of: trip.beliefs) { _, _ in followBoarded() }
         // off one train and onto the next: the card and the Live Activity follow at once, not at the next poll
         .onChange(of: trip.currentLeg) { _, _ in followRide() }
         .onChange(of: trip.onTrain) { _, _ in followRide() }
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
+        .onChange(of: trip.changedEarly) { _, c in if let c { followEarlyChange(c) } }
         .sheet(isPresented: $onTrainSheet) { onTrainSheetView }
         .sheet(isPresented: Binding(get: { reporting != nil }, set: { if !$0 { reporting = nil } })) {
             if let c = reporting { ReportSheet(context: c, onTrain: c.source == .trip) }
         }
+        .sheet(item: $noteMoment) { m in noteSheet(m) }
+        // a moment marked from the Live Activity: its button counts the marks waiting for words
+        .onChange(of: trip.devNotes) { _, _ in if routeStarted { updateActivity() } }
         .onChange(of: trip.phase) { _, ph in
             if ph == .arrived { endTrip(by: trip.endReason ?? "arrived") }
             // on a train by the phone's own reading, with no departure to name it: ask which
@@ -265,14 +286,16 @@ struct PlannerView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         let now = data.now
                         let it = ride ?? p.live
-                        HomeCard(option: p, itinerary: it, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: now,
+                        let next = nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data)
+                        HomeCard(option: p, itinerary: it, next: next, now: now,
                                  originName: originName, destName: destName, phase: trip.phase, onTrain: trip.onTrain, rideLeg: trip.currentLeg,
                                  ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                                  walk: walkToOrigin.map { walkLineText($0, originId: originId, placeName: here?.name, placeUsualSec: placeUsualSec, boardTs: it?.boardTs, now: now) },
                                  alternatives: Array(others.prefix(3)), moreCount: max(0, others.count - 3),
                                  onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } },
                                  confidence: routeConfidence(p, itinerary: it, outlook: outlook, data: data),
-                                 tripControls: AnyView(tripBar(originName: originName.isEmpty ? "the station" : originName)))
+                                 tripControls: AnyView(tripBar(originName: originName.isEmpty ? "the station" : originName)),
+                                 lanes: homeLanes(p, itinerary: it, next: next, now: now, originName: originName))
                     }
                     .padding(.top, 10)
                 } else if !originId.isEmpty && !destId.isEmpty {
@@ -744,6 +767,7 @@ struct PlannerView: View {
         shownBoardTs = headline?.live?.boardTs
         outlook = holdOutlook(sched)
         if outlook == nil, data.scenario != "baseline" { data.setScenario("baseline") }
+        defer { updateLaneAlternatives(sched, now: now) }
         updateFocus()
         armBoardingTimer()
         if routeStarted {
@@ -758,6 +782,7 @@ struct PlannerView: View {
             trip.observeBoards(data.boards, now: now)
             refreshRideArrival()
             checkReroute(now: now)
+            offerEarlyChange(now: now)
             updateActivity(); updateTelemetry()
             trip.updateForecast(boardTs: headline?.live?.boardTs, arriveTs: headline?.live?.arriveTs, now: now)
             if trip.forecastBoardTs == headline?.live?.boardTs { forecastTrainId = liveId }
@@ -812,6 +837,7 @@ struct PlannerView: View {
             offline: data.offline, startedBy: startedBy)
         var o = base
         o.trainGapSec = l0?.practicalLatenessSec
+        o.appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
         return o
     }
 
@@ -876,7 +902,9 @@ struct PlannerView: View {
             nextBoardTs: next?.boardTs, nextRoute: next?.legs.first?.train.route,
             changeAt: changeAhead ? p.transfer?.station : nil, changeRoutes: changeAhead ? p.legs[1].routesLabel : nil,
             extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline, routeLabel: p.label,
-            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, stopsToChange: stopsToChange)
+            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, stopsToChange: stopsToChange,
+            changeHere: trip.earlyChange?.change.text,
+            notesMarked: trip.devNotes.pendingMarks.isEmpty ? nil : trip.devNotes.pendingMarks.count)
     }
 
     private func startActivity() {
@@ -957,17 +985,27 @@ struct PlannerView: View {
                             .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                             .accessibilityLabel("I'm not on the train")
                     }
+                    noteButton
                     Button("End route") { endTrip(by: "hand") }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                 } else {
                     Text(lastEndNote ?? "Starts by itself at \(originName)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
+                    noteButton          // the trip just taken can still take a note
                     reportButton
                     Button("On a train?") { openOnTrain() }
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                     Button("Start route") { startTrip(by: "hand") }
                         .font(.caption.weight(.semibold)).buttonStyle(.borderedProminent).controlSize(.small)
                 }
+            }
+            if let ec = trip.earlyChange {
+                // a change short of the route's own that no sensor can see: the rider says so in one tap
+                Button { trip.takeEarlyChange(now: data.now) } label: {
+                    Label("Changed to the \(ec.change.text)", systemImage: "arrow.left.arrow.right")
+                }
+                .font(.caption.weight(.semibold)).buttonStyle(.borderedProminent).controlSize(.small)
+                .accessibilityLabel("I changed to the \(ec.change.text)")
             }
             if let pr = trip.prompt {
                 boardingPrompt(pr)
@@ -977,6 +1015,35 @@ struct PlannerView: View {
                 lineChooser
             }
         }
+    }
+
+    /// A note on how the app is behaving, about this moment: the trip's record keeps it with what the phone believed then.
+    /// Counts the moments marked from the Live Activity that still want words.
+    @ViewBuilder private var noteButton: some View {
+        if trip.canNote(now: data.now) {
+            let marked = trip.notesInHand(now: data.now).pendingMarks.count
+            Button { noteMoment = NoteMoment(ts: Date().timeIntervalSince1970) } label: { Label("Note", systemImage: "square.and.pencil") }
+            .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
+            .labelStyle(.iconOnly).overlay(alignment: .topTrailing) {
+                if marked > 0 { Text("\(marked)").font(.caption2.bold()).foregroundStyle(.white).padding(3).background(Circle().fill(Color.orange)).offset(x: 6, y: -6) }
+            }
+            .accessibilityLabel(marked > 0 ? "Note on the app, \(marked) marked moments to describe" : "Note on the app")
+        }
+    }
+
+    private func noteSheet(_ m: NoteMoment) -> some View {
+        let context: String = {
+            guard routeStarted else { return "On the trip just taken" + (lastEndNote.map { " (\($0.lowercased()))" } ?? "") }
+            var bits: [String] = []
+            if trip.onTrain, let r = trip.currentBelief?.route { bits.append("On the \(r)") }
+            else if let ph = trip.phase { bits.append(phaseText(ph, originName: data.index?.stations[originId]?.name ?? "the station")) }
+            if (headline?.legs.count ?? 1) > 1 { bits.append("leg \(trip.currentLeg + 1)") }
+            return bits.joined(separator: " · ")
+        }()
+        return DevNoteSheet(moment: m.ts, context: context, notes: trip.notesInHand(now: data.now),
+                            onSave: { trip.addNote($0, preset: $1, via: "app", at: m.ts) },
+                            onWriteMark: { trip.writeMark(at: $0, text: $1, preset: $2) },
+                            onDropMark: { trip.dropMark(at: $0) })
     }
 
     /// The question when the phone is not sure which train the rider boarded, believes they boarded one off the
@@ -1279,7 +1346,9 @@ struct PlannerView: View {
                 preferredKeys[1] = key
                 switchRoute(to: alt)
             },
-            onNotOnTrain: { trip.notOnTrain() })
+            onNotOnTrain: { trip.notOnTrain() },
+            changedHere: trip.earlyChange?.change.text,
+            onChangedHere: { trip.takeEarlyChange(now: data.now) })
     }
 
     /// The rider is on this train: the route starts from it if it has not started, switches to the route that
@@ -1365,6 +1434,57 @@ struct PlannerView: View {
     private func dropOtherLegsRide(_ sel: PathOption, leg: Int) {
         guard let k = rideItinerary?.legs.first?.key, sel.legs.indices.contains(leg), !sel.legs[leg].keys.contains(k) else { return }
         rideItinerary = nil
+    }
+
+    /// The changes short of the route's own on the line being ridden (the A/C across the platform at Jay St on an F
+    /// planned to change at W 4 St), among the listed routes and the planner's further options.
+    private func earlyChanges(ridingKey: String) -> [EarlyChange] {
+        guard let sched = data.schedule, let index = data.index, let sel = headline, trip.currentLeg == 0 else { return [] }
+        let listed = Set(paths.map { $0.id })
+        let options = paths + enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 24).filter { !listed.contains($0.id) }
+        return earlierChanges(from: sel, ridingKey: ridingKey, among: options, index: index)
+    }
+
+    /// On the first leg's train, the change short of the route's own at the station the train is at (or left a few
+    /// minutes ago) goes to the trip bar and the Live Activity as one tap; nil anywhere else.
+    private func offerEarlyChange(now: Double) {
+        guard trip.onTrain, trip.currentLeg == 0, let c = trip.rideTrain,
+              let o = earlyChangeOffer(earlyChanges(ridingKey: c.key), train: c, now: now) else {
+            trip.offerEarlyChange(nil, alightTs: nil); return
+        }
+        trip.offerEarlyChange(o.change, alightTs: earlyChangeAlightTs(o.change, train: c, now: now))
+    }
+
+    /// The rider changed short of the route's own change: the route becomes the one changing there, and the rider is on
+    /// its connection, the first of the next line's trains to leave that platform after they stepped off (by the
+    /// feed); with none in the feeds yet, those trains are followed and the next pull-away felt names one.
+    private func followEarlyChange(_ c: ChangedEarly) {
+        guard let sched = data.schedule else { return }
+        var alt = c.change.option
+        if let listed = paths.first(where: { $0.id == alt.id }) { alt = listed } else {
+            var more = [alt]
+            applyPersonalTransfers(&more)
+            evaluate(&more[0], schedule: sched, lineSched: data.lineSched, now: data.now, holds: data.holds, deviations: data.deviations, hour: nyHour(data.now))
+            alt = more[0]
+            extraPaths.append(alt); paths.append(alt)
+            data.setWanted(Set(paths.flatMap { $0.legs.flatMap { $0.keys } }), for: "planner")
+        }
+        switchRoute(to: alt)
+        let next = alt.legs[1]
+        var boardIdx: [String: Int] = [:], alightIdx: [String: Int] = [:]
+        for (k, ix) in next.idx { boardIdx[k] = ix.from; alightIdx[k] = ix.to }
+        let gone = trainsAhead(boards: data.boards, schedule: sched, boardIdx: boardIdx, alightIdx: alightIdx, onLegKeys: Set(next.keys), now: data.now, maxAgoSec: 900)
+        // the connection: the first to pull away after the step across (one standing there as the rider stepped off counts)
+        let after = c.alightTs - TransferTiming.standingCatchSec
+        if let train = gone.filter({ PlatformTiming.pullsAway($0.boardTs, route: $0.route) >= after })
+            .min(by: { $0.boardTs < $1.boardTs }) {
+            trip.setOnTrain(train, now: data.now)
+        } else {
+            trip.seedCurrentLeg(gone, now: data.now)
+        }
+        refreshRideArrival()
+        updateActivity()
+        updateFocus()
     }
 
     /// The rider stayed on past the stop where the route had them leave the train: the route becomes the one that
@@ -1475,7 +1595,13 @@ struct PlannerView: View {
     /// still to board follow it (the train in hand is kept), and the trip, the card and the Live Activity follow it.
     private func takeReroute() {
         guard let o = reroute else { return }
-        let alt = o.faster.option
+        takeRoute(o.faster.option)
+    }
+
+    /// The trip goes on by `alt` from here: it joins the list if it was one of the planner's further options, the
+    /// trains still to board follow it (the train in hand is kept), and the trip, the card and the Live Activity
+    /// follow it. The faster-route banner's Switch and a lane tapped on the home both come here.
+    private func takeRoute(_ alt: PathOption) {
         if !paths.contains(where: { $0.id == alt.id }) {
             extraPaths.append(alt); paths.append(alt)
             data.setWanted(Set(paths.flatMap { $0.legs.flatMap { $0.keys } }), for: "planner")
@@ -1488,6 +1614,61 @@ struct PlannerView: View {
         withAnimation(.easeInOut(duration: 0.3)) { reroute = nil }
         switchRoute(to: alt)
         refreshLive()
+    }
+
+    // MARK: - the home's lanes
+
+    /// The other ways for the home's lanes, each timed from where the rider is: before the route starts, every listed
+    /// way on its next train from the first platform; on the way, the ways that go on from where the rider is
+    /// (`continuesFrom`), on the trains in the feeds (`itineraryFromHere`), so a station behind them drops out.
+    private func updateLaneAlternatives(_ sched: ClientSchedule, now: Double) {
+        guard laneHome, !classicGo, let sel = headline, let index = data.index else { laneAlts = []; return }
+        guard routeStarted else {
+            laneAlts = paths.compactMap { p in p.id == sel.id ? nil : p.live.map { (p, $0) } }
+            return
+        }
+        guard let pos = riderPosition else { laneAlts = []; return }
+        let station: (String) -> String = { index.stationOf($0) }
+        let listed = Set(paths.map(\.id))
+        let ways = (paths + (rerouteMore ?? []).filter { !listed.contains($0.id) })
+            .filter { $0.id != sel.id && continuesFrom($0, current: sel, at: pos, station: station) }
+        // the same few the faster-route check has the feeds of
+        let watched = ways.sorted { $0.expectedSec < $1.expectedSec }.prefix(6)
+        laneAlts = watched.compactMap { p in
+            itineraryFromHere(boards: data.predictedBoards, schedule: sched, option: p, at: pos, current: sel, now: now).map { (p, $0) }
+        }
+    }
+
+    /// The home's lanes for the route in hand on `it`; nil with the lanes off or no train to draw.
+    private func homeLanes(_ p: PathOption, itinerary it: Itinerary?, next: Itinerary?, now: Double, originName: String) -> AnyView? {
+        guard laneHome, let it, let index = data.index else { return nil }
+        let pos = routeStarted ? riderPosition : nil
+        let lanes = routeLanes(current: p, currentIt: it, nextIt: routeStarted ? nil : next, alternatives: laneAlts,
+                               at: pos, now: now, station: { index.stationOf($0) })
+        // the hold dragging on, while the times assume it ends as usual: how much later the route in hand would be in
+        let tail = data.scenario == "baseline" ? outlook?.dragsOn.flatMap { $0 > it.arriveTs + 30 ? $0 : nil } : nil
+        return AnyView(RouteLanesView(lanes: lanes, now: now, originName: originName, routeStarted: routeStarted, holdTailTs: tail, hold: outlook,
+                                      note: laneNote(p, it), onPick: pickLane, onLineView: { withAnimation { page = 1 } }))
+    }
+
+    /// Under the route in hand: the arrival's likely window and the model's word on it.
+    private func laneNote(_ p: PathOption, _ it: Itinerary) -> String? {
+        var bits: [String] = []
+        if let lo = it.legs.last?.arriveLoTs, let hi = it.legs.last?.arriveHiTs { bits.append("likely \(Fmt.hhmm(lo)) to \(Fmt.hhmm(hi))") }
+        let c: RouteConfidence? = routeConfidence(p, itinerary: it, outlook: outlook, data: data)
+        if let c { bits.append(c.label.lowercased()) }
+        return bits.isEmpty ? nil : bits.joined(separator: " · ")
+    }
+
+    /// A lane tapped: before the route starts, its route is selected; on the way, the trip goes on by it from here,
+    /// as the faster-route banner's Switch does (staying on past the change, or another line at it, said in one tap).
+    private func pickLane(_ id: String) {
+        guard id != headline?.id, let alt = paths.first(where: { $0.id == id }) ?? laneAlts.first(where: { $0.0.id == id })?.0 else { return }
+        if routeStarted {
+            takeRoute(alt)
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) { selectedPath = id }
+        }
     }
 
     /// The rider keeps their route: this faster one stays away unless it gets two minutes better still.
@@ -2143,4 +2324,10 @@ struct ItineraryRow: View {
         if let lr = leg.train.lastRun, let sp = lr.speedKmh { s += " · last run \(Fmt.mph(sp))" }
         return s
     }
+}
+
+/// The moment a note on the app is about: when the rider tapped the note button.
+struct NoteMoment: Identifiable {
+    let ts: Double
+    var id: Double { ts }
 }

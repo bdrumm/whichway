@@ -12,12 +12,13 @@ from __future__ import annotations
 import io
 import tarfile
 from datetime import date, datetime, timedelta
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
 import requests
 
-from .. import config
+from .. import config, net
 from ..storage.db import ARRIVAL_COLUMNS
 from .gtfs_static import NY_TZ, direction_from_stop_id
 
@@ -25,9 +26,12 @@ URL = "https://subwaydata.nyc/data/subwaydatanyc_{day}_csv.tar.xz"
 SOURCE = "subwaydata"
 
 
-def fetch_day(day: date, timeout: int | None = None) -> bytes:
-    resp = requests.get(URL.format(day=day.isoformat()), timeout=timeout or 120, headers={"User-Agent": "mta-delay-insights/0.1"})
+def fetch_day(day: date, timeout: float | tuple | None = None) -> bytes:
+    url = URL.format(day=day.isoformat())
+    net.prefer_ipv4_when_ipv6_is_dead(urlparse(url).hostname)
+    resp = requests.get(url, timeout=timeout or net.TIMEOUT, headers={"User-Agent": "mta-delay-insights/0.1"})
     resp.raise_for_status()
+    net.prefer_ipv4_when_ipv6_is_dead(urlparse(resp.url).hostname)  # the day files redirect to a CDN host: decide for the next day
     return resp.content
 
 

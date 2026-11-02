@@ -130,6 +130,12 @@ launchd agent that starts at login and restarts if it stops, so a reboot leaves 
 and for the iOS app `make ios`, `make ios-build`, `make ios-test`
 (see [ios/README.md](ios/README.md)).
 
+**Modelling on the Mac.** The gatherers above keep rolling windows; `make lake` pulls everything they collect (the
+data branch, the subwaydata.nyc archive back a year, this Mac's store) into `data/lake/`, a Parquet lake that only
+grows, `make model-lake` trains the arrival model on it, and `make bundle` / `make bundle-publish` send the fitted
+engine tables, the delay model and the model card to a `models` branch that the hourly build installs into the
+site, so the app runs the Mac's models. See [docs/LOCAL_MODELING.md](docs/LOCAL_MODELING.md).
+
 ## Data sources
 
 | kind | feed | what it contributes |

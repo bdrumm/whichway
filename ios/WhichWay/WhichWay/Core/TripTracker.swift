@@ -36,9 +36,11 @@ struct TripTimeline: Codable, Equatable {
     var boarded: [BoardedLeg] = []        // the train and line each leg was ridden on, as far as the phone could tell
     var withdrawnDepartures: [Double]? = nil   // pull-aways felt that no train made (the platform shaking), withdrawn
     var notOnTrainTaps: [Double]? = nil   // when the rider said "not on the train" by hand
+    var changedEarlyTaps: [Double]? = nil // when the rider said they changed short of the route's change, by hand
     var rerouteNotes: [RerouteNote]? = nil // each faster route offered on the way, as the rider saw it
     var stopSpans: [FeltStop] = []        // every station stop felt on each ride: the train at rest, then moving again
     var beliefLog: [BeliefNote] = []      // each change in the train the phone believes the rider is on, as it happened
+    var devNotes: [DevNote]? = nil        // the rider's notes on how the app behaved, each at the moment it is about
 
     /// Legs ridden so far: the number of alightings the sensors saw.
     var legsRidden: Int { events.filter { $0.kind == .alighted }.count }
@@ -488,6 +490,38 @@ struct TripTracker {
         timeline.rerouteNotes = Array(notes.suffix(40))
     }
 
+    /// The rider said they changed short of the route's change, kept on the record.
+    mutating func noteChangedEarly(at ts: Double) {
+        timeline.changedEarlyTaps = (timeline.changedEarlyTaps ?? []) + [ts]
+    }
+
+    /// A note from the rider on how the app is behaving, or a mark from the Live Activity, at `ts`: on the record with
+    /// the phase, the motion and the leg as the tracker has them then. Changes nothing else.
+    @discardableResult
+    mutating func noteDev(_ text: String, preset: String? = nil, via: String, at ts: Double, belief: LineBelief? = nil) -> DevNote? {
+        let n = DevNote(ts: ts, text: text, preset: preset, via: via, phase: phase.rawValue, motion: motionState.rawValue,
+                        leg: timeline.legsRidden, onTrain: onTrain).believing(belief)
+        var notes = timeline.devNotes ?? []
+        guard notes.addNote(n) else { return nil }
+        timeline.devNotes = notes
+        return notes.last
+    }
+
+    /// The words for a mark made on the way.
+    @discardableResult
+    mutating func writeDevMark(at ts: Double, text: String, preset: String? = nil, now: Double) -> Bool {
+        guard var notes = timeline.devNotes, notes.writeMark(at: ts, text: text, preset: preset, now: now) else { return false }
+        timeline.devNotes = notes
+        return true
+    }
+
+    @discardableResult
+    mutating func dropDevMark(at ts: Double) -> Bool {
+        guard var notes = timeline.devNotes, notes.dropMark(at: ts) else { return false }
+        timeline.devNotes = notes.isEmpty ? nil : notes
+        return true
+    }
+
     /// The rider said "not on the train", kept on the record whatever it changed.
     mutating func noteNotOnTrain(at ts: Double) {
         timeline.notOnTrainTaps = (timeline.notOnTrainTaps ?? []) + [ts]
@@ -495,10 +529,14 @@ struct TripTracker {
 
     /// The rider says they are on a train already, having left the station at `departedTs` (a route started from
     /// the train, or one that never saw the pull-away): the ride is on from here, with that departure on the
-    /// record, and the sensors watch for the stops and the alighting as after a felt departure.
+    /// record, and the sensors watch for the stops and the alighting as after a felt departure. Between trains at a
+    /// change too: the connection named by hand is ridden (Oct 27: a train named at the change was never boarded,
+    /// the tracker counting the rider on a train already since the first leg).
     mutating func beginRiding(now: Double, departedTs: Double) {
-        guard phase != .arrived, phase != .riding else { return }
-        let dep = min(departedTs, now)
+        guard phase != .arrived, !onTrain else { return }
+        var dep = min(departedTs, now)
+        // never before the walk-off at the change it follows
+        if let last = timeline.events.last, last.kind == .alighted { dep = max(dep, last.ts) }
         if timeline.arrivedStationTs == nil { timeline.arrivedStationTs = dep }
         if timeline.platformTs == nil { timeline.platformTs = dep }
         timeline.events.append(MotionEvent(kind: .departed, ts: dep))

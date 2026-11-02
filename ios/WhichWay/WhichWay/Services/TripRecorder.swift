@@ -41,6 +41,14 @@ struct StayedOn: Equatable {
     var ts: Double
 }
 
+/// The rider says they changed at a station short of the route's own change (`EarlyChange`): the ride closed there
+/// at `alightTs`; the planner adopts the route that changes there and boards the rider on its connection.
+struct ChangedEarly: Equatable {
+    var change: EarlyChange
+    var alightTs: Double
+    var ts: Double
+}
+
 struct BoardingPrompt: Equatable {
     enum Reason: String { case unsure, switched, assumed }
     var leg: Int
@@ -73,6 +81,13 @@ final class TripRecorder {
     /// Set when the rider rode on past the stop the route had them leave the train at.
     private(set) var stayedOn: StayedOn?
     @ObservationIgnored private var stayedOnChecked: Set<Int> = []
+    /// The change short of the route's own on offer right now (the planner sets it from the train in hand), with when
+    /// the rider would have stepped off there: the trip bar and the Live Activity show it as one tap.
+    private(set) var earlyChange: (change: EarlyChange, alightTs: Double)?
+    /// Set when the rider took the offer: the planner follows (`ChangedEarly`).
+    private(set) var changedEarly: ChangedEarly?
+    /// The rider's notes on the route in progress (`DevNote`), as on its record.
+    private(set) var devNotes: [DevNote] = []
     @ObservationIgnored private var tracker: TripTracker?
     @ObservationIgnored private let sampler = MotionSampler()
     @ObservationIgnored private var legs: [LegPlan] = []
@@ -166,7 +181,7 @@ final class TripRecorder {
         self.legs = legs
         log.reset(); transferLog.reset(); prevLog.reset(); logLeg = -1; candidates = [:]; beliefs = []; seenEvents = 0; handSet = []; dismissed = []
         departureBeliefs = [:]; departedTs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
-        stayedOn = nil; stayedOnChecked = []; locationRides = []
+        stayedOn = nil; stayedOnChecked = []; locationRides = []; earlyChange = nil; changedEarly = nil; devNotes = []
         publish()
         if let o = observation { Telemetry.shared.beginTrip(o) }
         MotionTrace.shared.begin(ts: start.startTs)
@@ -633,7 +648,7 @@ final class TripRecorder {
         guard var t = tracker, t.phase != .arrived else { return }
         let leg = t.timeline.legsRidden
         guard leg < legs.count else { return }
-        if t.phase != .riding {
+        if !t.onTrain {
             t.beginRiding(now: now, departedTs: PlatformTiming.pullsAway(c.boardTs, route: c.route))
             tracker = t
             seenEvents = t.timeline.events.count          // the departure on the record is this one, not one to infer from
@@ -744,6 +759,92 @@ final class TripRecorder {
         return log.entry(id, chosenTrainId: id)
     }
 
+    /// The train in hand as the phone can best say, for the planner's offer of an earlier change.
+    var rideTrain: BoardingCandidate? { tracker?.onTrain == true ? trainInHand : nil }
+
+    /// The planner's offer of a change short of the route's own, or nil when there is none to make here and now.
+    func offerEarlyChange(_ ch: EarlyChange?, alightTs: Double?) {
+        let new = ch.flatMap { c in alightTs.map { (c, $0) } }
+        if new?.0 == earlyChange?.change, new?.1 == earlyChange?.alightTs { return }
+        earlyChange = new
+    }
+
+    /// The rider says they took the change on offer (the trip bar, the sheet, the Live Activity): the ride in hand closes
+    /// at the change, as an alighting the sensors could not feel (two steps across the platform onto a train standing
+    /// there), and the planner moves the route there and onto the connection. Oct 22 and 27 at Jay St: the A taken
+    /// across the platform, the route left counting stops to W 4 St on the F until the rider walked off at 14 St.
+    func takeEarlyChange(now: Double? = nil) {
+        let now = now ?? lastNow ?? Date().timeIntervalSince1970
+        guard let offer = earlyChange, let t = tracker, t.onTrain, t.timeline.legsRidden + 1 < legs.count else { return }
+        let at = min(offer.alightTs, now)
+        tracker?.noteChangedEarly(at: now)
+        tracker?.alightStanding(at: at)
+        handleEvents()
+        offPlanAlighting = nil          // the planner follows the change named, not a stop read off the train's times
+        earlyChange = nil
+        changedEarly = ChangedEarly(change: offer.change, alightTs: at, ts: now)
+        publish()
+    }
+
+    // MARK: - the rider's notes on how the app behaved
+
+    /// A note on how the app is behaving right now (the trip bar's note sheet), or a mark of the moment from the Live
+    /// Activity (`text` empty): on the route in progress, with what the phone believes then, and written to disk at
+    /// once; with no route in progress, onto the trip just taken. False when there is no trip to put it on.
+    @discardableResult
+    func addNote(_ text: String, preset: String? = nil, via: String, at ts: Double? = nil) -> Bool {
+        let at = ts ?? lastNow ?? Date().timeIntervalSince1970
+        if var t = tracker {
+            guard t.noteDev(text, preset: preset, via: via, at: at, belief: currentBelief) != nil else { return false }
+            tracker = t
+            notesChanged(t)
+            return true
+        }
+        let n = DevNote(ts: at, text: text, preset: preset, via: via).believing(beliefs.last)
+        return Telemetry.shared.noteRecentTrip(now: at) { $0.addNote(n) }
+    }
+
+    /// The Live Activity's note button: the moment marked, the words to follow in the app.
+    func markMoment() { addNote("", via: "activity", at: Date().timeIntervalSince1970) }
+
+    /// The words for a mark, on the route in progress or the trip just taken.
+    @discardableResult
+    func writeMark(at ts: Double, text: String, preset: String? = nil) -> Bool {
+        let now = Date().timeIntervalSince1970
+        if var t = tracker {
+            guard t.writeDevMark(at: ts, text: text, preset: preset, now: now) else { return false }
+            tracker = t
+            notesChanged(t)
+            return true
+        }
+        return Telemetry.shared.noteRecentTrip(now: now) { $0.writeMark(at: ts, text: text, preset: preset, now: now) }
+    }
+
+    @discardableResult
+    func dropMark(at ts: Double) -> Bool {
+        if var t = tracker {
+            guard t.dropDevMark(at: ts) else { return false }
+            tracker = t
+            notesChanged(t)
+            return true
+        }
+        return Telemetry.shared.noteRecentTrip(now: Date().timeIntervalSince1970) { $0.dropMark(at: ts) }
+    }
+
+    /// The notes there are to show: the route in progress's, else the trip just taken's.
+    func notesInHand(now: Double) -> [DevNote] {
+        tracker != nil ? devNotes : (Telemetry.shared.recentTrip(now: now)?.devNotes ?? [])
+    }
+
+    /// Whether a note has a trip to go on now.
+    func canNote(now: Double) -> Bool { tracker != nil ? Telemetry.shared.optIn : Telemetry.shared.recentTrip(now: now) != nil }
+
+    private func notesChanged(_ t: TripTracker) {
+        devNotes = t.timeline.devNotes ?? []
+        let now = lastNow ?? Date().timeIntervalSince1970
+        Telemetry.shared.checkpoint(timeline: t.timeline, now: now)
+    }
+
     func tick(now: Double) {
         lastNow = now
         tracker?.tick(now: now)
@@ -783,7 +884,7 @@ final class TripRecorder {
         legs = []
         log.reset(); transferLog.reset(); prevLog.reset(); candidates = [:]; departedTs = [:]; handSet = []
         departureBeliefs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
-        stayedOn = nil; stayedOnChecked = []; locationRides = []
+        stayedOn = nil; stayedOnChecked = []; locationRides = []; earlyChange = nil; changedEarly = nil; devNotes = []
         phase = nil
         motionState = .unknown
         endReason = tl.endedBy
