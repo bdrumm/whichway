@@ -66,7 +66,7 @@ final class RouteLanesTests: XCTestCase {
 
     /// The lanes as the home builds them: the route in hand from where the rider is, the ways that go on from there.
     private func lanes(_ current: PathOption, _ options: [PathOption], at pos: RiderPosition?, now: Double,
-                       affinity: [String: Double] = [:]) throws -> RouteLanes {
+                       affinity: [String: Double] = [:], order: SteadyOrder? = nil) throws -> RouteLanes {
         let sched = try schedule()
         let here = pos ?? .toOrigin(reachTs: nil)
         let it = try XCTUnwrap(currentItinerary(boards: boards, schedule: sched, option: current, at: here, now: now))
@@ -75,7 +75,7 @@ final class RouteLanesTests: XCTestCase {
                   let i = itineraryFromHere(boards: boards, schedule: sched, option: p, at: here, current: current, now: now) else { return nil }
             return (p, i)
         }
-        return routeLanes(current: current, currentIt: it, alternatives: alts, affinity: affinity, at: pos, now: now, station: station)
+        return routeLanes(current: current, currentIt: it, alternatives: alts, affinity: affinity, order: order, at: pos, now: now, station: station)
     }
 
     func testTheLaneIsTheWaitTheRideTheChangeAndTheNextRideOnTheClock() throws {
@@ -114,6 +114,19 @@ final class RouteLanesTests: XCTestCase {
         let onE = try lanes(change("E"), all, at: nil, now: 1000)
         XCTAssertEqual(onE.lanes.map(\.id), onC.lanes.map(\.id), "the list stays as it is; only the mark moves")
         XCTAssertEqual(onE.lanes.filter(\.isCurrent).map(\.id), ["G>E"])
+    }
+
+    func testTheLanesKeepTheHeldOrderAsTheTimesChange() throws {
+        let all = [change("C"), direct, change("E")]
+        // held when the G came first; the E now gets in sooner, the lanes stay as they were listed
+        var held = SteadyOrder()
+        held.update(ranked: ["G", "G>C", "G>E"], hasTrains: true)
+        let l = try lanes(change("C"), all, at: nil, now: 1000, order: held)
+        XCTAssertEqual(l.lanes.map(\.id), ["G", "G>C", "G>E"])
+        // not yet held (no trains when ranked): by arrival, as before
+        var open = SteadyOrder()
+        open.update(ranked: ["G", "G>C", "G>E"], hasTrains: false)
+        XCTAssertEqual(try lanes(change("C"), all, at: nil, now: 1000, order: open).lanes.map(\.id), ["G>E", "G>C", "G"])
     }
 
     func testTheUsualWayComesFirstUnlessAnotherIsAMarginSooner() throws {

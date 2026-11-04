@@ -49,6 +49,10 @@ struct HomeCard: View {
                     .foregroundStyle(w.tight ? Color.orange : Color.secondary)
                     .lineLimit(1).padding(.top, 6)
             }
+            // with the lanes, the change ahead said outright: the time to make the connection and the train after it
+            if lanes != nil, let h = TransferHeadroom.of(option: option, itinerary: itinerary, rideLeg: rideLeg) {
+                headroom(h).padding(.top, 12)
+            }
             // the lanes draw the route to the clock themselves
             if lanes == nil { JourneyBar(option: option).padding(.top, 14) }
             if let c = tripControls { c.padding(.top, 12) }
@@ -137,6 +141,24 @@ struct HomeCard: View {
     }
 
     // MARK: arrive and change
+
+    /// The change on the route in hand: how long there is to make the connecting train and when the next one comes.
+    private func headroom(_ h: TransferHeadroom) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: h.tight ? "exclamationmark.triangle.fill" : "arrow.triangle.swap")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(h.tight ? Color.red : Color.accentColor)
+                .frame(width: 22).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(h.headline).font(.headline).foregroundStyle(h.tight ? Color.red : Color.primary).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Text(h.detail).font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12).fill((h.tight ? Color.red : Color.accentColor).opacity(0.08)))
+        .accessibilityElement(children: .combine)
+    }
 
     @ViewBuilder private var arrive: some View {
         if let it = itinerary {

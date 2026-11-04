@@ -64,3 +64,39 @@ enum RouteRank {
         }
     }
 }
+
+/// The routes in a fixed order (Nov 4: "keep ranking static"): ranked once (`RouteRank.order`), when the trains are in,
+/// then held as the times change, so the list does not reshuffle under the rider's thumb. A route that turns up later
+/// goes at the end; one that drops out leaves the others where they were. `reset` ranks afresh (another trip, the app
+/// opened again).
+struct SteadyOrder: Equatable {
+    private(set) var ids: [String] = []
+    /// Ranked with at least one train in the feeds: held from here on.
+    private(set) var settled = false
+
+    mutating func reset() { ids = []; settled = false }
+
+    /// The order to show for `ranked` (the live ranking's ids); `hasTrains`: any route has a train in the feeds.
+    @discardableResult
+    mutating func update(ranked: [String], hasTrains: Bool) -> [String] {
+        if !settled {
+            ids = ranked
+            settled = hasTrains && !ranked.isEmpty
+            return ids
+        }
+        let now = Set(ranked)
+        ids = ids.filter { now.contains($0) }
+        let kept = Set(ids)
+        ids += ranked.filter { !kept.contains($0) }
+        return ids
+    }
+
+    /// `items` in this order (`id` names each); any not in it after, in the order given.
+    func arrange<T>(_ items: [T], id: (T) -> String) -> [T] {
+        let pos = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        return items.enumerated().sorted { a, b in
+            let pa = pos[id(a.element)] ?? ids.count + a.offset, pb = pos[id(b.element)] ?? ids.count + b.offset
+            return pa != pb ? pa < pb : a.offset < b.offset
+        }.map(\.element)
+    }
+}

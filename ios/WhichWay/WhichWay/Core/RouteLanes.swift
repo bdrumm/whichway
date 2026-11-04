@@ -146,9 +146,10 @@ func laneParting(_ p: PathOption, from current: PathOption, at pos: RiderPositio
 /// The home's lanes: `current` on `currentIt` (the ride in hand while on the way, else the planner's next) and
 /// `alternatives` with their itineraries from where the rider is, ranked as the routes page ranks them
 /// (`RouteRank.order`, `affinity` the rider's share per route id). A way on the same trains as the route in hand is
-/// the same journey and is left out; at most `RouteLanes.maxLanes`, the route in hand always kept.
+/// the same journey and is left out; at most `RouteLanes.maxLanes`, the route in hand always kept. `order`: the routes
+/// page's held order (`SteadyOrder`), which the lanes keep too rather than reshuffling as the times change.
 func routeLanes(current: PathOption, currentIt: Itinerary, alternatives: [(PathOption, Itinerary)], affinity: [String: Double] = [:],
-                at pos: RiderPosition?, now: Double, station: (String) -> String) -> RouteLanes {
+                order: SteadyOrder? = nil, at pos: RiderPosition?, now: Double, station: (String) -> String) -> RouteLanes {
     var leg = 0, riding = false
     switch pos {
     case let .onTrain(l, _)?: leg = l; riding = true
@@ -184,6 +185,7 @@ func routeLanes(current: PathOption, currentIt: Itinerary, alternatives: [(PathO
     let weighed = lanes.map { RankedRoute(id: $0.id, arriveTs: $0.arriveTs, expectedSec: 0, affinity: affinity[$0.optionId]) }
     let byId = Dictionary(uniqueKeysWithValues: lanes.map { ($0.id, $0) })
     var kept = RouteRank.order(weighed).compactMap { byId[$0.id] }
+    if let order, order.settled { kept = order.arrange(kept, id: \.optionId) }
     let total = kept.count
     if kept.count > RouteLanes.maxLanes {
         let inHand = kept.firstIndex { $0.isCurrent } ?? 0
