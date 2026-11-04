@@ -1,10 +1,11 @@
 import Foundation
 
-// The Go tab's home lanes: every way to the destination on one clock, from now to arrival, the route in hand first
-// and the others grouped by where they leave it (another train or line from the first platform, staying on past the
+// The Go tab's home lanes: every way to the destination on one clock, from now to arrival, a short copy of the
+// routes page two swipes over: the same routes in the same order (`RouteRank`: the rider's usual way first unless
+// another is a real margin sooner), the route in hand marked where it falls rather than lifted to the top. Each
+// lane knows where it leaves the route in hand (another train or line from the first platform, staying on past the
 // change, getting off sooner, another line at the same change). As the trip goes on the routes are weighed from
-// where the rider is (`continuesFrom`, `itineraryFromHere`), so a station behind them drops out and the next one
-// where they could do something else comes first.
+// where the rider is (`continuesFrom`, `itineraryFromHere`), so a way behind them drops out.
 
 /// One stretch of a lane: on a platform waiting, on a train, or changing between trains.
 enum LaneSegmentKind: Equatable {
@@ -25,8 +26,6 @@ struct LaneSegment: Equatable {
 enum LaneParting: Equatable {
     /// The route in hand.
     case current
-    /// The same route on the train after.
-    case nextTrain
     /// Another line (or another first train) from the first platform.
     case atStart
     /// Stays on the train in hand past the change at `station`: changes later on, or not at all.
@@ -40,13 +39,13 @@ enum LaneParting: Equatable {
     var station: String? {
         switch self {
         case let .stayOn(s), let .offEarlier(s), let .otherConnection(s): return s
-        case .current, .nextTrain, .atStart: return nil
+        case .current, .atStart: return nil
         }
     }
 }
 
 struct RouteLane: Identifiable {
-    /// The route's id, with "+next" for the route in hand on the train after.
+    /// The route's id.
     var id: String
     var optionId: String
     /// The lines, one per leg still to ride: the itinerary's trains where known.
@@ -63,28 +62,29 @@ struct RouteLane: Identifiable {
     var isCurrent: Bool { parting == .current }
 }
 
-/// The lanes that leave the route in hand at one station.
-struct LaneGroup: Identifiable {
-    /// The station's name, or "" for the first platform.
-    var id: String { station ?? "" }
-    var station: String?
-    var ts: Double?
-    var lanes: [RouteLane]
-}
-
-/// What the home shows: the route in hand, then the choices station by station in the order the rider meets them,
-/// and the clock they are drawn on.
+/// What the home shows: the routes in the routes page's order, the route in hand among them, and the clock they are
+/// drawn on.
 struct RouteLanes {
+    /// The route in hand (also in `lanes`, where it ranks).
     var current: RouteLane
-    var groups: [LaneGroup]
+    /// Best first (`RouteRank.order`), at most `maxLanes`, the route in hand always among them.
+    var lanes: [RouteLane]
+    /// The rider's usual way for this trip at this hour, when the habits single one out (`RouteRank.typical`).
+    var typicalId: String?
+    /// Ways drawable but left to the routes page.
+    var moreCount: Int
     var startTs: Double
     var endTs: Double
 
-    /// Lanes beyond these per station, and in all, are left to the routes page.
-    static let perGroup = 3
+    /// Lanes beyond these are left to the routes page.
     static let maxLanes = 6
     /// The clock spans at least this long, and ends on a whole five minutes.
     static let minSpanSec = 15.0 * 60
+
+    /// On the way: the next station where a listed way leaves the route in hand, and when the rider gets there.
+    func nextChoice(after now: Double) -> (station: String, ts: Double)? {
+        lanes.compactMap { l in l.parting.station.flatMap { s in l.partsTs.flatMap { $0 > now ? (s, $0) : nil } } }.min { $0.1 < $1.1 }
+    }
 }
 
 /// The stretches of a lane from `startTs` on: the wait for the first train (none while on it), its ride, the change
@@ -143,11 +143,11 @@ func laneParting(_ p: PathOption, from current: PathOption, at pos: RiderPositio
     return .offEarlier(station: p.transfer?.station ?? "the change")
 }
 
-/// The home's lanes: `current` on `currentIt` (the ride in hand while on the way, else the planner's next), the
-/// same route's following train (`nextIt`, before the route starts), and `alternatives` with their itineraries
-/// from where the rider is. A way on the same trains as the route in hand is the same journey and is left out; at
-/// most `RouteLanes.perGroup` per station, `RouteLanes.maxLanes` in all, earliest arrival first.
-func routeLanes(current: PathOption, currentIt: Itinerary, nextIt: Itinerary? = nil, alternatives: [(PathOption, Itinerary)],
+/// The home's lanes: `current` on `currentIt` (the ride in hand while on the way, else the planner's next) and
+/// `alternatives` with their itineraries from where the rider is, ranked as the routes page ranks them
+/// (`RouteRank.order`, `affinity` the rider's share per route id). A way on the same trains as the route in hand is
+/// the same journey and is left out; at most `RouteLanes.maxLanes`, the route in hand always kept.
+func routeLanes(current: PathOption, currentIt: Itinerary, alternatives: [(PathOption, Itinerary)], affinity: [String: Double] = [:],
                 at pos: RiderPosition?, now: Double, station: (String) -> String) -> RouteLanes {
     var leg = 0, riding = false
     switch pos {
@@ -167,14 +167,9 @@ func routeLanes(current: PathOption, currentIt: Itinerary, nextIt: Itinerary? = 
                         arriveTs: currentIt.arriveTs, parting: .current, partsTs: nil, deltaSec: 0)
     // the route in hand leaves the train in hand at its change: the moment staying on, or another line there, parts from it
     let curChangeTs: Double? = changeAt(current) != nil ? currentIt.legs.first?.arriveTs : nil
-    var lanes: [RouteLane] = []
-    if let n = nextIt, pos == nil || isToOrigin(pos), n.legs.first?.train.id != currentIt.legs.first?.train.id {
-        lanes.append(RouteLane(id: current.id + "+next", optionId: current.id, routes: routes(n, current), changeAt: changeAt(current),
-                               segments: laneSegments(n, option: current, ridingFirst: false, from: now),
-                               arriveTs: n.arriveTs, parting: .nextTrain, partsTs: nil, deltaSec: n.arriveTs - currentIt.arriveTs))
-    }
+    var lanes: [RouteLane] = [cur]
     let mine = currentIt.legs.map(\.train.id)
-    for (p, it) in alternatives where p.id != current.id && it.legs.map(\.train.id) != mine {
+    for (p, it) in alternatives where p.id != current.id && it.legs.map(\.train.id) != mine && !lanes.contains(where: { $0.id == p.id }) {
         let part = laneParting(p, from: current, at: pos, station: station)
         let ts: Double?
         switch part {
@@ -186,32 +181,17 @@ func routeLanes(current: PathOption, currentIt: Itinerary, nextIt: Itinerary? = 
                                segments: laneSegments(it, option: p, leg: leg, ridingFirst: riding, from: now),
                                arriveTs: it.arriveTs, parting: part, partsTs: ts, deltaSec: it.arriveTs - currentIt.arriveTs))
     }
-    // the best few, then grouped by station in the order the rider meets them
-    lanes.sort { $0.arriveTs < $1.arriveTs }
-    var perStation: [String: Int] = [:]
-    var kept: [RouteLane] = []
-    for l in lanes where kept.count < RouteLanes.maxLanes {
-        let k = l.parting.station ?? ""
-        if perStation[k, default: 0] >= RouteLanes.perGroup { continue }
-        perStation[k, default: 0] += 1
-        kept.append(l)
+    let weighed = lanes.map { RankedRoute(id: $0.id, arriveTs: $0.arriveTs, expectedSec: 0, affinity: affinity[$0.optionId]) }
+    let byId = Dictionary(uniqueKeysWithValues: lanes.map { ($0.id, $0) })
+    var kept = RouteRank.order(weighed).compactMap { byId[$0.id] }
+    let total = kept.count
+    if kept.count > RouteLanes.maxLanes {
+        let inHand = kept.firstIndex { $0.isCurrent } ?? 0
+        kept = Array(kept.prefix(RouteLanes.maxLanes))
+        if inHand >= RouteLanes.maxLanes { kept[RouteLanes.maxLanes - 1] = cur }
     }
-    var groups: [LaneGroup] = []
-    for l in kept {
-        if let i = groups.firstIndex(where: { $0.station == l.parting.station }) {
-            groups[i].lanes.append(l)
-            if let t = l.partsTs { groups[i].ts = min(groups[i].ts ?? t, t) }
-        } else {
-            groups.append(LaneGroup(station: l.parting.station, ts: l.partsTs, lanes: [l]))
-        }
-    }
-    groups.sort { ($0.ts ?? -.infinity) < ($1.ts ?? -.infinity) }
-    let last = ([cur] + kept).map(\.arriveTs).max() ?? now
+    let last = kept.map(\.arriveTs).max() ?? now
     let end = max(last, now + RouteLanes.minSpanSec)
-    return RouteLanes(current: cur, groups: groups, startTs: now, endTs: (end / 300).rounded(.up) * 300)
-}
-
-private func isToOrigin(_ pos: RiderPosition?) -> Bool {
-    if case .toOrigin? = pos { return true }
-    return false
+    return RouteLanes(current: cur, lanes: kept, typicalId: RouteRank.typical(weighed), moreCount: total - kept.count,
+                      startTs: now, endTs: (end / 300).rounded(.up) * 300)
 }
