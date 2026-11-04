@@ -423,8 +423,12 @@
    }
   },
   "2026-11-03": {
-   "rows": 0,
-   "error": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-11-03_csv.tar.xz"
+   "rows": 234862,
+   "written": {
+    "2026-11-02": 237865,
+    "2026-11-03": 237526,
+    "2026-11-04": 32832
+   }
   }
  }
 }
