@@ -1,8 +1,9 @@
 import XCTest
 @testable import WhichWayCore
 
-/// The home's lanes: every way on one clock, grouped by the station where it leaves the route in hand, weighed from
-/// where the rider is as the trip goes on (on the platform, on the first train, at the change, on the last train).
+/// The home's lanes: every way on one clock in the routes page's order, the route in hand marked where it ranks,
+/// weighed from where the rider is as the trip goes on (on the platform, on the first train, at the change, on the
+/// last train).
 final class RouteLanesTests: XCTestCase {
     private let lagG = PlatformTiming.recordedLag(route: "G"), lagC = PlatformTiming.recordedLag(route: "C"),
                 lagE = PlatformTiming.recordedLag(route: "E")
@@ -64,7 +65,8 @@ final class RouteLanesTests: XCTestCase {
     }
 
     /// The lanes as the home builds them: the route in hand from where the rider is, the ways that go on from there.
-    private func lanes(_ current: PathOption, _ options: [PathOption], at pos: RiderPosition?, now: Double) throws -> RouteLanes {
+    private func lanes(_ current: PathOption, _ options: [PathOption], at pos: RiderPosition?, now: Double,
+                       affinity: [String: Double] = [:]) throws -> RouteLanes {
         let sched = try schedule()
         let here = pos ?? .toOrigin(reachTs: nil)
         let it = try XCTUnwrap(currentItinerary(boards: boards, schedule: sched, option: current, at: here, now: now))
@@ -73,8 +75,7 @@ final class RouteLanesTests: XCTestCase {
                   let i = itineraryFromHere(boards: boards, schedule: sched, option: p, at: here, current: current, now: now) else { return nil }
             return (p, i)
         }
-        let next = pos == nil ? pathTrips(boards: boards, schedule: sched, option: current, now: now, maxN: 3).first { $0.boardTs > it.boardTs + 30 } : nil
-        return routeLanes(current: current, currentIt: it, nextIt: next, alternatives: alts, at: pos, now: now, station: station)
+        return routeLanes(current: current, currentIt: it, alternatives: alts, affinity: affinity, at: pos, now: now, station: station)
     }
 
     func testTheLaneIsTheWaitTheRideTheChangeAndTheNextRideOnTheClock() throws {
@@ -92,29 +93,50 @@ final class RouteLanesTests: XCTestCase {
         XCTAssertEqual(l.endTs.truncatingRemainder(dividingBy: 300), 0, "the clock ends on a whole five minutes")
     }
 
-    func testOnThePlatformTheWaysAreGroupedWhereTheyLeaveTheRoute() throws {
+    func testOnThePlatformTheWaysAreListedByArrivalWithTheRouteInHandWhereItRanks() throws {
         let l = try lanes(change("C"), [change("C"), direct, change("E"), otherLine], at: nil, now: 1000)
-        // the first platform's choices come first (the next G, and the C from its own platform), then Hoyt's
-        XCTAssertEqual(l.groups.map(\.station), [nil, "Hoyt"])
-        let start = l.groups[0].lanes
-        XCTAssertTrue(start.contains { $0.parting == .nextTrain && $0.optionId == "G>C" }, "the same route on the next G")
-        XCTAssertFalse(start.contains { $0.optionId == "C" }, "the C from another station is not a way on from this platform")
-        let hoyt = l.groups[1]
-        XCTAssertEqual(hoyt.ts, 1340 + PlatformTiming.doorsOpenSec, "the choice falls when the G gets to Hoyt")
-        XCTAssertEqual(hoyt.lanes.map(\.optionId), ["G>E", "G"], "earliest arrival first")
-        XCTAssertEqual(hoyt.lanes[0].parting, .otherConnection(station: "Hoyt"))
-        XCTAssertEqual(hoyt.lanes[0].deltaSec, -50, "the E gets in 50 s sooner")
-        XCTAssertEqual(hoyt.lanes[1].parting, .stayOn(station: "Hoyt"))
-        XCTAssertEqual(hoyt.lanes[1].segments.map(\.kind), [.wait, .ride(route: "G", estimated: false)], "staying on: one ride to the end")
+        // the C from another station is not a way on from this platform; the E at Hoyt gets in 50 s sooner
+        XCTAssertEqual(l.lanes.map(\.id), ["G>E", "G>C", "G"], "earliest arrival first, the route in hand not lifted to the top")
+        XCTAssertEqual(l.lanes.filter(\.isCurrent).map(\.id), ["G>C"])
+        XCTAssertNil(l.typicalId, "no habits yet")
+        XCTAssertEqual(l.moreCount, 0)
+        let e = l.lanes[0]
+        XCTAssertEqual(e.parting, .otherConnection(station: "Hoyt"))
+        XCTAssertEqual(e.partsTs, 1340 + PlatformTiming.doorsOpenSec, "it leaves the route in hand when the G gets to Hoyt")
+        XCTAssertEqual(e.deltaSec, -50, "the E gets in 50 s sooner")
+        XCTAssertEqual(l.lanes[2].parting, .stayOn(station: "Hoyt"))
+        XCTAssertEqual(l.lanes[2].segments.map(\.kind), [.wait, .ride(route: "G", estimated: false)], "staying on: one ride to the end")
+    }
+
+    func testChoosingAnotherWayKeepsTheListAndItsOrder() throws {
+        let all = [change("C"), direct, change("E")]
+        let onC = try lanes(change("C"), all, at: nil, now: 1000)
+        let onE = try lanes(change("E"), all, at: nil, now: 1000)
+        XCTAssertEqual(onE.lanes.map(\.id), onC.lanes.map(\.id), "the list stays as it is; only the mark moves")
+        XCTAssertEqual(onE.lanes.filter(\.isCurrent).map(\.id), ["G>E"])
+    }
+
+    func testTheUsualWayComesFirstUnlessAnotherIsAMarginSooner() throws {
+        let all = [change("C"), direct, change("E")]
+        // the C at Hoyt is the rider's usual: 50 s behind the E is no reason to list the E first
+        let usualC = try lanes(change("E"), all, at: nil, now: 1000, affinity: ["G>C": 0.7, "G>E": 0.2, "G": 0.1])
+        XCTAssertEqual(usualC.typicalId, "G>C")
+        XCTAssertEqual(usualC.lanes.map(\.id), ["G>C", "G>E", "G"])
+        // the G direct is the usual, but it gets in 450 s after the E and 400 s after the C: both stay ahead of it
+        let usualG = try lanes(change("C"), all, at: nil, now: 1000, affinity: ["G": 0.8, "G>C": 0.2])
+        XCTAssertEqual(usualG.typicalId, "G")
+        XCTAssertEqual(usualG.lanes.map(\.id), ["G>E", "G>C", "G"])
     }
 
     func testOnTheFirstTrainThePlatformChoicesDropAndTheClockStartsOnTheTrain() throws {
         let l = try lanes(change("C"), [change("C"), direct, change("E")], at: .onTrain(leg: 0, boarded: boardedG), now: 1200)
-        XCTAssertEqual(l.groups.map(\.station), ["Hoyt"], "the next G and the platform's other lines are behind the rider")
         XCTAssertEqual(l.current.segments.first?.kind, .ride(route: "G", estimated: false), "no wait: on the train now")
         XCTAssertEqual(l.current.segments.first?.startTs, 1200)
-        XCTAssertEqual(Set(l.groups[0].lanes.map(\.optionId)), ["G", "G>E"], "stay on, or the E at the same change")
-        for lane in l.groups[0].lanes { XCTAssertEqual(lane.segments.first?.kind, .ride(route: "G", estimated: false)) }
+        XCTAssertEqual(l.lanes.map(\.id), ["G>E", "G>C", "G"], "stay on, or the E at the same change")
+        for lane in l.lanes { XCTAssertEqual(lane.segments.first?.kind, .ride(route: "G", estimated: false)) }
+        let next = try XCTUnwrap(l.nextChoice(after: 1200))
+        XCTAssertEqual(next.station, "Hoyt")
+        XCTAssertEqual(next.ts, 1340 + PlatformTiming.doorsOpenSec)
     }
 
     func testAtTheChangeOnlyTheConnectionsAreLeft() throws {
@@ -122,13 +144,14 @@ final class RouteLanesTests: XCTestCase {
         XCTAssertEqual(l.current.routes, ["C"])
         XCTAssertNil(l.current.changeAt)
         XCTAssertEqual(l.current.segments.map(\.kind), [.wait, .ride(route: "C", estimated: false)])
-        XCTAssertEqual(l.groups.flatMap { $0.lanes.map(\.optionId) }, ["G>E"], "the G stayed on is behind the rider")
-        XCTAssertEqual(l.groups[0].lanes[0].parting, .otherConnection(station: "Hoyt"))
+        XCTAssertEqual(l.lanes.map(\.id), ["G>E", "G>C"], "the G stayed on is behind the rider")
+        XCTAssertEqual(l.lanes[0].parting, .otherConnection(station: "Hoyt"))
     }
 
     func testOnTheLastTrainThereIsOneWayLeft() throws {
         let l = try lanes(change("C"), [change("C"), direct, change("E")], at: .onTrain(leg: 1, boarded: boardedC), now: 1700)
-        XCTAssertTrue(l.groups.isEmpty)
+        XCTAssertEqual(l.lanes.map(\.id), ["G>C"])
+        XCTAssertNil(l.nextChoice(after: 1700))
         XCTAssertEqual(l.current.segments.map(\.kind), [.ride(route: "C", estimated: false)])
         XCTAssertEqual(l.current.arriveTs, 1900 + PlatformTiming.doorsOpenSec)
     }
@@ -142,7 +165,7 @@ final class RouteLanesTests: XCTestCase {
         let it = try XCTUnwrap(pathTrips(boards: boards, schedule: sched, option: change("C"), now: 1000, maxN: 1).first)
         var twin = change("C"); twin.id = "twin"
         let l = routeLanes(current: change("C"), currentIt: it, alternatives: [(twin, it)], at: nil, now: 1000, station: station)
-        XCTAssertTrue(l.groups.isEmpty)
+        XCTAssertEqual(l.lanes.map(\.id), ["G>C"])
     }
 
     func testAConnectionNotInTheFeedsIsTheTimetablesGuess() throws {

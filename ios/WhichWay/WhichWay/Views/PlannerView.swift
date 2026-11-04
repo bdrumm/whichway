@@ -39,8 +39,8 @@ struct PlannerView: View {
     @State private var lastEndNote: String? = nil
     /// The trip the rider's history put on screen for this hour.
     @State private var habitNote: String? = nil
-    /// Seconds each listed route gains in the ranking for being the rider's usual one on this trip (`ranked`).
-    @State private var habitNudgeSec: [String: Double] = [:]
+    /// Per listed route, the share of the rider's trips like this one at this hour that took it (`ranked`, the lanes).
+    @State private var habitAffinity: [String: Double] = [:]
     /// When a station was last picked by hand: the history does not override a choice for two hours.
     @AppStorage("pickedByHandTs") private var pickedByHandTs = 0.0
     @State private var showInsights = false
@@ -284,7 +284,7 @@ struct PlannerView: View {
                                  onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } },
                                  confidence: routeConfidence(p, itinerary: it, outlook: outlook, data: data),
                                  tripControls: AnyView(tripBar(originName: originName.isEmpty ? "the station" : originName)),
-                                 lanes: homeLanes(p, itinerary: it, next: next, now: now, originName: originName))
+                                 lanes: homeLanes(p, itinerary: it, now: now, originName: originName))
                     }
                     .padding(.top, 10)
                 } else if !originId.isEmpty && !destId.isEmpty {
@@ -628,23 +628,23 @@ struct PlannerView: View {
     private var headline: PathOption? { paths.first { $0.id == selectedPath } ?? ranked.first }
 
     /// Routes with a train in the feeds first, by that itinerary's arrival; the rest by expected time. A route
-    /// nobody can board yet never outranks one with a train on its way. The route the rider usually takes on this
-    /// trip at this hour counts up to a minute and a half sooner (`RouteHabits.rankNudgeSec`): it wins a near tie.
+    /// nobody can board yet never outranks one with a train on its way. The rider's usual way on this trip at this
+    /// hour comes first unless another gets in four minutes or more sooner (`RouteRank`); the home's lanes list the
+    /// same order.
     private var ranked: [PathOption] {
-        let nudge = habitNudgeSec
-        return paths.sorted { a, b in
-            let na = nudge[a.id] ?? 0, nb = nudge[b.id] ?? 0
-            switch (a.live, b.live) {
-            case let (x?, y?): return x.arriveTs - na != y.arriveTs - nb ? x.arriveTs - na < y.arriveTs - nb : a.expectedSec < b.expectedSec
-            case (.some, .none): return true
-            case (.none, .some): return false
-            case (.none, .none): return a.expectedSec - na < b.expectedSec - nb
-            }
-        }
+        let byId = Dictionary(paths.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return RouteRank.order(paths.map { RankedRoute(id: $0.id, arriveTs: $0.live?.arriveTs, expectedSec: $0.expectedSec, affinity: habitAffinity[$0.id]) })
+            .compactMap { byId[$0.id] }
+    }
+
+    /// The rider's usual way on this trip at this hour, when the habits single one out.
+    private var typicalPath: String? {
+        RouteRank.typical(paths.map { RankedRoute(id: $0.id, arriveTs: nil, expectedSec: 0, affinity: habitAffinity[$0.id]) })
     }
 
     private var pathList: some View {
         let list = ranked
+        let usual = typicalPath
         let maxSec = max(60, list.map { p in max(p.expectedSec, p.live?.totalSec ?? 0) }.max() ?? 60)
         return VStack(alignment: .leading, spacing: 6) {
             Text(routeStarted ? "Other ways" : "\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
@@ -654,11 +654,11 @@ struct PlannerView: View {
                     // on the paged Go tab a tap takes the route and goes straight home
                     if !classicGo { withAnimation(.easeInOut(duration: 0.3)) { page = 0 } }
                 } label: {
-                    PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec)
+                    PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec, usual: p.id == usual)
                 }
                 .buttonStyle(.plain)
             }
-            Text("Badge: expected extra minutes to your destination against the timetable — the engine's ride for the train to take, a wait beyond the usual headway, extra time at the change and the risk of missing it; without a train in the feeds, the time typically lost at this hour. Bars: expected door-to-door time — wait (grey), ride (line colour), walk at the change (dark). Routes with a train on its way come first, by arrival.")
+            Text("Badge: expected extra minutes to your destination against the timetable — the engine's ride for the train to take, a wait beyond the usual headway, extra time at the change and the risk of missing it; without a train in the feeds, the time typically lost at this hour. Bars: expected door-to-door time — wait (grey), ride (line colour), walk at the change (dark). Routes with a train on its way come first, by arrival; your usual way on this trip leads unless another gets in 4 min or more sooner.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -701,14 +701,17 @@ struct PlannerView: View {
             evaluate(&ps[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour)
         }
         paths = ps
-        habitNudgeSec = Dictionary(uniqueKeysWithValues: ps.map {
-            ($0.id, RouteHabits.rankNudgeSec(HabitStore.shared.routeAffinity($0, origin: originId, dest: destId, now: now)))
-        })
+        habitAffinity = Dictionary(ps.compactMap { p in
+            HabitStore.shared.routeAffinity(p, origin: originId, dest: destId, now: now).map { (p.id, $0) }
+        }, uniquingKeysWith: { a, _ in a })
         var keys = Set<String>()
         for p in ps { for l in p.legs { keys.formUnion(l.keys) } }
         data.setWanted(keys, for: "planner")
-        if selectedPath == nil || !ps.contains(where: { $0.id == selectedPath }) { selectedPath = ps.first?.id }
+        // nothing chosen yet: the best as ranked (the usual way unless another is a margin sooner), once the trains are in
+        let pickBest = selectedPath == nil || !ps.contains(where: { $0.id == selectedPath })
+        if pickBest { selectedPath = ps.first?.id }
         refreshLive()
+        if pickBest, !routeStarted, let best = ranked.first?.id, best != selectedPath { selectedPath = best }
     }
 
     /// The rider's own changes between the same two platforms, where learned, replace the MTA's minimum either
@@ -1546,15 +1549,16 @@ struct PlannerView: View {
     }
 
     /// The home's lanes for the route in hand on `it`; nil with the lanes off or no train to draw.
-    private func homeLanes(_ p: PathOption, itinerary it: Itinerary?, next: Itinerary?, now: Double, originName: String) -> AnyView? {
+    private func homeLanes(_ p: PathOption, itinerary it: Itinerary?, now: Double, originName: String) -> AnyView? {
         guard laneHome, let it, let index = data.index else { return nil }
         let pos = routeStarted ? riderPosition : nil
-        let lanes = routeLanes(current: p, currentIt: it, nextIt: routeStarted ? nil : next, alternatives: laneAlts,
+        let lanes = routeLanes(current: p, currentIt: it, alternatives: laneAlts, affinity: habitAffinity,
                                at: pos, now: now, station: { index.stationOf($0) })
         // the hold dragging on, while the times assume it ends as usual: how much later the route in hand would be in
         let tail = data.scenario == "baseline" ? outlook?.dragsOn.flatMap { $0 > it.arriveTs + 30 ? $0 : nil } : nil
         return AnyView(RouteLanesView(lanes: lanes, now: now, originName: originName, routeStarted: routeStarted, holdTailTs: tail, hold: outlook,
-                                      note: laneNote(p, it), onPick: pickLane, onLineView: { withAnimation { page = 1 } }))
+                                      note: laneNote(p, it), onPick: pickLane, onLineView: { withAnimation { page = 1 } },
+                                      onMore: { withAnimation { page = 2 } }))
     }
 
     /// Under the route in hand: the arrival's likely window and the model's word on it.
@@ -1912,6 +1916,8 @@ struct PathRow: View {
     let option: PathOption
     let selected: Bool
     let maxSec: Double
+    /// The rider's usual way on this trip at this hour (`RouteRank.typical`).
+    var usual = false
 
     private var health: RouteHealth { routeHealth(option, data: data) }
 
@@ -1929,6 +1935,7 @@ struct PathRow: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(option.label).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                if usual { Text("usual").font(.caption2.weight(.semibold)).foregroundStyle(Color.accentColor) }
                 Spacer(minLength: 8)
                 Text(liveText).font(.caption).foregroundStyle(Color.primary.opacity(0.7)).lineLimit(1).layoutPriority(1)
             }
