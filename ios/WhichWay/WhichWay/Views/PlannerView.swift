@@ -1990,41 +1990,69 @@ func journeySegments(_ option: PathOption) -> [BarSeg] {
 }
 
 /// A route on the routes page, outright: its lines and the change, when its next train boards and when it gets in,
-/// and the door-to-door minutes. The chosen one outlined in blue, as on the home.
+/// and the door-to-door minutes. The chosen one outlined in blue. The home's list draws the same card (`WayCard`).
 struct RouteOptionRow: View {
     let option: PathOption
     let selected: Bool
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) {
-                    ForEach(Array(option.legs.enumerated()), id: \.offset) { i, leg in
-                        if i > 0 { Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary) }
-                        RouteBullets(routes: leg.routes, size: 20)
+        WayCard(legs: option.legs.map(\.routes), subtitle: subtitle, minutes: Fmt.minTxt(option.live?.totalSec ?? option.expectedSec),
+                arrive: option.live.map { "in \(Fmt.hhmm($0.arriveTs))" }, selected: selected,
+                spoken: "\(option.label), \(subtitle)")
+    }
+
+    /// "change at Jay St · next 9:31" or "direct · no train in the feeds yet".
+    private var subtitle: String {
+        let way = option.transfer.map { "change at \($0.station)" } ?? "direct"
+        return way + " · " + (option.live.map { "next \(Fmt.hhmm($0.boardTs))" } ?? "no train in the feeds yet")
+    }
+}
+
+/// One way to get there as a card, the same on the routes page and the home (Nov 5): the line icons leg by leg, a
+/// line on the change and the next train, the minutes and the arrival on the right; on the home, the lane's bar under
+/// them. The chosen way outlined in blue.
+struct WayCard<Bar: View>: View {
+    let legs: [[String]]
+    let subtitle: String
+    let minutes: String
+    var arrive: String? = nil
+    let selected: Bool
+    var spoken: String = ""
+    @ViewBuilder var bar: () -> Bar
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(legs.enumerated()), id: \.offset) { i, routes in
+                            if i > 0 { Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary) }
+                            RouteBullets(routes: routes, size: 20)
+                        }
                     }
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(minutes).font(.title3.bold()).monospacedDigit()
+                    if let a = arrive { Text(a).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                }
+                .layoutPriority(1)
             }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(Fmt.minTxt(option.live?.totalSec ?? option.expectedSec)).font(.title3.bold()).monospacedDigit()
-                if let l = option.live { Text("in \(Fmt.hhmm(l.arriveTs))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
-            }
-            .layoutPriority(1)
+            bar()
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 12).fill(selected ? Color.accentColor.opacity(0.08) : Color(.secondarySystemBackground)))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(selected ? "Chosen: " : "")\(option.label), \(subtitle), \(Fmt.minTxt(option.live?.totalSec ?? option.expectedSec))")
+        .accessibilityLabel("\(selected ? "Chosen: " : "")\(spoken), \(minutes)")
     }
+}
 
-    /// "change at Jay St · next 9:31" or "direct · expected".
-    private var subtitle: String {
-        let way = option.transfer.map { "change at \($0.station)" } ?? "direct"
-        return way + " · " + (option.live.map { "next \(Fmt.hhmm($0.boardTs))" } ?? "no train in the feeds yet")
+extension WayCard where Bar == EmptyView {
+    init(legs: [[String]], subtitle: String, minutes: String, arrive: String? = nil, selected: Bool, spoken: String = "") {
+        self.init(legs: legs, subtitle: subtitle, minutes: minutes, arrive: arrive, selected: selected, spoken: spoken, bar: { EmptyView() })
     }
 }
 
