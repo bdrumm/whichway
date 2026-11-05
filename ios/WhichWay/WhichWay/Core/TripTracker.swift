@@ -181,6 +181,37 @@ struct TripTracker {
     /// since. False between trains at the change, where the phase is still `.riding`.
     var onTrain: Bool { phase == .riding && (timeline.rideAssumed || timeline.events.last?.kind == .departed) }
 
+    /// The ride's pull-away was felt but nothing has backed it yet (the feed's trains at the platform, a train the
+    /// rider named, the phone's movement): a claim, not a ride. The trip counts the ride so the sensors keep watching,
+    /// but the rider is not shown on a train until it is backed (`onTrainShown`), and the feed can still take it back.
+    private(set) var boardingPending = false
+
+    /// On a train as the rider is told it: a felt pull-away shows only once backed (Oct 28, Nov 2, Nov 5 at 4 Av-9 St:
+    /// "on the F" three to five minutes before the F, from a train on another track).
+    var onTrainShown: Bool { onTrain && !boardingPending }
+
+    /// The pull-away just felt waits for the feed before the rider is shown riding.
+    mutating func holdBoarding() {
+        guard phase == .riding, timeline.events.last?.kind == .departed, !departedByLocation else { return }
+        boardingPending = true
+    }
+
+    /// The pull-away in hand is backed (the feed saw a train leave the platform then, or stopped contradicting it).
+    mutating func backBoarding() { boardingPending = false }
+
+    /// What the feed says of the pull-away in hand (`DepartureLog.judgePullAway`), at the moment it is felt and at every
+    /// poll after: backed, it shows as a ride; no train's, it is withdrawn there and then (the rider is back on the
+    /// platform, or between trains at the change); not yet known, it waits as boarding. True when withdrawn.
+    @discardableResult
+    mutating func applyPullAwayVerdict(_ v: PullAwayVerdict) -> Bool {
+        guard phase == .riding, timeline.events.last?.kind == .departed else { return false }
+        switch v {
+        case .backed: backBoarding(); return false
+        case .pending: holdBoarding(); return false
+        case .noTrain: withdrawDeparture(); return true
+        }
+    }
+
     /// Riding and walking right now: when the steps began and for how many seconds they have gone on. The
     /// recorder reads it against the feed: steps that begin while the believed train stands at a station are
     /// the rider getting off, even when the detector could not see the train come to rest first.
@@ -340,6 +371,7 @@ struct TripTracker {
                 }
             case .alighted:
                 afterAlight = true
+                boardingPending = false
                 timeline.rideAssumed = false
                 if quietRun >= stopQuietSec { stopsFelt += 1 }    // the stop the rider got off at
                 markAlighting(at: e.ts)
@@ -480,6 +512,7 @@ struct TripTracker {
     /// station waiting, and the next pull-away counts afresh.
     mutating func notOnTrain() {
         guard phase == .riding else { return }
+        boardingPending = false
         if timeline.rideAssumed, timeline.events.last?.kind != .departed {
             // a ride assumed from the timetable: the rider let that train go, so the forecast follows the next one again
             timeline.rideAssumed = false
@@ -560,7 +593,9 @@ struct TripTracker {
     /// change too: the connection named by hand is ridden (Oct 27: a train named at the change was never boarded,
     /// the tracker counting the rider on a train already since the first leg).
     mutating func beginRiding(now: Double, departedTs: Double) {
-        guard phase != .arrived, !onTrain else { return }
+        guard phase != .arrived else { return }
+        boardingPending = false                           // the rider's word backs the ride
+        guard !onTrain else { return }
         var dep = min(departedTs, now)
         // never before the walk-off at the change it follows
         if let last = timeline.events.last, last.kind == .alighted { dep = max(dep, last.ts) }
@@ -680,6 +715,7 @@ struct TripTracker {
         timeline.stopSpans = timeline.stopSpans.filter { $0.ride != k }.map { var sp = $0; if sp.ride > k { sp.ride -= 1 }; return sp }
         timeline.boarded = timeline.boarded.filter { $0.leg != k }.map { var b = $0; if b.leg > k { b.leg -= 1 }; return b }
         timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [depTs]
+        boardingPending = false
         alightedAll = timeline.legsRidden >= timeline.legs && timeline.events.last?.kind == .alighted
         switch timeline.events.last?.kind {
         case .departed?:

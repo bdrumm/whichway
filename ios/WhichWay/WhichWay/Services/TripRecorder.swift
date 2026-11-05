@@ -74,6 +74,8 @@ final class TripRecorder {
     private(set) var motionSeconds = 0
     private(set) var walkMeters = 0.0
     private(set) var rideAssumed = false
+    /// A felt pull-away waiting on the feed ("Boarding?"): the tracker's own word, kept here so the views follow it.
+    private(set) var boardingPending = false
     /// Per leg, what the phone believes about the train the rider boarded, as far as the evidence has got.
     private(set) var beliefs: [LineBelief] = []
     /// Set when the rider walked off at a stop the route did not plan to leave the train at.
@@ -159,6 +161,8 @@ final class TripRecorder {
 
     /// On a train right now (not on the way, at the platform, or between trains at the change).
     var onTrain: Bool { tracker?.onTrain ?? false }
+    /// On a train as the rider is shown it: a felt pull-away the feed has not backed yet shows as boarding, not riding.
+    var onTrainShown: Bool { tracker?.onTrainShown ?? false }
     /// Ten-metre fixes wanted now (`TripTracker.needsPreciseFixes`); with no route in progress, the app's own default.
     func needsPreciseFixes(now: Double) -> Bool { tracker?.needsPreciseFixes(now: now) ?? true }
 
@@ -318,6 +322,7 @@ final class TripRecorder {
         rereadUnmatched()
         rideEvidence(now: now)
         checkDepartureMade(now: now)
+        judgePendingBoarding(now: now)
         checkSamePlatformChange(now: now)
         checkStayedOn(now: now)
     }
@@ -373,23 +378,55 @@ final class TripRecorder {
             guard !handSet.contains(k), !locationRides.contains(k), !departureChecked.contains(k), let dep = departedTs[k], now - dep >= departureCheckSec,
                   let lg = platformLog(k) else { continue }
             if k == leg, t.timeline.events.last?.kind != .departed { continue }
-            guard now - dep <= departureCheckSec + 240 else { departureChecked.insert(k); continue }   // too long ago to say
+            guard now - dep <= departureCheckSec + 240 else {                                          // too long ago to say
+                departureChecked.insert(k)
+                if k == leg { tracker?.backBoarding() }
+                continue
+            }
             guard lg.lastPollTs >= dep + 75 else { continue }                                           // the feed has not been read since
             departureChecked.insert(k)
             let check = lg.departureCheck(at: dep)
-            guard !check.left, check.waiting else { continue }
+            guard !check.left, check.waiting else {
+                if k == leg { tracker?.backBoarding(); publish() }      // the feed does not contradict it: the ride stands
+                continue
+            }
             if k == leg {
-                tracker?.withdrawDeparture()
-                beliefs.removeAll { $0.leg == leg }
-                departureBeliefs[leg] = nil; candidates[leg] = nil; departedTs[leg] = nil
-                departureChecked.remove(leg)
-                seenEvents = tracker?.timeline.events.count ?? 0
-                publish()
+                withdrawPullAway(leg: leg)
             } else {
                 withdrawRide(k)
             }
             return
         }
+    }
+
+    /// The rider says they are on the train while a felt pull-away waits on the feed ("On it" on the Live Activity or in
+    /// the app): the ride is shown, and the feed's departure check no longer takes it back.
+    func confirmBoarding() {
+        guard let t = tracker, t.boardingPending else { return }
+        tracker?.backBoarding()
+        departureChecked.insert(t.timeline.legsRidden)
+        publish()
+    }
+
+    /// The pull-away on the leg in hand was no train's: the rider is back at the platform and the next one counts afresh.
+    private func withdrawPullAway(leg: Int) {
+        tracker?.withdrawDeparture()
+        beliefs.removeAll { $0.leg == leg }
+        departureBeliefs[leg] = nil; candidates[leg] = nil; departedTs[leg] = nil
+        departureChecked.remove(leg)
+        seenEvents = tracker?.timeline.events.count ?? 0
+        publish()
+    }
+
+    /// A felt pull-away still waiting on the feed (`DepartureLog.judgePullAway`), read again at every poll: backed as soon
+    /// as a train at the platform is seen to leave then, withdrawn as soon as the feed shows none could have. The
+    /// departure check above still has the last word after `departureCheckSec`.
+    private func judgePendingBoarding(now: Double) {
+        guard let t = tracker, t.boardingPending, t.onTrain else { return }
+        let leg = t.timeline.legsRidden
+        guard leg < legs.count, let dep = departedTs[leg], let lg = platformLog(leg) else { return }
+        let v = lg.judgePullAway(at: dep, now: now)
+        if v == .noTrain { withdrawPullAway(leg: leg) } else if v == .backed { tracker?.backBoarding(); publish() }
     }
 
     /// Ride `k` was not one (see `TripTracker.withdrawRide`): what the phone made of it goes, every leg after it moves
@@ -556,6 +593,14 @@ final class TripRecorder {
                     return
                 }
                 if t.departedByLocation { locationRides.insert(leg) }
+                // no felt pull-away puts the rider on a train by itself: the feed's trains at the platform back it, show
+                // that none could have made it (withdrawn now, not 100 s on), or leave it waiting, shown as boarding
+                if !handSet.contains(leg), !t.departedByLocation, let lg = platformLog(leg),
+                   tracker?.applyPullAwayVerdict(lg.judgePullAway(at: e.ts, now: lastNow ?? e.ts)) == true {
+                    seenEvents = tracker?.timeline.events.count ?? 0
+                    publish()
+                    return
+                }
                 let plan = legs[leg]
                 let cands = legCandidates(log, leg: leg, departedTs: e.ts)
                 candidates[leg] = cands
@@ -870,6 +915,7 @@ final class TripRecorder {
         motionSeconds = t.timeline.motionSeconds
         walkMeters = t.timeline.walkMeters
         rideAssumed = t.timeline.rideAssumed
+        if boardingPending != t.boardingPending { boardingPending = t.boardingPending }
         endReason = t.timeline.endedBy
     }
 
@@ -887,6 +933,7 @@ final class TripRecorder {
         stayedOn = nil; stayedOnChecked = []; locationRides = []; earlyChange = nil; changedEarly = nil; devNotes = []
         phase = nil
         motionState = .unknown
+        boardingPending = false
         endReason = tl.endedBy
         PersonalModelStore.shared.learn(tl)
         if PersonalModelStore.shared.optIn { HabitStore.shared.learnRide(tl) }

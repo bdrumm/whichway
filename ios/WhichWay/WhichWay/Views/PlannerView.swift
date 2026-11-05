@@ -186,6 +186,7 @@ struct PlannerView: View {
         // off one train and onto the next: the card and the Live Activity follow at once, not at the next poll
         .onChange(of: trip.currentLeg) { _, _ in followRide(); loc.setPrecise(trip.needsPreciseFixes(now: data.now)) }
         .onChange(of: trip.onTrain) { _, _ in followRide() }
+        .onChange(of: trip.boardingPending) { _, _ in if routeStarted { updateActivity() } }
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
         .onChange(of: trip.changedEarly) { _, c in if let c { followEarlyChange(c) } }
@@ -502,7 +503,7 @@ struct PlannerView: View {
                     let here = nearbyPlace()
                     NowCard(option: headline, originId: originId, phase: trip.phase,
                             placeName: here?.name, placeUsualSec: here.flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) },
-                            ride: routeStarted ? rideItinerary : nil, rideLeg: trip.currentLeg, onTrain: trip.onTrain, ridingRoute: ridingRoute, ridePresumed: ridePresumed,
+                            ride: routeStarted ? rideItinerary : nil, rideLeg: trip.currentLeg, onTrain: trip.onTrainShown, ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                             originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "",
                             onInsights: { showInsights = true })
                     tripBar(originName: index.stations[originId]?.name ?? "the station")
@@ -853,7 +854,8 @@ struct PlannerView: View {
         // past the first leg the planner's own itinerary (from the origin) says nothing of the leg in hand
         let it = rideItinerary ?? (routeStarted && leg > 0 ? nil : p.live)
         let l0 = it?.legs.first
-        let onTrain = trip.onTrain
+        // a felt pull-away the feed has not backed yet is not shown as a ride: "Boarding?" until it is
+        let onTrain = trip.onTrainShown
         var status: String
         if let l0 = l0 {
             var bits: [String] = []
@@ -882,6 +884,7 @@ struct PlannerView: View {
             let word = ridePresumed ? "On the \(route), presumably" : "On the \(route)"
             status = status.isEmpty ? word : "\(word) · \(status)"
         }
+        if trip.boardingPending { status = status.isEmpty ? "Boarding?" : "Boarding? · \(status)" }
         let changeAhead = p.legs.count > 1 && leg == 0
         // the stops to the change while one is ahead: the train's progress on the first leg, else the leg's whole ride
         var stopsToChange: Int? = nil
@@ -895,7 +898,7 @@ struct PlannerView: View {
             nextBoardTs: next?.boardTs, nextRoute: next?.legs.first?.train.route,
             changeAt: changeAhead ? p.transfer?.station : nil, changeRoutes: changeAhead ? p.legs[1].routesLabel : nil,
             extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline, routeLabel: p.label,
-            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, stopsToChange: stopsToChange,
+            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed, boarding: trip.boardingPending, stopsToChange: stopsToChange,
             changeHere: trip.earlyChange?.change.text,
             notesMarked: trip.devNotes.pendingMarks.isEmpty ? nil : trip.devNotes.pendingMarks.count)
     }
@@ -1036,15 +1039,16 @@ struct PlannerView: View {
     }
 
     /// The question when the phone is not sure which train the rider boarded, believes they boarded one off the
-    /// plan, or has only assumed the ride: the trains that were at the platform, by line and time, to tap.
+    /// plan, or has only assumed the ride: the trains that were at the platform, by line and time, to tap, and every
+    /// other train at the station behind "Another train" (the sheet). Every candidate is listed: the prompt overrides
+    /// the phone's reading, so its ranking orders the trains and hides none (until Nov 5 it kept one train per line).
     private func boardingPrompt(_ pr: BoardingPrompt) -> some View {
-        var seen = Set<String>()
         let options = pr.candidates.sorted { a, b in
             // the phone's best guess first, then the plan's line, then by time
             if (a.trainId == pr.bestTrainId) != (b.trainId == pr.bestTrainId) { return a.trainId == pr.bestTrainId }
             if (a.key == pr.chosenKey) != (b.key == pr.chosenKey) { return a.key == pr.chosenKey }
             return a.boardTs < b.boardTs
-        }.filter { seen.insert($0.key).inserted }          // one train per line: the likeliest of that line
+        }
         let bestRoute = pr.bestKey.map { String($0.split(separator: "_").first ?? "") }
         let planRoute = pr.chosenKey.map { String($0.split(separator: "_").first ?? "") }
         let question: String = {
@@ -1079,6 +1083,11 @@ struct PlannerView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("I boarded the \(c.route) that left \(Fmt.hhmm(PlatformTiming.pullsAway(c.boardTs, route: c.route)))")
                     }
+                    Button { openOnTrain() } label: {
+                        Text("Another train").font(.caption.weight(.semibold)).padding(.horizontal, 10).padding(.vertical, 10)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
+                    }
+                    .buttonStyle(.plain)
                     Button { trip.notOnTrain() } label: {
                         Text("Not on a train").font(.caption.weight(.semibold)).padding(.horizontal, 10).padding(.vertical, 10)
                             .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
@@ -1176,6 +1185,9 @@ struct PlannerView: View {
         guard let sched = data.schedule, let index = data.index else { return }
         var keys = Set<String>()
         for p in onTrainOptions(sched, index) { for l in p.legs { keys.formUnion(l.keys) } }
+        // every line at the station, both ways, and at the change: the sheet lists every train there, not only the routed ones
+        if let st = onTrainStation(index) { keys.formUnion(st.members.map(\.key)) }
+        if let sel = headline, sel.legs.count > 1, let ch = index.stations[index.stationOf(sel.legs[1].from)] { keys.formUnion(ch.members.map(\.key)) }
         data.setWanted(keys, for: "onTrain")
         onTrainSheet = true
     }
@@ -1201,20 +1213,34 @@ struct PlannerView: View {
         return out
     }
 
-    /// The trains that have left the boarding station toward the destination, on every line with a route from there.
+    /// The station the leg in hand boards at.
+    private func onTrainStation(_ index: StationIndex) -> Station? {
+        guard let sel = headline, sel.legs.indices.contains(onTrainLeg) else { return nil }
+        return index.stations[index.stationOf(sel.legs[onTrainLeg].from)]
+    }
+
+    /// Every train at the boarding station, on every line and both ways, standing, due or gone (`trainsToPick`): the
+    /// sheet is the override for the phone's reading, so nothing is filtered by route, direction or likelihood.
     private func trainsAheadNow() -> [BoardingCandidate] {
-        guard let sched = data.schedule, let index = data.index, let sel = headline, sel.legs.indices.contains(onTrainLeg) else { return [] }
+        guard let sched = data.schedule, let index = data.index, let sel = headline, sel.legs.indices.contains(onTrainLeg),
+              let st = onTrainStation(index) else { return [] }
         let leg = onTrainLeg
-        var boardIdx: [String: Int] = [:], alightIdx: [String: Int] = [:]
-        for p in onTrainOptions(sched, index) {
-            for (k, ix) in p.legs[leg].idx where boardIdx[k] == nil { boardIdx[k] = ix.from; alightIdx[k] = ix.to }
+        var picks = trainsToPick(boards: data.boards, schedule: sched, station: st, planKeys: Set(sel.legs[leg].keys), now: data.now)
+        // where the plan's own line serves the train's alighting stop, say so (the arrival the row shows)
+        for i in picks.indices {
+            if let ix = sel.legs[leg].idx[picks[i].key] {
+                picks[i].alightIdx = ix.to
+                picks[i].alightTs = picks[i].stopTs[ix.to]
+                picks[i].stopsToAlight = ix.to - ix.from
+            }
         }
-        return trainsAhead(boards: data.boards, schedule: sched, boardIdx: boardIdx, alightIdx: alightIdx, onLegKeys: Set(sel.legs[leg].keys), now: data.now)
+        return picks
     }
 
     /// With a change ahead on the leg in hand: the lines the rider could take at it, each with its route.
     private func transferChoices() -> (station: String, choices: [OnTrainSheet.TransferChoice])? {
         guard let sched = data.schedule, let index = data.index, let sel = headline, onTrainLeg == 0, sel.legs.count == 2, let tr = sel.transfer else { return nil }
+        // a one-change route's change: the lines with a route from it first, then every other line stopping there
         var choices: [OnTrainSheet.TransferChoice] = []
         var seen = Set<String>()
         let firstKeys = Set(sel.legs[0].keys)
@@ -1225,6 +1251,12 @@ struct PlannerView: View {
             for k in p.legs[1].keys where !seen.contains(k) {
                 seen.insert(k)
                 choices.append(OnTrainSheet.TransferChoice(key: k, label: p.label))
+            }
+        }
+        if let ch = index.stations[index.stationOf(sel.legs[1].from)] {
+            for m in ch.members.sorted(by: { $0.key < $1.key }) where !seen.contains(m.key) && !firstKeys.contains(m.key) {
+                seen.insert(m.key)
+                choices.append(OnTrainSheet.TransferChoice(key: m.key, label: ""))
             }
         }
         return (tr.station, choices)
@@ -1243,17 +1275,19 @@ struct PlannerView: View {
                 return routeRiding(key, leg: leg, like: sel, adopt: false)?.label
             },
             describe: { c in
+                // which way it runs first: the sheet lists both directions
+                let to = data.schedule?.lines[c.key]?.names.last.map { "to \($0) · " } ?? ""
                 if let t = data.boards[c.key]?.trains.first(where: { $0.id == c.trainId }) {
-                    if let pos = t.position { return "now \(pos.text)" }
-                    return "now approaching \(t.nextName)"
+                    if let pos = t.position { return to + "now \(pos.text)" }
+                    return to + "now approaching \(t.nextName)"
                 }
-                return c.alightTs.map { "gets off at \(Fmt.hhmm($0))" } ?? ""
+                return to + (c.alightTs.map { "gets off at \(Fmt.hhmm($0))" } ?? "")
             },
             transfer: transferChoices(), riding: trip.phase == .riding,
             onPick: { boardTrain($0) },
             onTransfer: { key in
+                preferredKeys[1] = key                           // the rider's line at the change, routed or not
                 guard let sel = headline, let alt = routeRiding(key, leg: 1, like: sel) else { return }
-                preferredKeys[1] = key
                 switchRoute(to: alt)
             },
             onNotOnTrain: { trip.notOnTrain() },
@@ -1283,7 +1317,7 @@ struct PlannerView: View {
     /// on the legs before (on the line the phone settled on, where it did), the same change. Among the listed
     /// routes first; failing that, among more of the planner's options, the best of which joins the list for the
     /// rest of the trip.
-    private func routeRiding(_ key: String, leg: Int, like sel: PathOption, adopt: Bool = true) -> PathOption? {
+    private func routeRiding(_ key: String, leg: Int, like sel: PathOption, adopt: Bool = true, maxOptions: Int = 24) -> PathOption? {
         guard let sched = data.schedule, let index = data.index else { return nil }
         func fits(_ p: PathOption) -> Bool {
             guard p.legs.indices.contains(leg), p.legs[leg].keys.contains(key) else { return false }
@@ -1297,8 +1331,10 @@ struct PlannerView: View {
             return true
         }
         if let p = paths.first(where: fits) { return p }
-        var more = enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 24).filter { p in fits(p) && !paths.contains { $0.id == p.id } }
-        guard !more.isEmpty else { return nil }
+        var more = enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: maxOptions).filter { p in fits(p) && !paths.contains { $0.id == p.id } }
+        // a train the rider named on a line the first options leave out: every route the planner can find, before giving up
+        // (only for a pick: the sheet's labels, drawn on every refresh, stay with the first options)
+        guard !more.isEmpty else { return adopt && maxOptions < 400 ? routeRiding(key, leg: leg, like: sel, adopt: adopt, maxOptions: 400) : nil }
         applyPersonalTransfers(&more)
         let now = data.now, hour = nyHour(now)
         for i in more.indices {
