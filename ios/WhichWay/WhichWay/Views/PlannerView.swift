@@ -184,7 +184,7 @@ struct PlannerView: View {
         withInputs
         .onChange(of: trip.beliefs) { _, _ in followBoarded() }
         // off one train and onto the next: the card and the Live Activity follow at once, not at the next poll
-        .onChange(of: trip.currentLeg) { _, _ in followRide() }
+        .onChange(of: trip.currentLeg) { _, _ in followRide(); loc.setPrecise(trip.needsPreciseFixes(now: data.now)) }
         .onChange(of: trip.onTrain) { _, _ in followRide() }
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
@@ -195,6 +195,7 @@ struct PlannerView: View {
         .onChange(of: trip.devNotes) { _, _ in if routeStarted { updateActivity() } }
         .onChange(of: trip.phase) { _, ph in
             if ph == .arrived { endTrip(by: trip.endReason ?? "arrived") }
+            if ph != nil, ph != .arrived { loc.setPrecise(trip.needsPreciseFixes(now: data.now)) }
             // on a train by the phone's own reading, with no departure to name it: ask which
             if ph == .riding, trip.needsTrainPick, !onTrainSheet { openOnTrain() }
         }
@@ -1832,6 +1833,7 @@ struct PlannerView: View {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 if Task.isCancelled { break }
                 trip.tick(now: data.now)
+                loc.setPrecise(trip.needsPreciseFixes(now: data.now))     // the GPS off under the street, on where a fix decides
             }
         }
     }

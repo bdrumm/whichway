@@ -21,14 +21,26 @@ final class TripActivityService {
         do {
             activity = try Activity.request(attributes: attributes, content: content(state), pushType: nil)
             self.routeId = routeId
+            lastState = state
+            lastSentAt = Date()
         } catch {
             activity = nil
             self.routeId = nil
         }
     }
 
+    /// The last state sent and when: a poll that changes nothing on the lock screen sends nothing, so the widget is not
+    /// woken to draw the same card again. The same state still goes out every `resendSec`, well inside the stale date.
+    private var lastState: TripActivityAttributes.ContentState?
+    private var lastSentAt = Date.distantPast
+    var resendSec = 120.0
+
     func update(_ state: TripActivityAttributes.ContentState) {
         guard let a = activity else { return }
+        let now = Date()
+        if state == lastState, now.timeIntervalSince(lastSentAt) < resendSec { return }
+        lastState = state
+        lastSentAt = now
         let c = content(state)
         Task { await a.update(c) }
     }
@@ -38,6 +50,7 @@ final class TripActivityService {
         guard let a = activity else { return }
         activity = nil
         routeId = nil
+        lastState = nil
         let c = state.map { ActivityContent(state: $0, staleDate: nil) }
         Task { await a.end(c, dismissalPolicy: state == nil ? .immediate : .after(Date().addingTimeInterval(60))) }
     }

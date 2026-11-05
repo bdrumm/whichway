@@ -120,6 +120,9 @@ struct TripTracker {
     var preciseAccuracyM = 65.0           // speeds (the walk, a train pulling away) only from fixes this sure
     var minRideSec = 45.0                 // steps sooner than this after a felt pull-away: it was the stairs or the platform, not a ride
                                           // (the recorder sets it from the schedule: 0.6 of the run to the first stop, 45 s at least)
+    var preciseAfterAlightSec = 300.0     // fixes this long after a walk-off say which stop it was (the recorder's window)
+    var preciseBeforeArrivalSec = 420.0   // and from this long before the expected arrival, the destination check reads them
+    var maxTripSec = 3 * 3600.0           // a route still on this long after it began is one nobody ended: over
 
     private(set) var phase: TripPhase
     private(set) var timeline: TripTimeline
@@ -388,6 +391,30 @@ struct TripTracker {
         }
         checkDestination(now: now)
         if phase != .arrived, let pa = pa, now >= pa + lateGraceSec { finish(now, by: "timeout") }
+        // with no forecast, or one that keeps sliding to the next train while the rider never boards, the line above never
+        // fires, and the route would keep the GPS and the motion sensors on until the phone was opened again
+        if phase != .arrived, now - timeline.startTs >= maxTripSec { finish(now, by: "timeout") }
+    }
+
+    /// Whether the route needs ten-metre location fixes now, or fixes to a hundred metres will do.
+    ///
+    /// Once the rider is at the station, a fix decides only two things: which stop they walked off at (the recorder reads
+    /// fixes for five minutes after an alighting) and whether they have reached the destination (from five minutes
+    /// before the expected arrival). In between, on the platform and under the street, ten-metre fixes keep the GPS
+    /// searching for a sky it cannot see and decide nothing; coarse fixes keep the route alive in the background.
+    /// Precise on the way to the station (the walk's pace, a train pulling away with the rider already on it), while
+    /// walking on a ride (a walk-off about to be called), near the expected arrival, after a walk-off, with no forecast to
+    /// time the arrival by, and without the motion sensors (the fixes are then all the route has).
+    func needsPreciseFixes(now: Double) -> Bool {
+        switch phase {
+        case .approaching, .arrived: return true
+        case .atStation, .riding:
+            guard hasMotion, let pa = timeline.liveArriveTs else { return true }
+            if now >= pa - preciseBeforeArrivalSec { return true }
+            if walking != nil { return true }
+            if let off = timeline.events.last(where: { $0.kind == .alighted }), now - off.ts <= preciseAfterAlightSec { return true }
+            return false
+        }
     }
 
     /// The planner's latest forecast. It stops following once the rider is on the train, or is at the
