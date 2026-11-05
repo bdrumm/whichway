@@ -11,9 +11,8 @@ async function resolveDataBase() {
   const override = new URLSearchParams(location.search).get("data");
   if (override) { DATA = override.endsWith("/") ? override : override + "/"; dataSource = "override"; return; }
   try { const r = await fetch("data/index.json", { cache: "no-cache", method: "HEAD" }); if (r.ok) return; } catch {}
-  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
-  const repo = location.pathname.split("/").filter(Boolean)[0];
-  if (m && repo) { DATA = `https://raw.githubusercontent.com/${m[1]}/${repo}/gh-pages/data/`; dataSource = "gh-pages (raw)"; }
+  // the published site lives in the public user site's gh-pages branch, under whichway/ (the source repository is private)
+  if (/\.github\.io$/i.test(location.hostname)) { DATA = "https://raw.githubusercontent.com/bdrumm/bdrumm.github.io/gh-pages/whichway/data/"; dataSource = "gh-pages (raw)"; }
 }
 const dataReady = resolveDataBase();
 const cache = new Map();

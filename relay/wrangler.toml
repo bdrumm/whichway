@@ -16,6 +16,16 @@ MAX_TRIP_BYTES = "262144"
 MAX_TRACE_BYTES = "4194304"
 # days a trip's start may lie in the past (or hours in the future) and still be taken
 MAX_AGE_DAYS = "120"
+# rider reports: size, and how many days a report queued on a phone may wait before it is no longer news
+MAX_REPORT_BYTES = "4096"
+MAX_REPORT_AGE_DAYS = "2"
+
+# The recent rider reports the map and the pipeline read (GET /v1/reports). Optional: without it reports are only
+# archived to the data repository and the list is empty. Create it once and paste the id it prints:
+#   npx wrangler kv namespace create REPORTS
+# [[kv_namespaces]]
+# binding = "REPORTS"
+# id = "<the id>"
 
 # Per phone and per address: a trip every second is nobody's commute. The bindings are optional; the Worker
 # runs without them (local tests, a plan without the feature).
@@ -28,3 +38,9 @@ simple = { limit = 60, period = 60 }
 name = "RATE_IP"
 namespace_id = "1002"
 simple = { limit = 120, period = 60 }
+
+# Rider reports: ten a minute per phone is plenty for someone on one train.
+[[ratelimits]]
+name = "RATE_REPORT"
+namespace_id = "1003"
+simple = { limit = 10, period = 60 }

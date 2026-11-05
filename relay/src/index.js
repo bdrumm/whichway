@@ -5,11 +5,14 @@
 //
 //   POST /v1/trips    body: one trip observation (JSON, as the app records it)
 //   POST /v1/traces   body: one motion trace (JSON)
+//   POST /v1/reports  body: one rider report (JSON); GET /v1/reports lists the recent ones (src/reports.js)
 //   GET  /v1/health
 //
 // Headers: X-WhichWay-Key (the app key), X-WhichWay-Install (the phone's random install id).
 // Replies: 201 created, 200 updated or unchanged (the same file again is fine), 400 bad body, 401 wrong key,
 // 413 too big, 429 too many, 502 GitHub said no.
+
+import { validateReport, reporterIds, reportPath, publicReport, readRecent, addRecent, isRepeat, listReports, CORS } from "./reports.js";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -142,7 +145,9 @@ export async function handleRequest(request, env, deps = {}) {
     }
     return jsonResponse(200, out);
   }
-  const kind = url.pathname === "/v1/trips" ? "trip" : url.pathname === "/v1/traces" ? "trace" : null;
+  if (url.pathname === "/v1/reports" && request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  if (url.pathname === "/v1/reports" && request.method === "GET") return listReports(env, url, nowSec, request.headers.get("x-whichway-read-key"));
+  const kind = url.pathname === "/v1/trips" ? "trip" : url.pathname === "/v1/traces" ? "trace" : url.pathname === "/v1/reports" ? "report" : null;
   if (!kind) return jsonResponse(404, { ok: false, error: "no such route" });
   if (request.method !== "POST") return jsonResponse(405, { ok: false, error: "POST" });
   if (!env.GITHUB_TOKEN || !env.APP_KEY) return jsonResponse(503, { ok: false, error: "relay not configured" });
@@ -151,7 +156,8 @@ export async function handleRequest(request, env, deps = {}) {
   if (!INSTALL_RE.test(install)) return jsonResponse(400, { ok: false, error: "install id" });
   const ip = request.headers.get("cf-connecting-ip") || "unknown";
   if ((await limited(env.RATE_INSTALL, install)) || (await limited(env.RATE_IP, ip))) return jsonResponse(429, { ok: false, error: "too many" });
-  const max = Number(kind === "trip" ? env.MAX_TRIP_BYTES || 262144 : env.MAX_TRACE_BYTES || 4194304);
+  if (kind === "report" && (await limited(env.RATE_REPORT, install))) return jsonResponse(429, { ok: false, error: "too many" });
+  const max = Number(kind === "trip" ? env.MAX_TRIP_BYTES || 262144 : kind === "report" ? env.MAX_REPORT_BYTES || 4096 : env.MAX_TRACE_BYTES || 4194304);
   const declared = Number(request.headers.get("content-length") || 0);
   if (declared > max) return jsonResponse(413, { ok: false, error: "too big" });
   const bytes = new Uint8Array(await request.arrayBuffer());
@@ -163,6 +169,7 @@ export async function handleRequest(request, env, deps = {}) {
     return jsonResponse(400, { ok: false, error: "not JSON" });
   }
   const maxAgeDays = Number(env.MAX_AGE_DAYS || 120);
+  if (kind === "report") return postReport(env, doc, install, nowSec, fetchImpl);
   const problem = kind === "trip" ? validateTrip(doc, nowSec, maxAgeDays) : validateTrace(doc, nowSec, maxAgeDays);
   if (problem) return jsonResponse(400, { ok: false, error: problem });
   const path = kind === "trip" ? tripPath(doc.createdTs, doc.id) : tracePath(doc.startTs);
@@ -173,6 +180,29 @@ export async function handleRequest(request, env, deps = {}) {
   } catch (e) {
     return jsonResponse(502, { ok: false, error: String(e.message || e) });
   }
+}
+
+/**
+ * A rider report: checked, its install id swapped for the reporter hashes, archived to the data repository and
+ * added to the recent list the map reads. A repeat (the same report again, or the same rider, kind and stop within
+ * two minutes) is answered 200 and written nowhere.
+ */
+async function postReport(env, doc, install, nowSec, fetchImpl) {
+  const problem = validateReport(doc, nowSec, Number(env.MAX_REPORT_AGE_DAYS || 2));
+  if (problem) return jsonResponse(400, { ok: false, error: problem });
+  const { reporter, rider } = await reporterIds(env, install, doc.ts);
+  const pub = publicReport(doc, rider, nowSec);
+  if (isRepeat(await readRecent(env.REPORTS), pub)) return jsonResponse(200, { ok: true, status: "repeat" });
+  const path = reportPath(doc.ts, doc.id);
+  const archived = new TextEncoder().encode(JSON.stringify({ ...pub, reporter, app_build: typeof doc.appBuild === "string" ? doc.appBuild.slice(0, 32) : undefined }));
+  let r;
+  try {
+    r = await writeFile(env, path, archived, `report: ${doc.kind} ${doc.route} ${doc.stop}`, fetchImpl);
+  } catch (e) {
+    return jsonResponse(502, { ok: false, error: String(e.message || e) });
+  }
+  const live = await addRecent(env.REPORTS, { ...pub, reporter }, nowSec).catch(() => "store-failed");
+  return jsonResponse(r.status === "created" ? 201 : 200, { ok: true, ...r, live });
 }
 
 export default {

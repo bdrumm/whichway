@@ -31,8 +31,10 @@ struct TrainFocus: Equatable {
 final class DataService {
     static let publishedBase = "https://bdrumm.github.io/whichway/data/"
     /// The same files straight from the gh-pages branch, which the pipeline writes: the data when the Pages site
-    /// is down or pointed at the wrong branch (Oct 9-10 2026, every phone "offline" for a day).
-    static let rawBase = "https://raw.githubusercontent.com/bdrumm/whichway/gh-pages/data/"
+    /// is down or pointed at the wrong branch (Oct 9-10 2026, every phone "offline" for a day). Since Nov 2026 the
+    /// source repository is private and the site is the public user site bdrumm/bdrumm.github.io (same URL above),
+    /// whose gh-pages branch holds the site under whichway/.
+    static let rawBase = "https://raw.githubusercontent.com/bdrumm/bdrumm.github.io/gh-pages/whichway/data/"
     /// Where the published data lives, in the order to try: the site, the branch behind it, and where the site
     /// lived before the repository was renamed from Test-22222222 on Oct 7 2026 (GitHub Pages does not redirect a
     /// renamed project site). A failure at one is retried on the others, and the session stays where it found the

@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Whichway Atlas</title>
+<!-- the trip relay that lists rider reports (relay/, GET /v1/reports); empty: no reports, #reports=demo shows samples -->
+<meta name="whichway-relay" content="">
 <meta name="description" content="Every NYC subway train live on a map, with line insights, a live insights feed, a trip planner and the reliability research behind Whichway.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -47,6 +49,7 @@
       <label><input type="checkbox" data-layer="labels" checked> Train labels</label>
       <label><input type="checkbox" data-layer="hotspots"> Hold &amp; dwell hotspots</label>
       <label><input type="checkbox" data-layer="incidents" checked> Live incidents</label>
+      <label><input type="checkbox" data-layer="reports" checked> Rider reports</label>
       <div class="kicker">Colour trains by</div>
       <div class="seg" role="radiogroup" aria-label="Colour trains by">
         <button data-color="route" class="on" type="button" role="radio" aria-checked="true">Line</button>

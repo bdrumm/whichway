@@ -42,12 +42,13 @@ northbound 6 trains in the morning peak on 70% of weekdays.
 A browsable app lives in `site/` and is published to GitHub Pages by the
 `pipeline` workflow: **https://bdrumm.github.io/whichway/**
 
-One-time setup (the workflow token cannot do this): in the repository go to
-**Settings → Pages → Build and deployment** and set *Source* to **Deploy from a
-branch**, branch **gh-pages**, folder **/ (root)**, then save. (Choosing
-**GitHub Actions** as the source also works; the workflow publishes both ways.)
-Every run then refreshes the site; the "Verify published site" step in the run
-log reports the HTTP status of the live URL.
+This repository is private. The hourly `pipeline` workflow runs in the public
+user-site repository `bdrumm/bdrumm.github.io`, reads this repository with a
+deploy key, keeps pushing the `data` branch here and publishes the site to that
+repository's `gh-pages` branch under `whichway/`, so the URL above is unchanged.
+The workflow's source and the setup steps are in `deploy/public-site/`. Keep
+GitHub Pages switched off on this repository: a project site would shadow the
+user site's `/whichway/` folder.
 
 | page | what it shows |
 |---|---|

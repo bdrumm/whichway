@@ -19,6 +19,7 @@ struct ContentView: View {
             case .active:
                 data.start(); data.refreshIfStale()
                 Task { await OutlookService.shared.refresh(presets: presets.presets, data: data) }
+                Task { await ReportQueue.shared.flush() }
             case .background: if TripRecorder.shared.phase == nil { data.stop() }     // a route in progress keeps polling
             default: break
             }

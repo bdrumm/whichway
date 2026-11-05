@@ -416,6 +416,15 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         logging.warning("hold analysis failed: %s", exc); hs = {"n": 0, "error": str(exc)[:200]}
     (out_data / "holds.json").write_text(json.dumps(hs, default=str))
     try:
+        from mta_delay_insights.analysis import rider_reports
+        rr = rider_reports.load_reports(Path(data_dir) / "reports" / "reports.jsonl")
+        net = context.get("_network_arrivals")
+        allarr = pd.concat([store.arrivals(), net if net is not None else pd.DataFrame()], ignore_index=True)
+        fb = rider_reports.feedback(rr, allarr, context.get("_holds"), context.get("_eta_samples"), now.timestamp())
+    except Exception as exc:
+        logging.warning("rider feedback failed: %s", exc); fb = {"n": 0, "error": str(exc)[:200]}
+    (out_data / "rider_feedback.json").write_text(json.dumps(fb, default=str))
+    try:
         from mta_delay_insights.analysis.segments import segment_profile
         sp = segment_profile(context.get("_segment_runs"), static)
     except Exception as exc:

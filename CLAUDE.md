@@ -11,7 +11,7 @@ synthetic data. Station names already in code comments are fine; a trip's own ti
 
 The lake (`data/lake/`, `make lake`) holds only what the public gatherers produced; trips stay out of it. A model
 bundle (`make bundle`) must pass `pipeline.bundle check` (no rider legs, install ids or trip records) before
-`make bundle-publish` pushes it to the public `models` branch; publish only when the owner asks. The design is in
+`make bundle-publish` pushes it to the `models` branch (read by the hourly pipeline, whose output is public); publish only when the owner asks. The design is in
 `docs/LOCAL_MODELING.md`.
 
 ## Transfers and trip sensing

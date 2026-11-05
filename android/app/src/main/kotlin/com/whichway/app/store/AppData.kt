@@ -112,7 +112,7 @@ class AppData(app: Application) : AndroidViewModel(app) {
          * is retried on the others, and the one that answers is used for the session. iOS keeps the same kind of
          * list (DataService.publishedBases) for the repository rename.
          */
-        val PUBLISHED_BASES = listOf(PUBLISHED_BASE, "https://raw.githubusercontent.com/bdrumm/whichway/gh-pages/data/", "https://bdrumm.github.io/Test-22222222/data/")
+        val PUBLISHED_BASES = listOf(PUBLISHED_BASE, "https://raw.githubusercontent.com/bdrumm/bdrumm.github.io/gh-pages/whichway/data/", "https://bdrumm.github.io/Test-22222222/data/")
     }
 
     class HttpStatus(val code: Int) : IOException("HTTP $code")
