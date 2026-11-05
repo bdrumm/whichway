@@ -27,127 +27,68 @@ struct RouteLanesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Every way, by the clock").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Text("\(lanes.lanes.count) way\(lanes.lanes.count == 1 ? "" : "s") to get there").font(.headline)
                 Spacer(minLength: 8)
                 Button(action: onLineView) {
                     HStack(spacing: 3) { Text("Line view"); Image(systemName: "chevron.right").font(.caption2) }
                 }
                 .font(.footnote).buttonStyle(.plain).foregroundStyle(Color.accentColor)
             }
-            if routeStarted, let c = lanes.nextChoice(after: now) {
-                Text("Next choice: \(c.station) in \(Fmt.mmss(c.ts - now))").font(.footnote.weight(.semibold)).foregroundStyle(Color.accentColor)
-                    .lineLimit(1)
-            }
             let marks = Array(Set(lanes.lanes.compactMap(\.partsTs))).sorted()
             ForEach(lanes.lanes) { l in row(l, marks: marks) }
-            if lanes.lanes.count == 1 {
-                Text(routeStarted ? "No other way from here: no change left to make differently." : "The only way with at most one change.")
-                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
-            }
             if let h = hold { HoldOutlookCard(outlook: h).padding(.top, 6) }
-            Button(action: onMore) {
-                HStack(spacing: 3) {
-                    Text("All routes")
-                    Image(systemName: "chevron.right").font(.caption2)
-                }
-            }
-            .font(.footnote).buttonStyle(.plain).foregroundStyle(Color.accentColor).padding(.horizontal, 8).padding(.top, 4)
         }
     }
 
-    /// The route in hand outlined in blue, its note inside the outline; any other way a tap to take it.
+    /// Each way as the routes page's card (Nov 5: "the ways to get there items in the main page"), the lane's bar
+    /// under it; the route in hand outlined, any other a tap to take it, one behind the rider faded and not takeable.
     @ViewBuilder private func row(_ l: RouteLane, marks: [Double]) -> some View {
+        let card = WayCard(legs: l.routes.map { [$0] }, subtitle: subtitle(l), minutes: minutes(l), arrive: arrive(l), selected: l.isCurrent,
+                           spoken: spoken(l)) {
+            if !l.segments.isEmpty {
+                LaneBar(segments: l.segments, start: lanes.startTs, end: lanes.endTs, bold: l.isCurrent,
+                        sharedUntil: l.isCurrent ? nil : l.partsTs, marks: l.isCurrent ? marks : [],
+                        holdTailTs: l.isCurrent ? holdTailTs : nil, arriveTs: l.arriveTs)
+            }
+        }
         if l.isCurrent {
-            VStack(alignment: .leading, spacing: 2) {
-                LaneRow(lane: l, text: text(l), start: lanes.startTs, end: lanes.endTs, marks: marks, holdTailTs: holdTailTs)
-                if let n = note { Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-            }
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.08)))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 2))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Chosen: \(spoken(l)), in \(Fmt.hhmm(l.arriveTs))")
+            card
         } else if l.isBehind {
-            LaneRow(lane: l, text: text(l), start: lanes.startTs, end: lanes.endTs)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .opacity(0.45)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(l.routes.joined(separator: " to ")), already behind you")
+            card.opacity(0.45)
         } else {
-            Button { onPick(l.optionId) } label: {
-                LaneRow(lane: l, text: text(l), start: lanes.startTs, end: lanes.endTs, sharedUntil: l.partsTs)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(spoken(l)), in \(Fmt.hhmm(l.arriveTs))")
+            Button { onPick(l.optionId) } label: { card }.buttonStyle(.plain)
         }
     }
 
-    /// Beside the line icons (Nov 5: no line label after them): nothing, unless another listed way shows the very same
-    /// icons (the R and the A at Jay St, or at Chambers St), when the change's name tells the two apart.
-    private func text(_ l: RouteLane) -> String {
-        let twins = lanes.lanes.filter { $0.routes == l.routes }.count > 1
-        return twins ? (l.changeAt.map { "at \($0)" } ?? "direct") : ""
+    /// "change at Jay St · next 9:31", as the routes page says it; on the train, "on the train"; a way behind the
+    /// rider, "behind you"; with no train in the feeds, as the routes page.
+    private func subtitle(_ l: RouteLane) -> String {
+        let way = l.changeAt.map { "change at \($0)" } ?? "direct"
+        if l.isBehind { return way + " · behind you" }
+        if l.estimated { return way + " · no train in the feeds yet" }
+        let board = l.segments.first { if case .ride = $0.kind { return true }; return false }?.startTs
+        if let b = board, b > now + 1 { return way + " · next \(Fmt.hhmm(b))" }
+        return way + " · on the train"
     }
 
-    /// For VoiceOver: the lines and the change, as the row no longer says them.
+    /// The door-to-door minutes from now, as the routes page's; a way behind the rider, a dash.
+    private func minutes(_ l: RouteLane) -> String {
+        l.isBehind ? "—" : Fmt.minTxt(max(0, l.arriveTs - now))
+    }
+
+    private func arrive(_ l: RouteLane) -> String? {
+        if l.isBehind { return nil }
+        return "in " + (l.estimated ? "~" : "") + Fmt.hhmm(l.arriveTs)
+    }
+
+    /// For VoiceOver: the lines and the change.
     private func spoken(_ l: RouteLane) -> String {
-        l.routes.joined(separator: " to ") + (l.changeAt.map { ", change at \($0)" } ?? ", direct")
-    }
-}
-
-/// One lane: its lines, a word, its arrival and the difference from the route in hand; the bar under them.
-private struct LaneRow: View {
-    let lane: RouteLane
-    let text: String
-    let start: Double
-    let end: Double
-    var marks: [Double] = []
-    var sharedUntil: Double? = nil
-    var holdTailTs: Double? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                HStack(spacing: 2) { ForEach(Array(lane.routes.enumerated()), id: \.offset) { _, r in RouteBullet(route: r, size: 17) } }
-                if !text.isEmpty {
-                    Text(text).font(.footnote).foregroundStyle(Color.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 6)
-                // a fixed column on the right: the arrival right-aligned, then the difference in a slot of its own
-                // (empty when there is none), so every row's time lines up whatever the difference beside it
-                Text(timeText).font(.subheadline.weight(.bold)).monospacedDigit()
-                    .foregroundStyle(lane.isCurrent ? Color.accentColor : (lane.estimated ? Color.secondary : Color.primary))
-                    .lineLimit(1).fixedSize()
-                    .frame(minWidth: 52, alignment: .trailing)
-                Text(deltaText).font(.caption2.weight(.medium)).monospacedDigit()
-                    .foregroundStyle(lane.deltaSec < 0 ? Color.green : Color.secondary)
-                    .lineLimit(1)
-                    .frame(width: 26, alignment: .leading)
-            }
-            LaneBar(segments: lane.segments, start: start, end: end, bold: lane.isCurrent, sharedUntil: sharedUntil, marks: marks, holdTailTs: holdTailTs,
-                    arriveTs: lane.arriveTs)
-        }
-        .padding(.vertical, 3)
-    }
-
-    /// The arrival; a way with no train in the feeds on its expected time, "~"; one behind the rider, a dash.
-    private var timeText: String {
-        if lane.isBehind { return "—" }
-        return (lane.estimated ? "~" : "") + Fmt.hhmm(lane.arriveTs)
-    }
-
-    /// The difference from the route in hand, in whole minutes; blank for the route in hand, one behind, or under 30 s.
-    private var deltaText: String {
-        guard !lane.isCurrent, !lane.isBehind, abs(lane.deltaSec) >= 30 else { return "" }
-        let m = Int((abs(lane.deltaSec) / 60).rounded())
-        return m == 0 ? "" : "\(lane.deltaSec > 0 ? "+" : "−")\(m)"
+        l.routes.joined(separator: " to ") + (l.changeAt.map { ", change at \($0)" } ?? ", direct") + (l.isBehind ? ", already behind you" : "")
     }
 }
 
 /// A lane's stretches drawn to the clock: waits faint, rides in the line's colour (a guess paler), changes dotted.
-private struct LaneBar: View {
+struct LaneBar: View {
     let segments: [LaneSegment]
     let start: Double
     let end: Double
