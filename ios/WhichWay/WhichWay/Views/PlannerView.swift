@@ -81,6 +81,10 @@ struct PlannerView: View {
     @AppStorage("laneHome") private var laneHome = true
     /// The home lanes' other ways, each with its itinerary from where the rider is (`updateLaneAlternatives`).
     @State private var laneAlts: [(PathOption, Itinerary)] = []
+    /// The listed routes the lanes cannot time (no train in the feeds), and on the way the ones behind the rider: the
+    /// home lists every route all the same (Nov 5: never cut down by the route in hand or the one detected).
+    @State private var laneUnplaced: [PathOption] = []
+    @State private var laneBehind: [PathOption] = []
     /// The order the routes page and the home's lanes list the routes in: ranked once the trains are in, then held.
     @State private var listOrder = SteadyOrder()
     /// The paged Go tab's page: home, the line view, the routes.
@@ -647,7 +651,6 @@ struct PlannerView: View {
     /// The routes page: the routes themselves, one row each, in the held order; a tap takes one and goes home.
     private var routeOptionList: some View {
         let list = listed
-        let usual = typicalPath
         return VStack(alignment: .leading, spacing: 6) {
             Text(routeStarted ? "Other ways" : "\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
             ForEach(list, id: \.id) { p in
@@ -655,7 +658,7 @@ struct PlannerView: View {
                     selectedPath = p.id
                     withAnimation(.easeInOut(duration: 0.3)) { page = 0 }
                 } label: {
-                    RouteOptionRow(option: p, selected: p.id == selectedPath, usual: p.id == usual)
+                    RouteOptionRow(option: p, selected: p.id == selectedPath)
                 }
                 .buttonStyle(.plain)
             }
@@ -1554,32 +1557,42 @@ struct PlannerView: View {
 
     // MARK: - the home's lanes
 
-    /// The other ways for the home's lanes, each timed from where the rider is: before the route starts, every listed
-    /// way on its next train from the first platform; on the way, the ways that go on from where the rider is
-    /// (`continuesFrom`), on the trains in the feeds (`itineraryFromHere`), so a station behind them drops out.
+    /// The other ways for the home's lanes, every listed route whatever the route in hand or the one detected (Nov 5):
+    /// before the route starts each on its next train from the first platform; on the way, the ways that go on from
+    /// where the rider is (`continuesFrom`) timed from here (`itineraryFromHere`), the rest listed as behind the rider.
+    /// A way with no train in the feeds is listed on its expected time.
     private func updateLaneAlternatives(_ sched: ClientSchedule, now: Double) {
-        guard laneHome, !classicGo, let sel = headline, let index = data.index else { laneAlts = []; return }
-        guard routeStarted else {
-            laneAlts = paths.compactMap { p in p.id == sel.id ? nil : p.live.map { (p, $0) } }
+        guard laneHome, !classicGo, let sel = headline, let index = data.index else { laneAlts = []; laneUnplaced = []; laneBehind = []; return }
+        let others = paths.filter { $0.id != sel.id }
+        guard routeStarted, let pos = riderPosition else {
+            laneAlts = others.compactMap { p in p.live.map { (p, $0) } }
+            laneUnplaced = others.filter { $0.live == nil }
+            laneBehind = []
             return
         }
-        guard let pos = riderPosition else { laneAlts = []; return }
         let station: (String) -> String = { index.stationOf($0) }
         let listed = Set(paths.map(\.id))
-        let ways = (paths + (rerouteMore ?? []).filter { !listed.contains($0.id) })
-            .filter { $0.id != sel.id && continuesFrom($0, current: sel, at: pos, station: station) }
-        // the same few the faster-route check has the feeds of
-        let watched = ways.sorted { $0.expectedSec < $1.expectedSec }.prefix(6)
-        laneAlts = watched.compactMap { p in
-            itineraryFromHere(boards: data.predictedBoards, schedule: sched, option: p, at: pos, current: sel, now: now).map { (p, $0) }
+        // the planner's further ways (a line boarded off the plan) join the list only where they go on from here
+        let extra = (rerouteMore ?? []).filter { !listed.contains($0.id) && $0.id != sel.id && continuesFrom($0, current: sel, at: pos, station: station) }
+        var alts: [(PathOption, Itinerary)] = [], unplaced: [PathOption] = [], behind: [PathOption] = []
+        for p in others + extra {
+            if !continuesFrom(p, current: sel, at: pos, station: station) {
+                behind.append(p)
+            } else if let it = itineraryFromHere(boards: data.predictedBoards, schedule: sched, option: p, at: pos, current: sel, now: now) {
+                alts.append((p, it))
+            } else {
+                unplaced.append(p)
+            }
         }
+        laneAlts = alts; laneUnplaced = unplaced; laneBehind = behind
     }
 
     /// The home's lanes for the route in hand on `it`; nil with the lanes off or no train to draw.
     private func homeLanes(_ p: PathOption, itinerary it: Itinerary?, now: Double, originName: String) -> AnyView? {
         guard laneHome, let it, let index = data.index else { return nil }
         let pos = routeStarted ? riderPosition : nil
-        let lanes = routeLanes(current: p, currentIt: it, alternatives: laneAlts, affinity: habitAffinity, order: listOrder,
+        let lanes = routeLanes(current: p, currentIt: it, alternatives: laneAlts, unplaced: laneUnplaced, behind: laneBehind,
+                               affinity: habitAffinity, order: listOrder,
                                at: pos, now: now, station: { index.stationOf($0) })
         // the hold dragging on, while the times assume it ends as usual: how much later the route in hand would be in
         let tail = data.scenario == "baseline" ? outlook?.dragsOn.flatMap { $0 > it.arriveTs + 30 ? $0 : nil } : nil
@@ -1943,7 +1956,6 @@ func journeySegments(_ option: PathOption) -> [BarSeg] {
 struct RouteOptionRow: View {
     let option: PathOption
     let selected: Bool
-    var usual = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -1953,7 +1965,6 @@ struct RouteOptionRow: View {
                         if i > 0 { Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary) }
                         RouteBullets(routes: leg.routes, size: 20)
                     }
-                    if usual { Text("usual").font(.caption2.weight(.semibold)).foregroundStyle(Color.accentColor).padding(.leading, 4) }
                 }
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }

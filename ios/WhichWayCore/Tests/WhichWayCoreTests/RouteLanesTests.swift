@@ -70,12 +70,22 @@ final class RouteLanesTests: XCTestCase {
         let sched = try schedule()
         let here = pos ?? .toOrigin(reachTs: nil)
         let it = try XCTUnwrap(currentItinerary(boards: boards, schedule: sched, option: current, at: here, now: now))
-        let alts: [(PathOption, Itinerary)] = options.compactMap { p in
-            guard p.id != current.id, continuesFrom(p, current: current, at: here, station: station),
-                  let i = itineraryFromHere(boards: boards, schedule: sched, option: p, at: here, current: current, now: now) else { return nil }
-            return (p, i)
+        // as the home builds them: every route listed; before the route starts each on its next train, on the way the
+        // ones that go on from here timed from here, the rest behind the rider; with no train to time it, a guess
+        var alts: [(PathOption, Itinerary)] = [], unplaced: [PathOption] = [], behind: [PathOption] = []
+        for p in options where p.id != current.id {
+            if pos == nil {
+                if let i = pathTrips(boards: boards, schedule: sched, option: p, now: now, maxN: 1).first { alts.append((p, i)) } else { unplaced.append(p) }
+            } else if !continuesFrom(p, current: current, at: here, station: station) {
+                behind.append(p)
+            } else if let i = itineraryFromHere(boards: boards, schedule: sched, option: p, at: here, current: current, now: now) {
+                alts.append((p, i))
+            } else {
+                unplaced.append(p)
+            }
         }
-        return routeLanes(current: current, currentIt: it, alternatives: alts, affinity: affinity, order: order, at: pos, now: now, station: station)
+        return routeLanes(current: current, currentIt: it, alternatives: alts, unplaced: unplaced, behind: behind, affinity: affinity, order: order,
+                          at: pos, now: now, station: station)
     }
 
     func testTheLaneIsTheWaitTheRideTheChangeAndTheNextRideOnTheClock() throws {
@@ -96,10 +106,10 @@ final class RouteLanesTests: XCTestCase {
     func testOnThePlatformTheWaysAreListedByArrivalWithTheRouteInHandWhereItRanks() throws {
         let l = try lanes(change("C"), [change("C"), direct, change("E"), otherLine], at: nil, now: 1000)
         // the C from another station is not a way on from this platform; the E at Hoyt gets in 50 s sooner
-        XCTAssertEqual(l.lanes.map(\.id), ["G>E", "G>C", "G"], "earliest arrival first, the route in hand not lifted to the top")
+        XCTAssertEqual(l.lanes.map(\.id), ["G>E", "G>C", "G", "C"], "earliest arrival first, the route in hand not lifted to the top")
+        XCTAssertTrue(l.lanes[3].estimated, "the C with no train at its platform is still listed, on its expected time")
         XCTAssertEqual(l.lanes.filter(\.isCurrent).map(\.id), ["G>C"])
         XCTAssertNil(l.typicalId, "no habits yet")
-        XCTAssertEqual(l.moreCount, 0)
         let e = l.lanes[0]
         XCTAssertEqual(e.parting, .otherConnection(station: "Hoyt"))
         XCTAssertEqual(e.partsTs, 1340 + PlatformTiming.doorsOpenSec, "it leaves the route in hand when the G gets to Hoyt")
@@ -152,33 +162,37 @@ final class RouteLanesTests: XCTestCase {
         XCTAssertEqual(next.ts, 1340 + PlatformTiming.doorsOpenSec)
     }
 
-    func testAtTheChangeOnlyTheConnectionsAreLeft() throws {
+    func testAtTheChangeEveryWayIsStillListedTheOnesBehindMarked() throws {
         let l = try lanes(change("C"), [change("C"), direct, change("E")], at: .atChange(leg: 1), now: 1400)
         XCTAssertEqual(l.current.routes, ["C"])
         XCTAssertNil(l.current.changeAt)
         XCTAssertEqual(l.current.segments.map(\.kind), [.wait, .ride(route: "C", estimated: false)])
-        XCTAssertEqual(l.lanes.map(\.id), ["G>E", "G>C"], "the G stayed on is behind the rider")
+        XCTAssertEqual(l.lanes.map(\.id), ["G>E", "G>C", "G"], "the G stayed on is behind the rider, and still listed")
+        XCTAssertEqual(l.lanes[2].parting, .behind)
+        XCTAssertEqual(l.lanes[2].routes, ["G"])
         XCTAssertEqual(l.lanes[0].parting, .otherConnection(station: "Hoyt"))
     }
 
-    func testOnTheLastTrainThereIsOneWayLeft() throws {
+    func testOnTheLastTrainTheListStaysWhole() throws {
         let l = try lanes(change("C"), [change("C"), direct, change("E")], at: .onTrain(leg: 1, boarded: boardedC), now: 1700)
-        XCTAssertEqual(l.lanes.map(\.id), ["G>C"])
+        XCTAssertEqual(l.lanes.map(\.id), ["G>C", "G", "G>E"], "not cut down to the train the rider is on")
+        XCTAssertEqual(l.lanes.filter(\.isBehind).map(\.id), ["G", "G>E"])
+        XCTAssertEqual(l.lanes.first { $0.id == "G>E" }?.routes, ["G", "E"], "a way behind is shown whole")
         XCTAssertNil(l.nextChoice(after: 1700))
         XCTAssertEqual(l.current.segments.map(\.kind), [.ride(route: "C", estimated: false)])
         XCTAssertEqual(l.current.arriveTs, 1900 + PlatformTiming.doorsOpenSec)
     }
 
-    func testGettingOffSoonerAndTheSameTrainsAreNotTwoWays() throws {
+    func testGettingOffSoonerAndAWayOnTheSameTrainsIsStillListed() throws {
         // the G direct in hand: the change at Hoyt leaves it sooner
         XCTAssertEqual(laneParting(change("C"), from: direct, at: nil, station: station), .offEarlier(station: "Hoyt"))
         XCTAssertEqual(laneParting(otherLine, from: direct, at: nil, station: station), .atStart)
-        // a way on the very trains of the route in hand is the same journey
+        // a way on the very trains of the route in hand is listed too: the list is never cut by the route in hand
         let sched = try schedule()
         let it = try XCTUnwrap(pathTrips(boards: boards, schedule: sched, option: change("C"), now: 1000, maxN: 1).first)
         var twin = change("C"); twin.id = "twin"
         let l = routeLanes(current: change("C"), currentIt: it, alternatives: [(twin, it)], at: nil, now: 1000, station: station)
-        XCTAssertEqual(l.lanes.map(\.id), ["G>C"])
+        XCTAssertEqual(l.lanes.map(\.id), ["G>C", "twin"])
     }
 
     func testAConnectionNotInTheFeedsIsTheTimetablesGuess() throws {
