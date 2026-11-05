@@ -378,18 +378,11 @@ final class TripRecorder {
             guard !handSet.contains(k), !locationRides.contains(k), !departureChecked.contains(k), let dep = departedTs[k], now - dep >= departureCheckSec,
                   let lg = platformLog(k) else { continue }
             if k == leg, t.timeline.events.last?.kind != .departed { continue }
-            guard now - dep <= departureCheckSec + 240 else {                                          // too long ago to say
-                departureChecked.insert(k)
-                if k == leg { tracker?.backBoarding() }
-                continue
-            }
+            guard now - dep <= departureCheckSec + 240 else { departureChecked.insert(k); continue }   // too long ago to say
             guard lg.lastPollTs >= dep + 75 else { continue }                                           // the feed has not been read since
             departureChecked.insert(k)
             let check = lg.departureCheck(at: dep)
-            guard !check.left, check.waiting else {
-                if k == leg { tracker?.backBoarding(); publish() }      // the feed does not contradict it: the ride stands
-                continue
-            }
+            guard !check.left, check.waiting else { continue }
             if k == leg {
                 withdrawPullAway(leg: leg)
             } else {
@@ -426,7 +419,12 @@ final class TripRecorder {
         let leg = t.timeline.legsRidden
         guard leg < legs.count, let dep = departedTs[leg], let lg = platformLog(leg) else { return }
         let v = lg.judgePullAway(at: dep, now: now)
-        if v == .noTrain { withdrawPullAway(leg: leg) } else if v == .backed { tracker?.backBoarding(); publish() }
+        if v == .noTrain { withdrawPullAway(leg: leg); return }
+        // backed by the feed (a train of the leg's lines left then), or by the ride itself: the stops felt on the way, the
+        // walk-off or a fix matching the train the phone believes in. Another line's train leaving the platform is not
+        // enough (Nov 5 at 4 Av-9 St: the G left three minutes before the rider's F), and neither is the feed falling quiet.
+        let rideSays = belief(leg: leg)?.evidence.contains { ["ride", "stops", "alighting", "location"].contains($0) } ?? false
+        if v == .backed || rideSays { tracker?.backBoarding(); publish() }
     }
 
     /// Ride `k` was not one (see `TripTracker.withdrawRide`): what the phone made of it goes, every leg after it moves

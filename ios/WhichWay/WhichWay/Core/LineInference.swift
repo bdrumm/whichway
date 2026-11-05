@@ -266,9 +266,12 @@ struct DepartureLog: Equatable {
     /// still listed within `windowSec` before the pull-away and gone from the list within the feed's lag after it left
     /// then too (Oct 27 at W 4 St: the F the rider boarded at 16:58:29 had a time there two minutes earlier, the pull-away
     /// was withdrawn as no train's, and the next F, seven minutes behind, was taken for the ride).
-    func departureCheck(at ts: Double, windowSec: Double = 120) -> (left: Bool, waiting: Bool) {
+    ///
+    /// `onLegOnly` counts only the leg's own lines as having left (the F, not the G beside it), for the boarding gate.
+    func departureCheck(at ts: Double, windowSec: Double = 120, onLegOnly: Bool = false) -> (left: Bool, waiting: Bool) {
         var left = false, waiting = false
         for e in entries.values {
+            if onLegOnly, !e.onLeg { if (e.progressIdx ?? e.boardIdx) <= e.boardIdx { waiting = true }; continue }
             let passed = (e.progressIdx ?? e.boardIdx) > e.boardIdx
             if passed, e.samePlatform, abs(PlatformTiming.pullsAway(e.boardTs, route: e.route) - ts) <= windowSec { left = true }
             if passed, e.samePlatform, let l = e.listedTs, let p = e.passedTs, l >= ts - windowSec, p >= ts - 30,

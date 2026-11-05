@@ -35,8 +35,9 @@ final class BoardingGateTests: XCTestCase {
         var log = DepartureLog()
         log.observe(trains: [train("f1", key: "F_N", points: [(3, 140), (4, 260)])], key: "F_N", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -10)
         XCTAssertEqual(log.judgePullAway(at: 0, now: 0), .noTrain)
-        // with the feed quiet for minutes, nothing can be said
-        XCTAssertEqual(log.judgePullAway(at: 0, now: 300), .pending)
+        // with the feed quiet for minutes there is nothing to check it against: the sensors stand alone
+        XCTAssertEqual(log.judgePullAway(at: 0, now: 300), .unchecked)
+        XCTAssertEqual(DepartureLog().judgePullAway(at: 0, now: 0), .unchecked, "no feed at the platform at all")
         // a train on another platform of the station is not one the rider could be on, and does not keep the claim open
         log.observe(trains: [train("r1", key: "R_N", points: [(4, 20), (5, 140)])], key: "R_N", boardIdx: 4, span: nil, onLeg: false, now: -10, samePlatform: false)
         XCTAssertEqual(log.judgePullAway(at: 0, now: 0), .noTrain)
@@ -65,6 +66,24 @@ final class BoardingGateTests: XCTestCase {
         log.observe(trains: [train("f1", key: "F_N", points: [(4, -240), (5, -120)])], key: "F_N", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -30)
         log.observe(trains: [train("f2", key: "F_N", points: [(4, 500)])], key: "F_N", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -30)
         XCTAssertEqual(log.judgePullAway(at: 0, now: 0), .pending)
+    }
+
+    /// Nov 5 at 4 Av-9 St: the G left the rider's own platform minutes before their F. Another line's train
+    /// leaving backs nothing: the claim waits for the rider's word or the ride's own evidence.
+    func testAnotherLinesTrainLeavingThePlatformDoesNotBackThePullAway() {
+        var log = DepartureLog()
+        log.observe(trains: [train("g1", key: "G_N", points: [(4, -40), (5, 100)], standingAt: 4)], key: "G_N", boardIdx: 4, span: nil, onLeg: false, now: -20)
+        log.observe(trains: [train("f1", key: "F_N", points: [(4, 240), (5, 360)])], key: "F_N", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -20)
+        XCTAssertEqual(log.judgePullAway(at: 0, now: 0), .pending, "the G stood there: maybe the rider's train, maybe what shook them")
+        log.observe(trains: [train("g1", key: "G_N", points: [(5, 90), (6, 210)])], key: "G_N", boardIdx: 4, span: nil, onLeg: false, now: 90)
+        log.observe(trains: [train("f1", key: "F_N", points: [(4, 240), (5, 360)])], key: "F_N", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: 90)
+        XCTAssertTrue(log.departureCheck(at: 0).left, "the G did leave then")
+        XCTAssertEqual(log.judgePullAway(at: 0, now: 90), .pending, "still not the plan's line")
+        // the F standing there just before is the plan's own: backed
+        var f = DepartureLog()
+        f.observe(trains: [train("f1", key: "F_N", points: [(4, -40), (5, 100)], standingAt: 4)], key: "F_N", boardIdx: 4, span: (from: 4, to: 9), onLeg: true, now: -20)
+        f.observe(trains: [train("g1", key: "G_N", points: [(4, 300)])], key: "G_N", boardIdx: 4, span: nil, onLeg: false, now: -20)
+        XCTAssertEqual(f.judgePullAway(at: 0, now: 0), .backed)
     }
 
     // MARK: - every way of boarding, end to end
@@ -155,6 +174,15 @@ final class BoardingGateTests: XCTestCase {
         r.pullAway()
         XCTAssertEqual(r.t.timeline.legsRidden, 1)
         XCTAssertFalse(r.t.applyPullAwayVerdict(log.judgePullAway(at: r.feltTs, now: r.ts)))
+        XCTAssertTrue(r.t.onTrainShown)
+    }
+
+    /// No signal on the platform: nothing to check the pull-away against, so it stands as felt (the rider can still say
+    /// "Not on the train").
+    func testAPullAwayWithNoFeedAtThePlatformStandsAsFelt() {
+        var r = Rider(t: TripTracker(start(), distanceToOriginM: 20), ts: 1000)
+        r.stand(40); r.pullAway()
+        XCTAssertFalse(r.t.applyPullAwayVerdict(DepartureLog().judgePullAway(at: r.feltTs, now: r.ts)))
         XCTAssertTrue(r.t.onTrainShown)
     }
 

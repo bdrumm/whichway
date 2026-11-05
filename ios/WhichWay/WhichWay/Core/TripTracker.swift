@@ -206,7 +206,7 @@ struct TripTracker {
     mutating func applyPullAwayVerdict(_ v: PullAwayVerdict) -> Bool {
         guard phase == .riding, timeline.events.last?.kind == .departed else { return false }
         switch v {
-        case .backed: backBoarding(); return false
+        case .backed, .unchecked: backBoarding(); return false
         case .pending: holdBoarding(); return false
         case .noTrain: withdrawDeparture(); return true
         }
