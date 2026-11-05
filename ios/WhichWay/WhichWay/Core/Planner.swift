@@ -42,6 +42,8 @@ struct Itinerary: Identifiable {
     /// The connection is a train already standing across the platform when the rider gets there; the margin is then
     /// the time left before its doors close (TransferTiming.standingCatchSec after they opened).
     var catchesStanding = false
+    /// The line of the train after the connection (`nextIfMissedSec` after it): the one to take if it is missed.
+    var nextIfMissedRoute: String? = nil
 }
 
 /// The connection at a change for a rider ready to board at `ready`: the first train of the next leg whose doors open
@@ -129,7 +131,7 @@ func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: Pa
         out.append(Itinerary(legs: [a, b], boardTs: a.boardTs, arriveTs: b.arriveTs, totalSec: b.arriveTs - now, walkSec: walk,
                              waitAtTransferSec: max(0, b.boardTs - a.arriveTs), connectionMarginSec: c.marginSec,
                              nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - a.boardTs) - sched,
-                             catchesStanding: c.standing))
+                             catchesStanding: c.standing, nextIfMissedRoute: next?.train.route))
     }
     return Array(out.sorted { $0.arriveTs < $1.arriveTs }.prefix(maxN))
 }
@@ -182,7 +184,7 @@ func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, opti
         return Itinerary(legs: [a, b], boardTs: board, arriveTs: b.arriveTs, totalSec: b.arriveTs - now, walkSec: walk,
                          waitAtTransferSec: max(0, b.boardTs - a.arriveTs), connectionMarginSec: c.marginSec,
                          nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - board) - sched,
-                         catchesStanding: c.standing)
+                         catchesStanding: c.standing, nextIfMissedRoute: next?.train.route)
     }
     let ride2 = Double(option.legs[1].schedRideSec ?? 0)
     let arrive2 = earliest + option.wait2Sec + ride2

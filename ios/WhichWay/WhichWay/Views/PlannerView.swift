@@ -81,6 +81,12 @@ struct PlannerView: View {
     @AppStorage("laneHome") private var laneHome = true
     /// The home lanes' other ways, each with its itinerary from where the rider is (`updateLaneAlternatives`).
     @State private var laneAlts: [(PathOption, Itinerary)] = []
+    /// The listed routes the lanes cannot time (no train in the feeds), and on the way the ones behind the rider: the
+    /// home lists every route all the same (Nov 5: never cut down by the route in hand or the one detected).
+    @State private var laneUnplaced: [PathOption] = []
+    @State private var laneBehind: [PathOption] = []
+    /// The order the routes page and the home's lanes list the routes in: ranked once the trains are in, then held.
+    @State private var listOrder = SteadyOrder()
     /// The paged Go tab's page: home, the line view, the routes.
     @State private var page = 0
     /// The five detail views, the itineraries and the departure board, as a sheet from the line view.
@@ -165,6 +171,7 @@ struct PlannerView: View {
             switch phase {
             case .active:
                 autoApply(); applyHabit()
+                if !routeStarted { listOrder.reset() }            // opened again: the routes ranked afresh, then held
                 if loc.authorized { loc.startTracking() }         // the walk to the station is watched from the moment the app opens
                 if routeStarted { trip.tick(now: data.now) }
                 // trips recorded off the home network go to the Mac the next time the app opens on it
@@ -273,7 +280,7 @@ struct PlannerView: View {
                     let here = nearbyPlace()
                     let placeUsualSec = here.flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) }
                     let ride = routeStarted ? rideItinerary : nil
-                    let others = ranked.filter { $0.id != p.id }
+                    let others = listed.filter { $0.id != p.id }
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         let now = data.now
                         let it = ride ?? p.live
@@ -404,7 +411,7 @@ struct PlannerView: View {
                 pageTitle(index, caption: "")
                 Text("Tap a route to take it.").font(.caption).foregroundStyle(.secondary)
                 if !paths.isEmpty {
-                    pathList
+                    routeOptionList
                 } else if !originId.isEmpty && !destId.isEmpty {
                     Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
                 }
@@ -639,6 +646,27 @@ struct PlannerView: View {
             .compactMap { byId[$0.id] }
     }
 
+    /// The routes in the order the routes page and the home list them: `ranked` as it stood when the trains came in,
+    /// held from then on (`SteadyOrder`), so the list does not reshuffle as the times move.
+    private var listed: [PathOption] { listOrder.arrange(ranked, id: \.id) }
+
+    /// The routes page: the routes themselves, one row each, in the held order; a tap takes one and goes home.
+    private var routeOptionList: some View {
+        let list = listed
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(routeStarted ? "Other ways" : "\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
+            ForEach(list, id: \.id) { p in
+                Button {
+                    selectedPath = p.id
+                    withAnimation(.easeInOut(duration: 0.3)) { page = 0 }
+                } label: {
+                    RouteOptionRow(option: p, selected: p.id == selectedPath)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     /// The rider's usual way on this trip at this hour, when the habits single one out.
     private var typicalPath: String? {
         RouteRank.typical(paths.map { RankedRoute(id: $0.id, arriveTs: nil, expectedSec: 0, affinity: habitAffinity[$0.id]) })
@@ -703,6 +731,7 @@ struct PlannerView: View {
             evaluate(&ps[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour)
         }
         paths = ps
+        listOrder.reset()
         habitAffinity = Dictionary(ps.compactMap { p in
             HabitStore.shared.routeAffinity(p, origin: originId, dest: destId, now: now).map { (p.id, $0) }
         }, uniquingKeysWith: { a, _ in a })
@@ -756,6 +785,7 @@ struct PlannerView: View {
         for i in paths.indices {
             paths[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: paths[i], now: now, maxN: 1, reachTs: reach).first
         }
+        listOrder.update(ranked: ranked.map(\.id), hasTrains: paths.contains { $0.live != nil })
         // a departed train hands over to the best route, or to the next train on this route once it is in progress
         if departed, !routeStarted, let best = ranked.first?.id { selectedPath = best }
         shownBoardTs = headline?.live?.boardTs
@@ -1564,32 +1594,42 @@ struct PlannerView: View {
 
     // MARK: - the home's lanes
 
-    /// The other ways for the home's lanes, each timed from where the rider is: before the route starts, every listed
-    /// way on its next train from the first platform; on the way, the ways that go on from where the rider is
-    /// (`continuesFrom`), on the trains in the feeds (`itineraryFromHere`), so a station behind them drops out.
+    /// The other ways for the home's lanes, every listed route whatever the route in hand or the one detected (Nov 5):
+    /// before the route starts each on its next train from the first platform; on the way, the ways that go on from
+    /// where the rider is (`continuesFrom`) timed from here (`itineraryFromHere`), the rest listed as behind the rider.
+    /// A way with no train in the feeds is listed on its expected time.
     private func updateLaneAlternatives(_ sched: ClientSchedule, now: Double) {
-        guard laneHome, !classicGo, let sel = headline, let index = data.index else { laneAlts = []; return }
-        guard routeStarted else {
-            laneAlts = paths.compactMap { p in p.id == sel.id ? nil : p.live.map { (p, $0) } }
+        guard laneHome, !classicGo, let sel = headline, let index = data.index else { laneAlts = []; laneUnplaced = []; laneBehind = []; return }
+        let others = paths.filter { $0.id != sel.id }
+        guard routeStarted, let pos = riderPosition else {
+            laneAlts = others.compactMap { p in p.live.map { (p, $0) } }
+            laneUnplaced = others.filter { $0.live == nil }
+            laneBehind = []
             return
         }
-        guard let pos = riderPosition else { laneAlts = []; return }
         let station: (String) -> String = { index.stationOf($0) }
         let listed = Set(paths.map(\.id))
-        let ways = (paths + (rerouteMore ?? []).filter { !listed.contains($0.id) })
-            .filter { $0.id != sel.id && continuesFrom($0, current: sel, at: pos, station: station) }
-        // the same few the faster-route check has the feeds of
-        let watched = ways.sorted { $0.expectedSec < $1.expectedSec }.prefix(6)
-        laneAlts = watched.compactMap { p in
-            itineraryFromHere(boards: data.predictedBoards, schedule: sched, option: p, at: pos, current: sel, now: now).map { (p, $0) }
+        // the planner's further ways (a line boarded off the plan) join the list only where they go on from here
+        let extra = (rerouteMore ?? []).filter { !listed.contains($0.id) && $0.id != sel.id && continuesFrom($0, current: sel, at: pos, station: station) }
+        var alts: [(PathOption, Itinerary)] = [], unplaced: [PathOption] = [], behind: [PathOption] = []
+        for p in others + extra {
+            if !continuesFrom(p, current: sel, at: pos, station: station) {
+                behind.append(p)
+            } else if let it = itineraryFromHere(boards: data.predictedBoards, schedule: sched, option: p, at: pos, current: sel, now: now) {
+                alts.append((p, it))
+            } else {
+                unplaced.append(p)
+            }
         }
+        laneAlts = alts; laneUnplaced = unplaced; laneBehind = behind
     }
 
     /// The home's lanes for the route in hand on `it`; nil with the lanes off or no train to draw.
     private func homeLanes(_ p: PathOption, itinerary it: Itinerary?, now: Double, originName: String) -> AnyView? {
         guard laneHome, let it, let index = data.index else { return nil }
         let pos = routeStarted ? riderPosition : nil
-        let lanes = routeLanes(current: p, currentIt: it, alternatives: laneAlts, affinity: habitAffinity,
+        let lanes = routeLanes(current: p, currentIt: it, alternatives: laneAlts, unplaced: laneUnplaced, behind: laneBehind,
+                               affinity: habitAffinity, order: listOrder,
                                at: pos, now: now, station: { index.stationOf($0) })
         // the hold dragging on, while the times assume it ends as usual: how much later the route in hand would be in
         let tail = data.scenario == "baseline" ? outlook?.dragsOn.flatMap { $0 > it.arriveTs + 30 ? $0 : nil } : nil
@@ -1947,6 +1987,45 @@ func journeySegments(_ option: PathOption) -> [BarSeg] {
         out.append(BarSeg(sec: Double(l1.schedRideSec ?? 0) + (l1.typicalSec ?? 0) + l1.holdRiskSec, color: RouteStyle.color(l1.primaryRoute)))
     }
     return out.map { BarSeg(sec: max(0, $0.sec), color: $0.color) }
+}
+
+/// A route on the routes page, outright: its lines and the change, when its next train boards and when it gets in,
+/// and the door-to-door minutes. The chosen one outlined in blue, as on the home.
+struct RouteOptionRow: View {
+    let option: PathOption
+    let selected: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    ForEach(Array(option.legs.enumerated()), id: \.offset) { i, leg in
+                        if i > 0 { Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary) }
+                        RouteBullets(routes: leg.routes, size: 20)
+                    }
+                }
+                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(Fmt.minTxt(option.live?.totalSec ?? option.expectedSec)).font(.title3.bold()).monospacedDigit()
+                if let l = option.live { Text("in \(Fmt.hhmm(l.arriveTs))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+            }
+            .layoutPriority(1)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(selected ? Color.accentColor.opacity(0.08) : Color(.secondarySystemBackground)))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(selected ? "Chosen: " : "")\(option.label), \(subtitle), \(Fmt.minTxt(option.live?.totalSec ?? option.expectedSec))")
+    }
+
+    /// "change at Jay St · next 9:31" or "direct · expected".
+    private var subtitle: String {
+        let way = option.transfer.map { "change at \($0.station)" } ?? "direct"
+        return way + " · " + (option.live.map { "next \(Fmt.hhmm($0.boardTs))" } ?? "no train in the feeds yet")
+    }
 }
 
 struct PathRow: View {
