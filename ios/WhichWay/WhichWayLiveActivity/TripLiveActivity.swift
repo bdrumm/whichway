@@ -106,6 +106,16 @@ struct NotOnTrainButton: View {
     }
 }
 
+/// Boarding: a pull-away felt and not yet backed by the feed; the rider says they are on the train (`OnTheTrainIntent`).
+struct OnTheTrainButton: View {
+    var body: some View {
+        Button(intent: OnTheTrainIntent()) {
+            Label("On it", systemImage: "checkmark.circle").font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.borderedProminent).tint(.green)
+    }
+}
+
 /// On the train, at a station short of the route's change: the rider says they changed there (`ChangedTrainIntent`).
 struct ChangedHereButton: View {
     let text: String
@@ -171,7 +181,7 @@ struct LockScreenView: View {
                 }
             } else {
                 HStack(alignment: .center, spacing: 8) {
-                    Text("Take the").font(.subheadline).foregroundStyle(.secondary)
+                    Text(state.boarding ? "Boarding the" : "Take the").font(.subheadline).foregroundStyle(.secondary)
                     RouteBullet(route: state.route, size: 26)
                     Text("at \(Fmt.hhmm(state.boardTs))").font(.title3.bold())
                     Spacer()
@@ -194,6 +204,12 @@ struct LockScreenView: View {
                 MarkMomentButton(marked: state.notesMarked ?? 0)
             }
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            if state.boarding {
+                HStack(spacing: 8) {
+                    OnTheTrainButton()
+                    NotOnTrainButton()
+                }
+            }
             if state.riding {
                 HStack(spacing: 8) {
                     if let here = state.changeHere { ChangedHereButton(text: here) }

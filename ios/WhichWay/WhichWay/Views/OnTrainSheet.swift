@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// The rider's own word on the train they are on: the trains that have left their station toward the destination
-/// (most recent first), each with the route it leads to, and, with a change ahead, the line to take at it. Used
+/// The rider's own word on the train they are on: every train at their station on every line and in both directions,
+/// standing there, due, or gone in the last 25 minutes (nearest the moment first), each with the route it leads to,
+/// and, with a change ahead, every line to take at it. Nothing is left off for being unlikely: this is the override
+/// for when the phone's reading is wrong (`trainsToPick`). Used
 /// to start a route from a train already boarded, to put a route right when the phone guessed wrong or never
 /// felt the pull-away, and to redirect the rest of the trip.
 struct OnTrainSheet: View {
@@ -25,12 +27,19 @@ struct OnTrainSheet: View {
     var onChangedHere: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
+    /// Where the train is against the station: gone, standing there, or due.
+    private func when(_ c: BoardingCandidate) -> String {
+        if (c.progressIdx ?? c.boardIdx) > c.boardIdx { return "Left \(stationName) about \(Fmt.hhmm(PlatformTiming.pullsAway(c.boardTs, route: c.route)))" }
+        if c.stoppedAtBoardTs != nil { return "At \(stationName) now" }
+        return "Due at \(stationName) \(Fmt.hhmm(PlatformTiming.atPlatform(c.boardTs, route: c.route)))"
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     if candidates.isEmpty {
-                        Text("No train has left \(stationName) toward your destination in the last 25 minutes, as far as the feeds show. Lines not on the list yet appear after the next refresh.")
+                        Text("No train at \(stationName) in the feeds right now. Lines not on the list yet appear after the next refresh.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     ForEach(candidates, id: \.trainId) { c in
@@ -38,16 +47,16 @@ struct OnTrainSheet: View {
                             HStack(spacing: 10) {
                                 RouteBullet(route: c.route, size: 26)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Left \(stationName) about \(Fmt.hhmm(PlatformTiming.pullsAway(c.boardTs, route: c.route)))").font(.subheadline.weight(.semibold))
+                                    Text(when(c)).font(.subheadline.weight(.semibold))
                                     Text(describe(c)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    if let r = routeFor(c.key) { Text(r).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                                    Text(routeFor(c.key) ?? "Off your route: the trip follows this train").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer(minLength: 0)
                                 if c.trainId == currentTrainId { Image(systemName: "checkmark").font(.body.bold()).foregroundStyle(Color.accentColor) }
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("I am on the \(c.route) that left \(stationName) at \(Fmt.hhmm(PlatformTiming.pullsAway(c.boardTs, route: c.route)))")
+                        .accessibilityLabel("I am on the \(c.route): \(when(c))")
                     }
                 } header: {
                     Text("Which train are you on?")
@@ -69,7 +78,7 @@ struct OnTrainSheet: View {
                             Button { onTransfer(ch.key); dismiss() } label: {
                                 HStack(spacing: 10) {
                                     RouteBullet(route: String(ch.key.split(separator: "_").first ?? ""), size: 26)
-                                    Text(ch.label).font(.subheadline).lineLimit(2)
+                                    Text(ch.label.isEmpty ? "Off your route: the trip follows this line" : ch.label).font(.subheadline).lineLimit(2)
                                 }
                             }
                             .buttonStyle(.plain)

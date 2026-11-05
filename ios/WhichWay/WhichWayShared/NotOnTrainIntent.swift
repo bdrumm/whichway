@@ -16,6 +16,21 @@ struct NotOnTrainIntent: LiveActivityIntent {
     }
 }
 
+/// "On it" from the Live Activity: a pull-away was felt that the feed has not backed yet ("Boarding?"), and the rider
+/// says they are on the train. Runs in the app's process, like `NotOnTrainIntent`.
+struct OnTheTrainIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "On the train"
+    static var description = IntentDescription("Confirms the train ride the phone felt start; the feed's check no longer takes it back.")
+
+    /// Set by the app (the extension leaves it nil).
+    @MainActor static var handler: (() -> Void)?
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { OnTheTrainIntent.handler?() }
+        return .result()
+    }
+}
+
 /// "Changed to the A/C at Jay St" from the Live Activity: the rider took the change short of the route's own that the
 /// activity offers. Runs in the app's process, like `NotOnTrainIntent`.
 struct ChangedTrainIntent: LiveActivityIntent {
