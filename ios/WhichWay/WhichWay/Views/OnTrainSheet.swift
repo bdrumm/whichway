@@ -22,9 +22,11 @@ struct OnTrainSheet: View {
     let onPick: (BoardingCandidate) -> Void
     let onTransfer: (String) -> Void
     let onNotOnTrain: () -> Void
-    /// A change short of the route's own that the train in hand has reached ("A/C at Jay St-MetroTech"), and taking it.
-    var changedHere: String? = nil
-    var onChangedHere: () -> Void = {}
+    /// Every change the rider could have made off the line being ridden ("A/C at Jay St-MetroTech"), the one the phone
+    /// offers first and marked (`changesToName`); none is left off for where the phone thinks the train is.
+    var changes: [EarlyChange] = []
+    var offeredChange: EarlyChange? = nil
+    var onChanged: (EarlyChange) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
     /// Where the train is against the station: gone, standing there, or due.
@@ -63,13 +65,23 @@ struct OnTrainSheet: View {
                 } footer: {
                     Text("The route follows the train you pick: the change ahead, the arrival and the Live Activity.")
                 }
-                if let here = changedHere {
+                if riding, !changes.isEmpty {
                     Section {
-                        Button { onChangedHere(); dismiss() } label: {
-                            Label("I changed to the \(here)", systemImage: "arrow.left.arrow.right").font(.subheadline.weight(.semibold))
+                        ForEach(changes, id: \.option.id) { ch in
+                            Button { onChanged(ch); dismiss() } label: {
+                                HStack(spacing: 10) {
+                                    Label("I changed to the \(ch.text)", systemImage: "arrow.left.arrow.right")
+                                        .font(.subheadline.weight(ch == offeredChange ? .semibold : .regular))
+                                    Spacer()
+                                    if ch == offeredChange { Text("here now").font(.caption).foregroundStyle(.secondary) }
+                                }
+                            }
+                            .buttonStyle(.plain)
                         }
+                    } header: {
+                        Text("Changed trains?")
                     } footer: {
-                        Text("The phone cannot feel a step across the platform. The route moves to the change you made and follows the train you took.")
+                        Text("The phone cannot feel a step across the platform. The route moves to the change you name and follows the train you took.")
                     }
                 }
                 if let t = transfer, !t.choices.isEmpty {

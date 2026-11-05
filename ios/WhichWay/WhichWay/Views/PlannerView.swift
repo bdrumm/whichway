@@ -1321,8 +1321,12 @@ struct PlannerView: View {
                 switchRoute(to: alt)
             },
             onNotOnTrain: { trip.notOnTrain() },
-            changedHere: trip.earlyChange?.change.text,
-            onChangedHere: { trip.takeEarlyChange(now: data.now) })
+            changes: changesToName(changesOnTheWayNow(), offered: trip.earlyChange?.change),
+            offeredChange: trip.earlyChange?.change,
+            onChanged: { ch in
+                if ch == trip.earlyChange?.change { trip.takeEarlyChange(now: data.now); return }
+                trip.takeChange(ch, alightTs: earlyChangeAlightTs(ch, train: trip.rideTrain, now: data.now), now: data.now)
+            })
     }
 
     /// The rider is on this train: the route starts from it if it has not started, switches to the route that
@@ -1419,6 +1423,23 @@ struct PlannerView: View {
         let listed = Set(paths.map { $0.id })
         let options = paths + enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 24).filter { !listed.contains($0.id) }
         return earlierChanges(from: sel, ridingKey: ridingKey, among: options, index: index)
+    }
+
+    /// Every change the rider could name off the line in hand (the train the phone has them on, else each line of the
+    /// leg in hand), among the listed routes and the planner's further options: the sheet's list, not filtered by where
+    /// the phone believes the train is.
+    private func changesOnTheWayNow() -> [EarlyChange] {
+        guard routeStarted, trip.currentLeg == 0, let sched = data.schedule, let index = data.index, let sel = headline, !sel.legs.isEmpty else { return [] }
+        let keys = trip.rideTrain.map { [$0.key] } ?? sel.legs[0].keys
+        let listed = Set(paths.map { $0.id })
+        let options = paths + enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 24).filter { !listed.contains($0.id) }
+        var out: [EarlyChange] = [], seen = Set<String>()
+        for k in keys {
+            for ch in changesOnTheWay(from: sel, ridingKey: k, among: options, index: index) where !seen.contains(ch.option.id) {
+                seen.insert(ch.option.id); out.append(ch)
+            }
+        }
+        return out.sorted { $0.stopIdx != $1.stopIdx ? $0.stopIdx < $1.stopIdx : ($0.acrossPlatform && !$1.acrossPlatform) }
     }
 
     /// On the first leg's train, the change short of the route's own at the station the train is at (or left a few

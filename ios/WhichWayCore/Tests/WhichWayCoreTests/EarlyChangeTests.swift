@@ -89,4 +89,75 @@ final class EarlyChangeTests: XCTestCase {
         t.noteChangedEarly(at: 2100)
         XCTAssertEqual(t.timeline.changedEarlyTaps, [2100])
     }
+
+    // MARK: - the rider's own list of changes (Nov 5: never filtered by where the phone thinks the train is)
+
+    private func riding(legs: Int, at ts: Double = 1500) -> TripTracker {
+        var t = TripTracker(TripTimeline(startTs: 1000, startedBy: "gps", startDistanceM: 40, placeId: nil, originStation: "F23", destStation: "A31",
+                                         transferStation: legs > 1 ? "W 4 St-Wash Sq" : nil, legs: legs), distanceToOriginM: 40)
+        t.beginRiding(now: ts, departedTs: ts)
+        return t
+    }
+
+    func testEveryChangeIsListedWhateverThePhoneOffers() throws {
+        let (planned, all, index) = try routes()
+        let listed = changesOnTheWay(from: planned, ridingKey: "F_N", among: all, index: index)
+        XCTAssertEqual(listed.map(\.stationName), ["Jay St-MetroTech"], "the one change short of W 4 St")
+        // with no offer (no feed time, or the train well past Jay St by the phone's reading) the list is the same
+        let f = theF(jayFeedTs: nil)
+        XCTAssertNil(earlyChangeOffer(earlierChanges(from: planned, ridingKey: "F_N", among: all, index: index), train: f, now: 5000))
+        XCTAssertEqual(changesToName(listed, offered: nil), listed)
+        // the offer orders, never removes
+        let offered = try XCTUnwrap(listed.first)
+        XCTAssertEqual(changesToName(listed, offered: offered), listed)
+    }
+
+    func testOfferedChangeGoesFirstAndNothingIsDropped() throws {
+        let (planned, all, index) = try routes()
+        let jay = try XCTUnwrap(changesOnTheWay(from: planned, ridingKey: "F_N", among: all, index: index).first)
+        // a later change too: the route that changes at Jay St lists W 4 St (stayed on the F, then changed)
+        let later = changesOnTheWay(from: jay.option, ridingKey: "F_N", among: all, index: index)
+        XCTAssertEqual(later.map(\.stationName), ["W 4 St-Wash Sq"])
+        XCTAssertFalse(later.contains(jay), "the route in hand's own change is the plan, not a change to name")
+        let both = [jay] + later
+        let w4 = try XCTUnwrap(later.first)
+        XCTAssertEqual(changesToName(both, offered: w4).map(\.stationName), ["W 4 St-Wash Sq", "Jay St-MetroTech"])
+        XCTAssertEqual(changesToName(both, offered: nil).count, 2)
+        // the phone's offer never reaches beyond the planned change; the rider's list does
+        XCTAssertTrue(earlierChanges(from: jay.option, ridingKey: "F_N", among: all, index: index).isEmpty)
+    }
+
+    func testANamedChangeOnTheTrainClosesTheRideAndTheNextTrainIsTheSecondLeg() {
+        // changing short of the plan, at the plan's station onto another line, or past it: the same hand-off
+        var t = riding(legs: 2)
+        t.riderChanged(at: 1935, legs: 2, transferStation: "Jay St-MetroTech")
+        XCTAssertFalse(t.onTrain)
+        XCTAssertEqual(t.timeline.legsRidden, 1)
+        XCTAssertEqual(t.phase, .riding, "a change, not the end of the trip")
+        t.beginRiding(now: 2100, departedTs: 2000)
+        XCTAssertTrue(t.onTrain)
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted, .departed])
+    }
+
+    func testAChangeNamedOffADirectRouteDoesNotEndTheTrip() {
+        // on a route with no change the one alighting would be the last: the new route's legs are counted first
+        var t = riding(legs: 1)
+        t.riderChanged(at: 1935, legs: 2, transferStation: "Jay St-MetroTech")
+        XCTAssertEqual(t.timeline.legs, 2)
+        XCTAssertEqual(t.timeline.transferStation, "Jay St-MetroTech")
+        XCTAssertEqual(t.timeline.legsRidden, 1)
+        XCTAssertEqual(t.phase, .riding)
+        t.beginRiding(now: 2100, departedTs: 2000)
+        XCTAssertTrue(t.onTrain)
+    }
+
+    func testAChangeNamedAfterTheWalkOffWasFeltAddsNoSecondAlighting() {
+        // the phone felt the walk between platforms; the rider names where they changed: the leg stands as felt
+        var t = riding(legs: 2)
+        t.alightStanding(at: 1935)
+        XCTAssertFalse(t.onTrain)
+        t.riderChanged(at: 1990, legs: 2, transferStation: "Jay St-MetroTech")
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted])
+        XCTAssertEqual(t.phase, .riding)
+    }
 }

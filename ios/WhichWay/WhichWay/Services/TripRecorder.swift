@@ -817,15 +817,23 @@ final class TripRecorder {
     /// there), and the planner moves the route there and onto the connection. Oct 22 and 27 at Jay St: the A taken
     /// across the platform, the route left counting stops to W 4 St on the F until the rider walked off at 14 St.
     func takeEarlyChange(now: Double? = nil) {
+        guard let offer = earlyChange else { return }
+        takeChange(offer.change, alightTs: offer.alightTs, now: now)
+    }
+
+    /// The rider names a change they made (any from the "On a train?" sheet, offered or not): on the train, the ride in
+    /// hand closes there as an alighting no sensor felt; already off it (the phone felt the walk-off), the leg stands.
+    /// Either way the planner moves the route to that change and onto its connection.
+    func takeChange(_ change: EarlyChange, alightTs: Double, now: Double? = nil) {
         let now = now ?? lastNow ?? Date().timeIntervalSince1970
-        guard let offer = earlyChange, let t = tracker, t.onTrain, t.timeline.legsRidden + 1 < legs.count else { return }
-        let at = min(offer.alightTs, now)
+        guard let t = tracker, t.phase == .riding else { return }
+        let at = min(alightTs, now)
+        tracker?.riderChanged(at: at, legs: change.option.legs.count, transferStation: change.stationName)
         tracker?.noteChangedEarly(at: now)
-        tracker?.alightStanding(at: at)
         handleEvents()
         offPlanAlighting = nil          // the planner follows the change named, not a stop read off the train's times
         earlyChange = nil
-        changedEarly = ChangedEarly(change: offer.change, alightTs: at, ts: now)
+        changedEarly = ChangedEarly(change: change, alightTs: at, ts: now)
         publish()
     }
 
