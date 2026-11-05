@@ -53,6 +53,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     func startTracking() {
         guard authorized else { request(); return }
         guard !tracking else { return }
+        precise = true
         manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         manager.distanceFilter = 10
         manager.activityType = .fitness
@@ -65,8 +66,21 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         tracking = true
     }
 
+    /// Ten-metre fixes (the GPS) or fixes to a hundred metres (Wi-Fi and cell, the GPS mostly off) while tracking. A
+    /// route in progress asks for coarse ones on the platform and the ride, where the GPS cannot see the sky and no
+    /// fix decides anything (`TripTracker.needsPreciseFixes`); updates keep running either way, so the app stays alive
+    /// in the background.
+    private(set) var precise = true
+    func setPrecise(_ on: Bool) {
+        guard tracking, on != precise else { return }
+        precise = on
+        manager.desiredAccuracy = on ? kCLLocationAccuracyNearestTenMeters : kCLLocationAccuracyHundredMeters
+        manager.distanceFilter = on ? 10 : 50
+    }
+
     func stopTracking() {
         guard tracking else { return }
+        precise = true
         manager.stopUpdatingLocation()
         manager.allowsBackgroundLocationUpdates = false
         manager.pausesLocationUpdatesAutomatically = true

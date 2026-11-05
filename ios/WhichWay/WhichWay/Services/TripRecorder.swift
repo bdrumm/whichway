@@ -159,6 +159,8 @@ final class TripRecorder {
 
     /// On a train right now (not on the way, at the platform, or between trains at the change).
     var onTrain: Bool { tracker?.onTrain ?? false }
+    /// Ten-metre fixes wanted now (`TripTracker.needsPreciseFixes`); with no route in progress, the app's own default.
+    func needsPreciseFixes(now: Double) -> Bool { tracker?.needsPreciseFixes(now: now) ?? true }
 
     /// A faster route on offer, for the trip's record.
     func noteReroute(_ n: RerouteNote) { tracker?.noteReroute(n) }
