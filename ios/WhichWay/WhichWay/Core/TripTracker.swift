@@ -613,6 +613,17 @@ struct TripTracker {
         if firstMotionTs == nil { firstMotionTs = now - startGraceSec }
     }
 
+    /// The rider says they changed at a station of their own naming (the "On a train?" sheet, or the one-tap offer), onto
+    /// a route of `legs` legs changing at `transferStation`. On the train, the ride closes at `ts` as an alighting no
+    /// sensor felt (two steps across the platform look like staying on), counted against the new route's legs first, so
+    /// a change named off a route with none does not end the trip there. Already off the train, the leg stands as felt.
+    mutating func riderChanged(at ts: Double, legs: Int, transferStation: String?) {
+        guard phase == .riding else { return }
+        let ridden = timeline.legsRidden + (onTrain ? 1 : 0)
+        if ridden >= timeline.legs, legs > ridden { replan(legs: legs, transferStation: transferStation) }
+        if onTrain { alightStanding(at: ts) }
+    }
+
     /// The route changed under the rider (they boarded a line off the plan and the planner found the route that
     /// rides it): the legs still to ride and the change follow the new route, so the trip ends at the right
     /// alighting and not at a change the old route had, or never.
