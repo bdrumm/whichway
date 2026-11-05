@@ -44,3 +44,31 @@ final class RouteRankTests: XCTestCase {
         XCTAssertEqual(ids([r("u", 1000, share: 0.8), r("b", 1500)]), ["u", "b"])
     }
 }
+
+/// The routes held in one order once ranked with the trains in (Nov 4: "keep ranking static").
+final class SteadyOrderTests: XCTestCase {
+    func testBeforeTheTrainsAreInTheOrderFollowsTheRanking() {
+        var o = SteadyOrder()
+        XCTAssertEqual(o.update(ranked: ["a", "b"], hasTrains: false), ["a", "b"])
+        XCTAssertEqual(o.update(ranked: ["b", "a"], hasTrains: false), ["b", "a"])
+        XCTAssertFalse(o.settled)
+    }
+
+    func testOnceRankedWithTrainsTheOrderHoldsAsTimesChange() {
+        var o = SteadyOrder()
+        o.update(ranked: ["usual", "g", "jay"], hasTrains: true)
+        XCTAssertTrue(o.settled)
+        XCTAssertEqual(o.update(ranked: ["jay", "g", "usual"], hasTrains: true), ["usual", "g", "jay"])
+        // a route gone drops out, the rest keep their places; one new goes at the end
+        XCTAssertEqual(o.update(ranked: ["jay", "usual"], hasTrains: true), ["usual", "jay"])
+        XCTAssertEqual(o.update(ranked: ["new", "jay", "usual"], hasTrains: true), ["usual", "jay", "new"])
+        o.reset()
+        XCTAssertEqual(o.update(ranked: ["jay", "usual"], hasTrains: true), ["jay", "usual"], "ranked afresh after a reset")
+    }
+
+    func testArrangePutsUnknownItemsAfterInTheirOwnOrder() {
+        var o = SteadyOrder()
+        o.update(ranked: ["b", "a"], hasTrains: true)
+        XCTAssertEqual(o.arrange(["x", "a", "y", "b"], id: { $0 }), ["b", "a", "x", "y"])
+    }
+}

@@ -5,7 +5,8 @@ import SwiftUI
 /// sooner), the route in hand outlined in blue where it ranks. Choosing another way moves the outline and leaves the
 /// list as it is. A lane shares the route in hand's bar up to where it parts (faded), then shows its own. A tap takes
 /// the lane's route; on the way, that tells the trip which way the rider went. The lanes themselves are `routeLanes`
-/// (Core).
+/// (Core). Nov 5: every route always listed (a way behind the rider faded, not dropped), no clock labels over the
+/// bars, no words after the line icons (unless two ways share them), no "usual" mark, and the arrivals in one column.
 struct RouteLanesView: View {
     let lanes: RouteLanes
     let now: Double
@@ -37,7 +38,6 @@ struct RouteLanesView: View {
                 Text("Next choice: \(c.station) in \(Fmt.mmss(c.ts - now))").font(.footnote.weight(.semibold)).foregroundStyle(Color.accentColor)
                     .lineLimit(1)
             }
-            LaneAxis(start: lanes.startTs, end: lanes.endTs).padding(.horizontal, 8)
             let marks = Array(Set(lanes.lanes.compactMap(\.partsTs))).sorted()
             ForEach(lanes.lanes) { l in row(l, marks: marks) }
             if lanes.lanes.count == 1 {
@@ -47,7 +47,7 @@ struct RouteLanesView: View {
             if let h = hold { HoldOutlookCard(outlook: h).padding(.top, 6) }
             Button(action: onMore) {
                 HStack(spacing: 3) {
-                    Text(lanes.moreCount > 0 ? "\(lanes.moreCount) more way\(lanes.moreCount == 1 ? "" : "s") in all routes" : "All routes")
+                    Text("All routes")
                     Image(systemName: "chevron.right").font(.caption2)
                 }
             }
@@ -66,7 +66,13 @@ struct RouteLanesView: View {
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.08)))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 2))
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Chosen: \(text(l)), in \(Fmt.hhmm(l.arriveTs))")
+            .accessibilityLabel("Chosen: \(spoken(l)), in \(Fmt.hhmm(l.arriveTs))")
+        } else if l.isBehind {
+            LaneRow(lane: l, text: text(l), start: lanes.startTs, end: lanes.endTs)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .opacity(0.45)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(l.routes.joined(separator: " to ")), already behind you")
         } else {
             Button { onPick(l.optionId) } label: {
                 LaneRow(lane: l, text: text(l), start: lanes.startTs, end: lanes.endTs, sharedUntil: l.partsTs)
@@ -74,23 +80,20 @@ struct RouteLanesView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(text(l)), in \(Fmt.hhmm(l.arriveTs))")
+            .accessibilityLabel("\(spoken(l)), in \(Fmt.hhmm(l.arriveTs))")
         }
     }
 
+    /// Beside the line icons (Nov 5: no line label after them): nothing, unless another listed way shows the very same
+    /// icons (the R and the A at Jay St, or at Chambers St), when the change's name tells the two apart.
     private func text(_ l: RouteLane) -> String {
-        let last = l.routes.last ?? ""
-        let board = l.segments.first { if case .ride = $0.kind { return true }; return false }?.startTs
-        let usual = l.optionId == lanes.typicalId ? "usual · " : ""
-        let fromStart = "\(l.routes.first ?? "") \(Fmt.hhmm(board))" + (l.changeAt.map { " · \(last) at \($0)" } ?? " · direct")
-        switch l.parting {
-        case .current:
-            return usual + (routeStarted ? "your route" + (l.changeAt.map { " · at \($0)" } ?? (l.routes.count == 1 ? " · direct" : "")) : fromStart)
-        case .atStart: return usual + fromStart
-        case .stayOn: return usual + "stay on" + (l.changeAt.map { " · \(last) at \($0)" } ?? " to the end")
-        case let .offEarlier(s): return usual + "off at \(s) · the \(last)"
-        case .otherConnection: return usual + "the \(last) instead"
-        }
+        let twins = lanes.lanes.filter { $0.routes == l.routes }.count > 1
+        return twins ? (l.changeAt.map { "at \($0)" } ?? "direct") : ""
+    }
+
+    /// For VoiceOver: the lines and the change, as the row no longer says them.
+    private func spoken(_ l: RouteLane) -> String {
+        l.routes.joined(separator: " to ") + (l.changeAt.map { ", change at \($0)" } ?? ", direct")
     }
 }
 
@@ -108,20 +111,38 @@ private struct LaneRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 HStack(spacing: 2) { ForEach(Array(lane.routes.enumerated()), id: \.offset) { _, r in RouteBullet(route: r, size: 17) } }
-                Text(text).font(.footnote.weight(lane.isCurrent ? .semibold : .regular))
-                    .foregroundStyle(lane.isCurrent ? Color.primary : Color.secondary).lineLimit(1)
-                Spacer(minLength: 6)
-                Text(Fmt.hhmm(lane.arriveTs)).font(.subheadline.weight(.bold)).monospacedDigit()
-                    .foregroundStyle(lane.isCurrent ? Color.accentColor : Color.primary)
-                if !lane.isCurrent, abs(lane.deltaSec) >= 30 {
-                    Text("\(lane.deltaSec > 0 ? "+" : "−")\(Int((abs(lane.deltaSec) / 60).rounded()))").font(.caption2.weight(.medium))
-                        .foregroundStyle(lane.deltaSec < 0 ? Color.green : Color.secondary).monospacedDigit()
+                if !text.isEmpty {
+                    Text(text).font(.footnote).foregroundStyle(Color.secondary).lineLimit(1)
                 }
+                Spacer(minLength: 6)
+                // a fixed column on the right: the arrival right-aligned, then the difference in a slot of its own
+                // (empty when there is none), so every row's time lines up whatever the difference beside it
+                Text(timeText).font(.subheadline.weight(.bold)).monospacedDigit()
+                    .foregroundStyle(lane.isCurrent ? Color.accentColor : (lane.estimated ? Color.secondary : Color.primary))
+                    .lineLimit(1).fixedSize()
+                    .frame(minWidth: 52, alignment: .trailing)
+                Text(deltaText).font(.caption2.weight(.medium)).monospacedDigit()
+                    .foregroundStyle(lane.deltaSec < 0 ? Color.green : Color.secondary)
+                    .lineLimit(1)
+                    .frame(width: 26, alignment: .leading)
             }
             LaneBar(segments: lane.segments, start: start, end: end, bold: lane.isCurrent, sharedUntil: sharedUntil, marks: marks, holdTailTs: holdTailTs,
                     arriveTs: lane.arriveTs)
         }
         .padding(.vertical, 3)
+    }
+
+    /// The arrival; a way with no train in the feeds on its expected time, "~"; one behind the rider, a dash.
+    private var timeText: String {
+        if lane.isBehind { return "—" }
+        return (lane.estimated ? "~" : "") + Fmt.hhmm(lane.arriveTs)
+    }
+
+    /// The difference from the route in hand, in whole minutes; blank for the route in hand, one behind, or under 30 s.
+    private var deltaText: String {
+        guard !lane.isCurrent, !lane.isBehind, abs(lane.deltaSec) >= 30 else { return "" }
+        let m = Int((abs(lane.deltaSec) / 60).rounded())
+        return m == 0 ? "" : "\(lane.deltaSec > 0 ? "+" : "−")\(m)"
     }
 }
 
@@ -169,29 +190,6 @@ private struct LaneBar: View {
             }
         }
         .frame(height: 12)
-        .accessibilityHidden(true)
-    }
-}
-
-/// The clock over the lanes: now at the left, then every ten minutes.
-private struct LaneAxis: View {
-    let start: Double
-    let end: Double
-
-    var body: some View {
-        GeometryReader { g in
-            let w = g.size.width
-            let first = ((start + 240) / 600).rounded(.up) * 600
-            let ticks = Array(stride(from: first, to: end, by: 600))
-            ZStack(alignment: .topLeading) {
-                Text("now").font(.caption2.weight(.semibold)).foregroundStyle(Color.accentColor)
-                ForEach(ticks, id: \.self) { t in
-                    Text(Fmt.hhmm(t)).font(.caption2).foregroundStyle(.secondary).monospacedDigit().fixedSize()
-                        .position(x: CGFloat((t - start) / max(1, end - start)) * w, y: 7)
-                }
-            }
-        }
-        .frame(height: 14)
         .accessibilityHidden(true)
     }
 }
