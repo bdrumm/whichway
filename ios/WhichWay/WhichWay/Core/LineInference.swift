@@ -234,6 +234,13 @@ struct DepartureLog: Equatable {
 
     func progressIdx(of trainId: String) -> Int? { entries[trainId]?.progressIdx }
 
+    /// When each train the log follows that has gone past the boarding platform pulled away from it, by the feed
+    /// (`onLegOnly`: the leg's own lines, at its own platform).
+    func pullAways(onLegOnly: Bool = true) -> [Double] {
+        entries.values.filter { (!onLegOnly || ($0.onLeg && $0.samePlatform)) && ($0.progressIdx ?? $0.boardIdx) > $0.boardIdx }
+            .map { PlatformTiming.pullsAway($0.boardTs, route: $0.route) }.sorted()
+    }
+
     /// One train the log follows, as a candidate, whatever its time at the platform was: the plan's own train
     /// when the sensors never named one.
     func entry(_ trainId: String, chosenTrainId: String? = nil) -> BoardingCandidate? {
@@ -310,6 +317,11 @@ struct LineInference {
     var rideSigmaSec = 90.0                // a felt station stop against the feed's time at the stop
     var stopLagSec = 0.0                   // a felt station stop begins when the train really reaches the platform
     var locationSigmaM = 150.0             // a fix after walking off against the alighting stop's position
+    /// How far the station stops the phone felt are trusted, as an exponent on their likelihoods (1: in full, 0: not at
+    /// all). The trip review has them matching the train's real stops on 0 of 28 legs, yet in full they outvoted the
+    /// departure and the plan mid-ride and at the walk-off (Nov 2, 4 and 5 at W 4 St: the F read as the D, the B, the F
+    /// again). Until stop sensing matches the trains, they nudge and never decide.
+    var feltStopTrust = 0.25
 
     /// The plan's line's share of the prior: the default for the leg, pulled halfway toward what this rider has
     /// actually done on this trip before, once that is known.
@@ -402,7 +414,7 @@ struct LineInference {
     func withRide(_ b: LineBelief, candidates cands: [BoardingCandidate], stopTimes: [Double], now: Double) -> LineBelief {
         guard !b.byTrain.isEmpty, !stopTimes.isEmpty, cands.contains(where: { !$0.stopTs.isEmpty }) else { return b }
         var w: [String: Double] = none(b, informative: true)
-        if let n = w[LineBelief.noneKey] { w[LineBelief.noneKey] = n * pow(noneLike, Double(max(0, stopTimes.count - 1))) }
+        if let n = b.byTrain[LineBelief.noneKey] { w[LineBelief.noneKey] = n * pow(noneLike, feltStopTrust * Double(stopTimes.count)) }
         for c in cands {
             let lag = recordedLag(c.route)
             let expected = c.stopTs.filter { $0.key > c.boardIdx }.sorted { $0.key < $1.key }.map { $0.value - lag + stopLagSec }
@@ -413,18 +425,20 @@ struct LineInference {
                 let nearest = expected.map { abs(felt - $0) }.min() ?? Double.infinity
                 like *= gaussian(nearest, sigma: rideSigmaSec)
             }
-            w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
+            w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * pow(like, feltStopTrust)
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["ride"])
     }
 
     /// The belief after a location fix following the walk-off: `distanceM` is the fix's distance to each
-    /// candidate's alighting stop (a candidate whose stop position is unknown keeps its weight).
+    /// candidate's alighting stop (a candidate whose stop position is unknown keeps its weight). A fix is where the
+    /// rider is, not one odd reading: it has no floor, so a train whose stop then was a kilometre off is ruled out
+    /// (Nov 4: off at 7 Av on the F, and the D, which never goes there, kept the leg at 87%).
     func withLocation(_ b: LineBelief, candidates cands: [BoardingCandidate], distanceM: [String: Double]) -> LineBelief {
         guard !b.byTrain.isEmpty, !distanceM.isEmpty else { return b }
         var w: [String: Double] = none(b, informative: true)
         for c in cands {
-            let like = distanceM[c.trainId].map { gaussian($0, sigma: locationSigmaM) } ?? 1.0
+            let like = distanceM[c.trainId].map { max(1e-6, exp(-0.5 * ($0 / locationSigmaM) * ($0 / locationSigmaM))) } ?? 1.0
             w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["location"])
@@ -463,10 +477,11 @@ struct LineInference {
             return c.stopsToAlight
         }
         guard cands.contains(where: { expected($0) != nil }) else { return b }
-        var w: [String: Double] = none(b, informative: true)
+        var w: [String: Double] = [:]
+        if let n = b.byTrain[LineBelief.noneKey] { w[LineBelief.noneKey] = n * pow(noneLike, feltStopTrust) }
         for c in cands {
             let like = expected(c).map { floor + (1 - floor) * pow(stopMiscountFactor, Double(abs(stopsFelt - $0))) } ?? 1.0
-            w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
+            w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * pow(like, feltStopTrust)
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["stops"])
     }

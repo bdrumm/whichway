@@ -228,6 +228,14 @@ struct TripTracker {
     /// The last second the phone felt the train moving (a push or vibration) on the ride in hand.
     private(set) var lastMovingTs: Double?
 
+    /// When each sustained push began while riding (`detector.pushSeconds` at the push threshold, no steps): a train
+    /// pulling away or braking. A platform shakes as trains pass but does not push, so these, not the shaking, say
+    /// whether the phone moved with a train (`RideContinuity`). The last couple of hundred.
+    private(set) var pushRuns: [Double] = []
+    private var pushRun = 0
+    /// The motion sensors have reported on this route.
+    var sensing: Bool { hasMotion }
+
     init(_ start: TripTimeline, distanceToOriginM: Double?) {
         timeline = start
         if let d = distanceToOriginM, d <= stationRadiusM {
@@ -320,6 +328,15 @@ struct TripTracker {
         }
         if afterAlight, walking { timeline.walkingSecondsBetweenTrains += 1 }
         if phase == .riding, !walking, m.pushG >= detector.pushThreshold || m.shakeG >= detector.shakeThreshold { lastMovingTs = m.ts }
+        if phase == .riding, !walking, m.pushG >= detector.pushThreshold {
+            pushRun += 1
+            if pushRun == detector.pushSeconds {
+                pushRuns.append(m.ts - Double(detector.pushSeconds - 1))
+                if pushRuns.count > 200 { pushRuns.removeFirst(pushRuns.count - 200) }
+            }
+        } else {
+            pushRun = 0
+        }
         if phase == .atStation, timeline.platformTs == nil, stillRun >= platformStillSec {
             timeline.platformTs = m.ts - Double(platformStillSec - 1)
             timeline.platformObserved = true

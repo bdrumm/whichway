@@ -100,6 +100,8 @@ final class RideEvidenceTests: XCTestCase {
         let local = cand("r1", key: "R_N", board: 1000, alightIdx: 4, stopTs: [1: 1100, 2: 1200, 3: 1300, 4: 1400], chosen: true)
         let express = cand("n1", key: "N_N", board: 1015, alightIdx: 4, stopTs: [2: 1180, 4: 1360])
         let c = [local, express]
+        // the mechanism, with the felt stops trusted in full (as shipped they only nudge: see the test below)
+        var inf = self.inf; inf.feltStopTrust = 1
         let start = inf.fromDeparture(c, departedTs: 1040, leg: 0, chosenKey: "R_N")
         XCTAssertEqual(start.verdict, .unsure, "the departure alone cannot split them: \(start.byLine)")
         // the phone felt a stop begin at 1110 and another at 1210: the local's
@@ -115,6 +117,40 @@ final class RideEvidenceTests: XCTestCase {
         XCTAssertEqual(inf.withRide(start, candidates: c, stopTimes: [], now: 1250), start)
         let blind = [cand("r1", key: "R_N", board: 1000, chosen: true), cand("n1", key: "N_N", board: 1000)]
         XCTAssertEqual(inf.withRide(start, candidates: blind, stopTimes: [1110], now: 1250).byLine, start.byLine)
+    }
+
+    func testFeltStopsNudgeButNeverDecideUntilStopSensingMatchesTheTrains() {
+        // the same local and express; as shipped, a stop felt at the express's time leans toward it and settles nothing
+        let local = cand("r1", key: "R_N", board: 1000, alightIdx: 4, stopTs: [1: 1100, 2: 1200, 3: 1300, 4: 1400], chosen: true)
+        let express = cand("n1", key: "N_N", board: 1015, alightIdx: 4, stopTs: [2: 1180, 4: 1360])
+        let c = [local, express]
+        let start = inf.fromDeparture(c, departedTs: 1040, leg: 0, chosenKey: "R_N")
+        let nudged = inf.withRide(start, candidates: c, stopTimes: [1190], now: 1250)
+        XCTAssertGreaterThan(nudged.byLine["N_N"]!, start.byLine["N_N"]!, "it still counts for something")
+        XCTAssertNotEqual(nudged.verdict, .switched, "but it does not move the rider to another line by itself: \(nudged.byLine)")
+        // a line settled at the departure stays settled through a ride of mistimed stops (Nov 4 at W 4 St: the F at 74%
+        // fell to 26% on the stops felt, and the D and the B took the leg in turn)
+        let f = cand("f1", key: "F_S", board: 1000, alightIdx: 6, stoppedAt: 1020, stopTs: [1: 1150, 2: 1300, 3: 1450, 4: 1600, 5: 1750, 6: 1900], chosen: true)
+        let d = cand("d1", key: "D_S", board: 1070, stopTs: [3: 1400, 7: 1800])
+        let settled = inf.fromDeparture([f, d], departedTs: 1035, leg: 1, chosenKey: "F_S")
+        XCTAssertEqual(settled.verdict, .onPlan)
+        let after = inf.withRide(settled, candidates: [f, d], stopTimes: [1390, 1810], now: 1850)
+        XCTAssertEqual(after.verdict, .onPlan, "\(after.byLine)")
+        let afterStops = inf.withStops(after, candidates: [f, d], stopsFelt: 2, departedTs: 1035, alightedTs: 1910)
+        XCTAssertEqual(afterStops.bestKey, "F_S", "\(afterStops.byLine)")
+    }
+
+    func testAFixAtTheAlightingStopRulesOutATrainThatWasAKilometreAway() {
+        // off at the F's stop by the fix; the D's nearest stop then was 1.4 km off: no floor keeps it in
+        let f = cand("f1", key: "F_S", board: 1000, alightIdx: 6, stopTs: [6: 1900], chosen: true)
+        let d = cand("d1", key: "D_S", board: 1010, stopTs: [3: 1890])
+        var b = inf.fromDeparture([f, d], departedTs: 1035, leg: 1, chosenKey: "F_S")
+        // the evidence before the fix had the D far ahead
+        b.byTrain = ["F_S|f1": 0.1, "D_S|d1": 0.88, LineBelief.noneKey: 0.02]; b.byLine = ["F_S": 0.1, "D_S": 0.88, LineBelief.noneKey: 0.02]
+        let fixed = inf.withLocation(b, candidates: [f, d], distanceM: ["F_S|f1": 40, "D_S|d1": 1400])
+        XCTAssertEqual(fixed.bestKey, "F_S")
+        XCTAssertLessThan(fixed.byLine["D_S"]!, 0.001, "\(fixed.byLine)")
+        XCTAssertEqual(fixed.verdict, .onPlan)
     }
 
     func testAFixAfterWalkingOffPicksTheStationItIsAt() {
