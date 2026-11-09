@@ -47,6 +47,8 @@ struct ChangedEarly: Equatable {
     var change: EarlyChange
     var alightTs: Double
     var ts: Double
+    /// Read from "not on the train": the rider is on the platform at the change, so no train that left before is theirs.
+    var waiting = false
 }
 
 struct BoardingPrompt: Equatable {
@@ -123,6 +125,9 @@ final class TripRecorder {
     var quickChangeAfterSec = 75.0
     /// Position of a stop on a line (line key, stop index), from the published geometry; set by the planner.
     @ObservationIgnored var stopCoordinate: ((String, Int) -> (lat: Double, lon: Double)?)?
+    /// The changes the rider could have made off the train in hand toward the destination (the planner's
+    /// `changesOnTheWay`), for reading "not on the train" from the Live Activity as well as the app.
+    @ObservationIgnored var changesOnTheWay: (() -> [EarlyChange])?
 
     var sensing: Bool { sampler.isRunning }
 
@@ -729,16 +734,25 @@ final class TripRecorder {
     ///
     /// Said while the train the phone has them on has already reached the stop the route had them leave it at, they got
     /// off there unfelt: the ride closes at that stop and the route goes on from the change, with its arrival from the
-    /// connection, rather than starting over at the platform they boarded at.
+    /// connection, rather than starting over at the platform they boarded at. Said once it has reached a station where
+    /// another route changes toward the destination, they changed there (`readNotOnTrain`).
     func notOnTrain() {
         let now = lastNow ?? Date().timeIntervalSince1970
         tracker?.noteNotOnTrain(at: now)
-        if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed, let c = trainInHand,
-           let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs, let at = unfeltAlighting(c, departedTs: dep, now: now) {
-            tracker?.alightStanding(at: at)
-            handleEvents()
-            publish()
-            return
+        if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed {
+            let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs
+            switch readNotOnTrain(train: trainInHand, departedTs: dep, changes: changesOnTheWay?() ?? [], now: now) {
+            case let .alighted(at):
+                tracker?.alightStanding(at: at)
+                handleEvents()
+                publish()
+                return
+            case let .changed(change, at):
+                takeChange(change, alightTs: at, now: now, waiting: true)
+                return
+            case .backToPlatform:
+                break
+            }
         }
         // the phone rode the train on from the platform it was boarded at: the rider is off at a stop along its way, not
         // back at that platform (Nov 9: put back at 4 Av-9 St from Jay St, and the next pull-away read as a G leaving there)
@@ -855,8 +869,9 @@ final class TripRecorder {
 
     /// The rider names a change they made (any from the "On a train?" sheet, offered or not): on the train, the ride in
     /// hand closes there as an alighting no sensor felt; already off it (the phone felt the walk-off), the leg stands.
-    /// Either way the planner moves the route to that change and onto its connection.
-    func takeChange(_ change: EarlyChange, alightTs: Double, now: Double? = nil) {
+    /// Either way the planner moves the route to that change and onto its connection. `waiting`: the rider said they are not
+    /// on a train, so the connection is the next pull-away felt, not one that already left.
+    func takeChange(_ change: EarlyChange, alightTs: Double, now: Double? = nil, waiting: Bool = false) {
         let now = now ?? lastNow ?? Date().timeIntervalSince1970
         guard let t = tracker, t.phase == .riding else { return }
         let at = min(alightTs, now)
@@ -865,7 +880,7 @@ final class TripRecorder {
         handleEvents()
         offPlanAlighting = nil          // the planner follows the change named, not a stop read off the train's times
         earlyChange = nil
-        changedEarly = ChangedEarly(change: change, alightTs: at, ts: now)
+        changedEarly = ChangedEarly(change: change, alightTs: at, ts: now, waiting: waiting)
         publish()
     }
 

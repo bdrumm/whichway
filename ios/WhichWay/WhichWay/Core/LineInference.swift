@@ -31,12 +31,28 @@ func unfeltAlighting(_ c: BoardingCandidate, departedTs: Double, now: Double) ->
 /// How well a line at the boarding platform that is not one of the leg's suits the trip, for the line prior: 1 when its
 /// train goes on to the destination or to the stop the leg leaves the train at (a rider could take it on purpose, the
 /// A for the C), `oneChangeFit` when it reaches a station where a line to the destination calls (a change that makes
-/// sense), else `noUseFit` (it leads away from the trip). `stationsAfter` are the line's stations past the boarding stop.
+/// sense, `sensibleChangeStations`), else `noUseFit`: it leads away from the trip, and a rider with a route in hand does
+/// not take it (none of the rider's trips to Nov 9 did; each time the phone said so it was wrong: the R under the F at
+/// 4 Av-9 St, the D beside the F at W 4 St). `stationsAfter` are the line's stations past the boarding stop.
 func platformLineFit(stationsAfter: [String], targets: Set<String>, changeStations: Set<String>,
-                     oneChangeFit: Double = 0.6, noUseFit: Double = 0.25) -> Double {
+                     oneChangeFit: Double = 0.6, noUseFit: Double = 0.05) -> Double {
     if stationsAfter.contains(where: targets.contains) { return 1 }
     if stationsAfter.contains(where: changeStations.contains) { return oneChangeFit }
     return noUseFit
+}
+
+/// The stations where changing onto a line that calls at `dest` makes sense for a rider on a leg riding `legKeys`: every
+/// station of each line that calls at the destination, less those the leg's own lines call at (the leg's line takes the
+/// rider there anyway: the D from W 4 St reaches Broadway-Lafayette, where the F home calls, and that is no reason to
+/// take the D). `station` maps a stop to its complex.
+func sensibleChangeStations(lines: [String: [String]], dest: String, legKeys: [String], station: (String) -> String) -> Set<String> {
+    var out: Set<String> = []
+    for stops in lines.values where stops.contains(where: { station($0) == dest }) {
+        for st in stops { out.insert(station(st)) }
+    }
+    for k in legKeys { for st in lines[k] ?? [] { out.remove(station(st)) } }
+    out.remove(dest)
+    return out
 }
 
 /// A pull-away felt at a change sooner after the walk-off than `fraction` of the planned walk to the next platform: the
@@ -310,7 +326,11 @@ struct LineInference {
     var departureWindowSec = 300.0
     var alightLagSec = 20.0                // the rider walks off about this long after the train really reached the platform
     var alightSigmaSec = 75.0
-    var stopMiscountFactor = 0.35          // each station stop felt too many or too few costs this factor
+    /// Each station stop felt beyond those the train made costs this factor. Felt stops are a floor, not a count: the
+    /// phone misses most of them (Nov 9: 0 of 31 legs felt the train's own count, every one of them short, 5 of 11 at
+    /// best), so a train that made more stops than were felt is not counted against, or every short count reads as the
+    /// express beside the local (Nov 4 at W 4 St: the F home, 5 stops felt of its 10, taken for the D).
+    var stopMiscountFactor = 0.35
     var floor = 0.04                       // every candidate keeps this share of the peak likelihood
     var stoppedAtSigmaSec = 60.0           // the feed placed the train at the platform this long before the felt pull-away
     var stoppedAtFloor = 0.3               // a candidate the feed never showed standing at the platform keeps this much
@@ -321,11 +341,15 @@ struct LineInference {
     /// is nearest in time, and a train is nearly always within a minute of one: that match says about half what a match
     /// at the one stop the route names does, and counts as much.
     var nearestStopFactor = 0.5
-    /// How far the station stops the phone felt are trusted, as an exponent on their likelihoods (1: in full, 0: not at
-    /// all). The trip review has them matching the train's real stops on 0 of 28 legs, yet in full they outvoted the
-    /// departure and the plan mid-ride and at the walk-off (Nov 2, 4 and 5 at W 4 St: the F read as the D, the B, the F
-    /// again). Until stop sensing matches the trains, they nudge and never decide.
+    /// How far the timing of the station stops felt during the ride is trusted, as an exponent on its likelihood (1: in
+    /// full, 0: not at all). The trip review has the felt stops matching the train's real ones on no leg, yet in full
+    /// they outvoted the departure and the plan mid-ride (Nov 2, 4 and 5 at W 4 St: the F read as the D, the B, the F
+    /// again). Until stop sensing matches the trains, they nudge and never decide. The count at the walk-off is a floor
+    /// (`withStops`).
     var feltStopTrust = 0.25
+    /// A fix (no worse than 100 m) kilometres from where a train would have left the rider rules it out more firmly than
+    /// one odd timing does: where the rider is, not when, is what the plan's train cannot argue with.
+    var locationFloor = 0.01
 
     /// The plan's line's share of the prior: the default for the leg, pulled halfway toward what this rider has
     /// actually done on this trip before, once that is known.
@@ -424,7 +448,7 @@ struct LineInference {
             let expected = c.stopTs.filter { $0.key > c.boardIdx }.sorted { $0.key < $1.key }.map { $0.value - lag + stopLagSec }
             guard !expected.isEmpty else { w[c.trainId] = b.byTrain[c.trainId] ?? 0; continue }
             let reached = expected.filter { $0 <= now }.count
-            var like = floor + (1 - floor) * pow(stopMiscountFactor, Double(abs(stopTimes.count - reached)))
+            var like = floor + (1 - floor) * pow(stopMiscountFactor, Double(max(0, stopTimes.count - reached)))
             for felt in stopTimes {
                 let nearest = expected.map { abs(felt - $0) }.min() ?? Double.infinity
                 like *= gaussian(nearest, sigma: rideSigmaSec)
@@ -436,13 +460,13 @@ struct LineInference {
 
     /// The belief after a location fix following the walk-off: `distanceM` is the fix's distance to each
     /// candidate's alighting stop (a candidate whose stop position is unknown keeps its weight). A fix is where the
-    /// rider is, not one odd reading: it has no floor, so a train whose stop then was a kilometre off is ruled out
-    /// (Nov 4: off at 7 Av on the F, and the D, which never goes there, kept the leg at 87%).
+    /// rider is, not one odd reading: its floor is `locationFloor`, so a train whose stop then was a kilometre off is
+    /// all but ruled out (Nov 4: off at 7 Av on the F, and the D, which never goes there, kept the leg at 87%).
     func withLocation(_ b: LineBelief, candidates cands: [BoardingCandidate], distanceM: [String: Double]) -> LineBelief {
         guard !b.byTrain.isEmpty, !distanceM.isEmpty else { return b }
         var w: [String: Double] = none(b, informative: true)
         for c in cands {
-            let like = distanceM[c.trainId].map { max(1e-6, exp(-0.5 * ($0 / locationSigmaM) * ($0 / locationSigmaM))) } ?? 1.0
+            let like = distanceM[c.trainId].map { locationFloor + (1 - locationFloor) * exp(-0.5 * pow($0 / locationSigmaM, 2)) } ?? 1.0
             w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["location"])
@@ -471,7 +495,8 @@ struct LineInference {
         return c.stopTs.isEmpty ? nil : made.count
     }
 
-    /// The belief after the ride: `stopsFelt` station stops were felt between the departure and walking off. A
+    /// The belief after the ride: `stopsFelt` station stops were felt between the departure and walking off, at least
+    /// that many made (felt stops are a floor: `stopMiscountFactor`). A
     /// train that does not serve the leg's alighting stop is judged on the stops it made over the ride, by the
     /// feed's own times, when `departedTs` and `alightedTs` are given.
     func withStops(_ b: LineBelief, candidates cands: [BoardingCandidate], stopsFelt: Int, departedTs: Double? = nil, alightedTs: Double? = nil) -> LineBelief {
@@ -481,11 +506,12 @@ struct LineInference {
             return c.stopsToAlight
         }
         guard cands.contains(where: { expected($0) != nil }) else { return b }
-        var w: [String: Double] = [:]
-        if let n = b.byTrain[LineBelief.noneKey] { w[LineBelief.noneKey] = n * pow(noneLike, feltStopTrust) }
+        // felt no more stops than any train made: a short count fits every train, and "none of these" no worse
+        let informative = cands.contains { expected($0).map { stopsFelt > $0 } ?? false }
+        var w: [String: Double] = none(b, informative: informative)
         for c in cands {
-            let like = expected(c).map { floor + (1 - floor) * pow(stopMiscountFactor, Double(abs(stopsFelt - $0))) } ?? 1.0
-            w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * pow(like, feltStopTrust)
+            let like = expected(c).map { floor + (1 - floor) * pow(stopMiscountFactor, Double(max(0, stopsFelt - $0))) } ?? 1.0
+            w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["stops"])
     }

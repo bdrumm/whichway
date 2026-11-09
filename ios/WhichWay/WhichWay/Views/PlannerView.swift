@@ -1454,7 +1454,8 @@ struct PlannerView: View {
 
     /// The rider changed short of the route's own change: the route becomes the one changing there, and the rider is on
     /// its connection, the first of the next line's trains to leave that platform after they stepped off (by the
-    /// feed); with none in the feeds yet, those trains are followed and the next pull-away felt names one.
+    /// feed); with none in the feeds yet, or the rider still waiting on the platform ("not on the train"), those trains are
+    /// followed and the next pull-away felt names one.
     private func followEarlyChange(_ c: ChangedEarly) {
         guard let sched = data.schedule else { return }
         var alt = c.change.option
@@ -1473,7 +1474,7 @@ struct PlannerView: View {
         let gone = trainsAhead(boards: data.boards, schedule: sched, boardIdx: boardIdx, alightIdx: alightIdx, onLegKeys: Set(next.keys), now: data.now, maxAgoSec: 900)
         // the connection: the first to pull away after the step across (one standing there as the rider stepped off counts)
         let after = c.alightTs - TransferTiming.standingCatchSec
-        if let train = gone.filter({ PlatformTiming.pullsAway($0.boardTs, route: $0.route) >= after })
+        if !c.waiting, let train = gone.filter({ PlatformTiming.pullsAway($0.boardTs, route: $0.route) >= after })
             .min(by: { $0.boardTs < $1.boardTs }) {
             trip.setOnTrain(train, now: data.now)
         } else {
@@ -1799,6 +1800,7 @@ struct PlannerView: View {
         extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]; forecastTrainId = nil; frozenLegs = []
         clearReroute()
         trip.stopCoordinate = { [weak data] key, idx in data?.geometry?.lines[key]?.coord(idx) }
+        trip.changesOnTheWay = { changesOnTheWayNow() }
         // the scheduled run from the boarding stop to the next, the shortest over the first leg's lines: steps sooner
         // than most of it after a felt pull-away are the stairs, not a ride
         let firstRun: Double? = plans.first.flatMap { plan in
@@ -1839,13 +1841,12 @@ struct PlannerView: View {
     private func legPlans(_ p: PathOption?) -> [LegPlan] {
         guard let p = p, let index = data.index else { return [] }
         var plans: [LegPlan] = []
-        // the stations where a line to the destination calls: a line at the platform that reaches one is a sensible change
+        // the stations where a line to the destination calls and the leg's own lines do not: a line at the platform that
+        // reaches one is a sensible change
         let destSt = index.stationOf(destId)
-        var changeStations: Set<String> = []
-        for line in (data.schedule?.lines ?? [:]).values where line.stops.contains(where: { index.stationOf($0) == destSt }) {
-            for st in line.stops { changeStations.insert(index.stationOf(st)) }
-        }
+        let lineStops = (data.schedule?.lines ?? [:]).mapValues { $0.stops }
         for (i, leg) in p.legs.enumerated() {
+            let changeStations = sensibleChangeStations(lines: lineStops, dest: destSt, legKeys: leg.keys, station: index.stationOf)
             let tc: TripCandidate? = (p.live?.legs.indices.contains(i) ?? false) ? p.live?.legs[i] : nil
             let preferred = preferredKeys[i].flatMap { leg.keys.contains($0) ? $0 : nil }
             var plan = LegPlan(keys: leg.keys, idx: leg.idx, chosenKey: preferred ?? tc?.key ?? leg.primaryKey,
