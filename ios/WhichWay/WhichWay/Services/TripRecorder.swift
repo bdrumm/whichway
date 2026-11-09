@@ -47,6 +47,8 @@ struct ChangedEarly: Equatable {
     var change: EarlyChange
     var alightTs: Double
     var ts: Double
+    /// Read from "not on the train": the rider is on the platform at the change, so no train that left before is theirs.
+    var waiting = false
 }
 
 struct BoardingPrompt: Equatable {
@@ -103,6 +105,7 @@ final class TripRecorder {
     @ObservationIgnored private var lastAlight: (leg: Int, ts: Double)?
     @ObservationIgnored private var locationApplied: Set<Int> = []
     @ObservationIgnored private let inference = LineInference()
+    @ObservationIgnored private let continuity = RideContinuity()
     @ObservationIgnored private var seenEvents = 0
     @ObservationIgnored private var handSet: Set<Int> = []
     @ObservationIgnored private var dismissed: Set<Int> = []
@@ -120,11 +123,11 @@ final class TripRecorder {
     /// little before (the feed's time is an estimate), and up to the doors closing after.
     var quickChangeBeforeSec = 45.0
     var quickChangeAfterSec = 75.0
-    /// The believed train must have gone this far past the alighting stop (the feed's time at the stop after it,
-    /// at the platform) before the rider is taken to have stayed on.
-    var stayedOnPastSec = 60.0
     /// Position of a stop on a line (line key, stop index), from the published geometry; set by the planner.
     @ObservationIgnored var stopCoordinate: ((String, Int) -> (lat: Double, lon: Double)?)?
+    /// The changes the rider could have made off the train in hand toward the destination (the planner's
+    /// `changesOnTheWay`), for reading "not on the train" from the Live Activity as well as the app.
+    @ObservationIgnored var changesOnTheWay: (() -> [EarlyChange])?
 
     var sensing: Bool { sampler.isRunning }
 
@@ -255,21 +258,41 @@ final class TripRecorder {
         tracker?.alightWalking(at: walk.startTs)
     }
 
-    /// The believed train has gone on past the stop the route had the rider leave it at (the feed has it at the
-    /// stop after, a minute ago or more) and no walk-off was felt: the rider stayed on. Told once per leg; the
-    /// planner re-routes along the line (the A on to Jay St for the F rather than the F from W 4 St).
+    /// The believed train has gone on past the stop the route had the rider leave it at, and no walk-off was felt.
+    /// The route is the prior there: the rider got off as planned (a step across the platform, a train standing
+    /// there: nothing the sensors feel) unless the phone felt the train run on to the stop beyond (`RideContinuity`).
+    /// Run on: the rider stayed on, told once per leg, and the planner re-routes along the line (the A on to Jay St
+    /// for the F rather than the F from W 4 St). Not: the ride closes at the planned stop, at the train's moment
+    /// there, and the route goes on from the change; where the pushes began with the route's own connection pulling
+    /// away, the rider is on it. Platform shaking no longer counts as riding on (Nov 9 at Jay St: three minutes on
+    /// the platform, read as still on the F, and the route moved to W 4 St under the rider).
     private func checkStayedOn(now: Double) {
-        guard let t = tracker, t.phase == .riding else { return }
+        guard let t = tracker, t.phase == .riding, t.sensing else { return }
         let leg = t.timeline.legsRidden
         guard !stayedOnChecked.contains(leg), t.timeline.events.last?.kind == .departed, let c = trainInHand, let past = c.alightIdx,
               let progress = c.progressIdx, progress > past else { return }
         let lag = PlatformTiming.recordedLag(route: c.route)
-        // the stop after the alighting stop, reached by the feed's reckoning a while ago
-        guard let nextTs = c.stopTs.filter({ $0.key > past }).min(by: { $0.key < $1.key })?.value, now - (nextTs - lag) >= stayedOnPastSec else { return }
-        // and the phone has felt the train move since the alighting stop went by (not standing on its platform)
-        guard let moving = t.lastMovingTs, moving > (c.stopTs[past].map { $0 - lag } ?? 0) else { return }
-        stayedOnChecked.insert(leg)
-        stayedOn = StayedOn(leg: leg, key: c.key, trainId: c.trainId, pastIdx: past, ts: now)
+        guard let atStop = (c.stopTs[past] ?? c.alightTs).map({ $0 - lag }),
+              let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, atStop > dep else { return }
+        let later = c.stopTs.filter { $0.key > past }.sorted { $0.key < $1.key }.map { $0.value - lag }
+        let connections = leg + 1 < legs.count ? transferLog.pullAways() : []
+        switch continuity.pastStop(atStopTs: atStop, laterStopTs: later, pushTimes: t.pushRuns, connectionPullAways: connections, now: now) {
+        case .waiting:
+            return
+        case .stayedOn:
+            stayedOnChecked.insert(leg)
+            stayedOn = StayedOn(leg: leg, key: c.key, trainId: c.trainId, pastIdx: past, ts: now)
+        case let .steppedOff(at):
+            tracker?.alightStanding(at: at)
+            handleEvents()
+            publish()
+        case let .tookConnection(offAt, pullAwayTs):
+            tracker?.alightStanding(at: offAt)
+            handleEvents()
+            tracker?.beginRiding(now: now, departedTs: pullAwayTs)
+            handleEvents()
+            publish()
+        }
     }
 
     /// A location fix. Soon after a walk-off, the fix says which station the rider is at: its distance to each
@@ -711,14 +734,37 @@ final class TripRecorder {
     ///
     /// Said while the train the phone has them on has already reached the stop the route had them leave it at, they got
     /// off there unfelt: the ride closes at that stop and the route goes on from the change, with its arrival from the
-    /// connection, rather than starting over at the platform they boarded at.
+    /// connection, rather than starting over at the platform they boarded at. Said once it has reached a station where
+    /// another route changes toward the destination, they changed there (`readNotOnTrain`).
     func notOnTrain() {
         let now = lastNow ?? Date().timeIntervalSince1970
         tracker?.noteNotOnTrain(at: now)
+        if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed {
+            let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs
+            switch readNotOnTrain(train: trainInHand, departedTs: dep, changes: changesOnTheWay?() ?? [], now: now) {
+            case let .alighted(at):
+                tracker?.alightStanding(at: at)
+                handleEvents()
+                publish()
+                return
+            case let .changed(change, at):
+                takeChange(change, alightTs: at, now: now, waiting: true)
+                return
+            case .backToPlatform:
+                break
+            }
+        }
+        // the phone rode the train on from the platform it was boarded at: the rider is off at a stop along its way, not
+        // back at that platform (Nov 9: put back at 4 Av-9 St from Jay St, and the next pull-away read as a G leaving there)
         if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed, let c = trainInHand,
-           let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs, let at = unfeltAlighting(c, departedTs: dep, now: now) {
-            tracker?.alightStanding(at: at)
+           let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs,
+           let off = continuity.stopLeftAt(c, departedTs: dep, pushTimes: t.pushRuns, now: now) {
+            let leg = currentLeg
+            tracker?.alightStanding(at: off.ts)
             handleEvents()
+            if legs.indices.contains(leg), legs[leg].idx[c.key]?.to != off.idx {
+                offPlanAlighting = OffPlanAlighting(leg: leg, key: c.key, stopIdx: off.idx, ts: off.ts)
+            }
             publish()
             return
         }
@@ -823,8 +869,9 @@ final class TripRecorder {
 
     /// The rider names a change they made (any from the "On a train?" sheet, offered or not): on the train, the ride in
     /// hand closes there as an alighting no sensor felt; already off it (the phone felt the walk-off), the leg stands.
-    /// Either way the planner moves the route to that change and onto its connection.
-    func takeChange(_ change: EarlyChange, alightTs: Double, now: Double? = nil) {
+    /// Either way the planner moves the route to that change and onto its connection. `waiting`: the rider said they are not
+    /// on a train, so the connection is the next pull-away felt, not one that already left.
+    func takeChange(_ change: EarlyChange, alightTs: Double, now: Double? = nil, waiting: Bool = false) {
         let now = now ?? lastNow ?? Date().timeIntervalSince1970
         guard let t = tracker, t.phase == .riding else { return }
         let at = min(alightTs, now)
@@ -833,7 +880,7 @@ final class TripRecorder {
         handleEvents()
         offPlanAlighting = nil          // the planner follows the change named, not a stop read off the train's times
         earlyChange = nil
-        changedEarly = ChangedEarly(change: change, alightTs: at, ts: now)
+        changedEarly = ChangedEarly(change: change, alightTs: at, ts: now, waiting: waiting)
         publish()
     }
 
