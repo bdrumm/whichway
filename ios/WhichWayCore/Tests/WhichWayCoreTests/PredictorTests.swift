@@ -31,7 +31,8 @@ final class PredictorTests: XCTestCase {
     func testPredictLineMatchesPython() throws {
         let (inp, top) = try loadFixture()
         let expected = try XCTUnwrap(top["expected"] as? [String: Any])
-        XCTAssertEqual(inp.trains.count, 5)
+        XCTAssertEqual(inp.trains.count, 6)
+        XCTAssertTrue(inp.trains.last?.timetable == true, "the fixture's timetable trip")
         for sc in inp.scenarios {
             let py = try XCTUnwrap(expected[sc] as? [String: Any], sc)
             let out = Predictor.predictLine(inp.trains, line: inp.line, model: inp.model, now: inp.now, scenario: sc)
@@ -78,6 +79,22 @@ final class PredictorTests: XCTestCase {
             XCTAssertEqual(mine.p90, num(c["p90"]) ?? -1, accuracy: 1e-9)
             XCTAssertEqual(mine.n, c["n"] as? Int ?? -1)
         }
+        // trips the feed only plays the timetable for: their own table, distinct from the tracked one
+        let tcal = try XCTUnwrap(top["timetable_calibration"] as? [[String: Any]])
+        var differs = false
+        for (h, c) in zip(inp.horizons, tcal) {
+            let mine = Predictor.calibrationAt(inp.model, route: "6", horizon: h, timetable: true)
+            XCTAssertEqual(mine.bias, num(c["bias"]) ?? -1, accuracy: 1e-9)
+            XCTAssertEqual(mine.p10, num(c["p10"]) ?? -1, accuracy: 1e-9)
+            XCTAssertEqual(mine.p90, num(c["p90"]) ?? -1, accuracy: 1e-9)
+            if mine.bias != Predictor.calibrationAt(inp.model, route: "6", horizon: h).bias { differs = true }
+        }
+        XCTAssertTrue(differs)
+        // the grid rule (client_model.is_timetable_trip): a trip on its timetable, and a tracked one
+        XCTAssertTrue(Predictor.isTimetableTrip([1_700_000_220, 1_700_000_340, 1_700_000_490, 1_700_000_580]))
+        XCTAssertFalse(Predictor.isTimetableTrip([1_700_000_224, 1_700_000_346, 1_700_000_461]))
+        XCTAssertTrue(Predictor.isTimetableTrip([1_020, 1_140]))
+        XCTAssertFalse(Predictor.isTimetableTrip([1_020]))
         // no tables at all: physical priors
         XCTAssertEqual(Predictor.remainingHold(nil, elapsed: 500).expected, Predictor.priorHold.expected)
         XCTAssertEqual(Predictor.calibrationAt(nil, route: "Q", horizon: 100).bias, 0)

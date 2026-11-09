@@ -5,7 +5,11 @@ arrival store. The clients only have the feeds, the timetable extract and the pu
 prediction engine they run is table-driven and fitted here from the collected history:
 
 * **ETA calibration** — the feed's error (arrival − feed ETA) by route and forecast horizon: bias and the
-  p10/p90 spread from the ETA samples matched to arrivals, shrunk toward the all-routes value.
+  p10/p90 spread from the ETA samples matched to arrivals, shrunk toward the all-routes value. The arrivals are
+  the store's times, which run into the dwell; the phone takes the line's recorded lag off to get the train
+  coming in (PlatformTiming.recordedLag). A separate table covers trips the feed is only playing the timetable
+  for (every stop time on the timetable's 30 s grid: a train that is not tracked yet), whose real train runs
+  ahead of or behind the timetable unseen (Nov 4 2026: a G at 4 Av-9 St minutes before its timetable time).
 * **Hold survival** — from the hold log: given a train has already been held ``t`` seconds, the expected
   (winsorized at 30 min), median and p90 remaining hold (the fixed "10 more minutes" scenario was +11 min
   biased on the scored live forecasts) and the chance it clears within two minutes.
@@ -33,7 +37,7 @@ from ..analysis.schedule_match import match_arrivals
 from ..collect.dwells import HOLD_SEC
 from ..sources.gtfs_static import NY_TZ
 
-VERSION = 2
+VERSION = 3
 HORIZON_EDGES = [0, 120, 300, 600, 1200, 2400, 3600]     # the last bucket is open-ended
 ELAPSED_GRID = [150, 240, 360, 600, 900, 1800]           # seconds already held
 PRIOR_N = 20.0
@@ -45,6 +49,8 @@ PRIOR_HOLD = {"expected": 300.0, "p50": 180.0, "p90": 720.0, "clears_2min": 0.35
 WINSOR_REMAINING_SEC = 1800.0
 BAND_NAMES = ["night", "am_peak", "midday", "pm_peak", "evening", "weekend_day", "weekend_night"]
 MIN_BAND_N = 150
+TIMETABLE_GRID_SEC = 30          # NYCT timetables run on half minutes; a tracked train's times are to the second
+TIMETABLE_MIN_STOPS = 3          # this many remaining stop times on the grid (all of them, when fewer remain)
 
 
 def band_of_hour(hour: int, weekday: int) -> int:
@@ -105,9 +111,38 @@ def _shrink(g: pd.Series, prior: dict) -> dict:
     return {"n": n, "bias": round(bias, 1), "p10": round(p10, 1), "p90": round(p90, 1)}
 
 
+def on_timetable_grid(ts) -> bool:
+    """A feed time on the timetable's half-minute grid."""
+    try:
+        return float(ts) % TIMETABLE_GRID_SEC == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def is_timetable_trip(stop_times: list) -> bool:
+    """The feed is playing the timetable for this trip: its remaining stop times all sit on the half-minute grid
+    (TIMETABLE_MIN_STOPS of them, or every one when fewer remain, two at least). A tracked train's predictions are
+    to the second, so three on the grid by chance is about one in 27,000. The clients port this rule."""
+    ts = [t for t in stop_times if t is not None][:TIMETABLE_MIN_STOPS]
+    return len(ts) >= 2 and all(on_timetable_grid(t) for t in ts)
+
+
+def _calibration_tables(j: pd.DataFrame, min_route_n: int) -> tuple[list[dict], dict]:
+    prior = _prior_buckets()
+    all_ = [_shrink(j.loc[j["b"] == i, "err"], prior[i]) for i in range(len(prior))]
+    by_route = {}
+    for r, gr in j.groupby("route_id"):
+        if len(gr) < min_route_n or not isinstance(r, str) or not r:
+            continue
+        by_route[r] = [_shrink(gr.loc[gr["b"] == i, "err"], all_[i]) for i in range(len(prior))]
+    return all_, by_route
+
+
 def fit_eta_calibration(eta_samples: pd.DataFrame | None, arrivals: pd.DataFrame | None, min_route_n: int = 30) -> dict:
-    """Feed ETA error by route × horizon bucket."""
-    out = {"horizons": list(HORIZON_EDGES), "n": 0, "all": _prior_buckets(), "by_route": {}}
+    """Feed ETA error by route × horizon bucket; samples whose ETA sits on the timetable grid (the feed playing the
+    timetable for a trip it does not track yet) get their own table (``timetable``), shrunk toward the tracked one."""
+    out = {"horizons": list(HORIZON_EDGES), "n": 0, "all": _prior_buckets(), "by_route": {},
+           "timetable": {"n": 0, "all": _prior_buckets(), "by_route": {}}}
     if eta_samples is None or eta_samples.empty or arrivals is None or arrivals.empty:
         return out
     arr = arrivals[["trip_key", "stop_id", "arrival_ts"]].drop_duplicates(["trip_key", "stop_id"])
@@ -118,14 +153,18 @@ def fit_eta_calibration(eta_samples: pd.DataFrame | None, arrivals: pd.DataFrame
     j = j[(j["err"].abs() < 3600) & (j["h"] >= -60) & (j["h"] < 7200)]
     if j.empty:
         return out
-    j = j.assign(b=j["h"].map(horizon_index))
-    out["n"] = int(len(j))
-    prior = _prior_buckets()
-    out["all"] = [_shrink(j.loc[j["b"] == i, "err"], prior[i]) for i in range(len(prior))]
-    for r, gr in j.groupby("route_id"):
-        if len(gr) < min_route_n or not isinstance(r, str) or not r:
-            continue
-        out["by_route"][r] = [_shrink(gr.loc[gr["b"] == i, "err"], out["all"][i]) for i in range(len(prior))]
+    j = j.assign(b=j["h"].map(horizon_index), grid=j["eta_ts"].map(on_timetable_grid))
+    tracked, timetable = j[~j["grid"]], j[j["grid"]]
+    out["n"] = int(len(tracked))
+    if len(tracked):
+        out["all"], out["by_route"] = _calibration_tables(tracked, min_route_n)
+    out["timetable"]["n"] = int(len(timetable))
+    if len(timetable):
+        # shrink the timetable table toward the tracked one where it is thin, not toward the bare prior
+        prior = out["all"]
+        out["timetable"]["all"] = [_shrink(timetable.loc[timetable["b"] == i, "err"], prior[i]) for i in range(len(prior))]
+        out["timetable"]["by_route"] = {r: [_shrink(gr.loc[gr["b"] == i, "err"], out["timetable"]["all"][i]) for i in range(len(prior))]
+                                        for r, gr in timetable.groupby("route_id") if isinstance(r, str) and r and len(gr) >= min_route_n}
     return out
 
 
@@ -286,8 +325,12 @@ def fit_client_model(eta_samples, arrivals, holds, static, now_iso: str | None =
 
 # ---------------------------------------------------------------- reference predictor
 
-def calibration_at(model: dict, route: str, horizon_sec: float) -> dict:
+def calibration_at(model: dict, route: str, horizon_sec: float, timetable: bool = False) -> dict:
+    """The feed's ETA error at this horizon for the route; ``timetable``: for a trip the feed only plays the
+    timetable for (``is_timetable_trip``), from its own table when the model has one."""
     cal = (model or {}).get("eta_calibration") or {}
+    if timetable and (cal.get("timetable") or {}).get("all"):
+        cal = cal["timetable"]
     i = horizon_index(horizon_sec)
     table = (cal.get("by_route") or {}).get(route) or cal.get("all")
     if table and i < len(table):
@@ -318,11 +361,14 @@ def predict_train(train: dict, line: dict, model: dict, now: float, scenario: st
 
     ``train``: {"trip_id", "route", "next_idx", "points": [[idx, feed_eta_ts], ...] (ascending idx),
     "lateness_sec", "effective_lateness_sec", "sched_ts" (schedule at next_idx) or None,
-    "position": {"status", "since_sec", "holding", "stalled"} or None}. ``line``: {"stops", "run_sec"}.
+    "position": {"status", "since_sec", "holding", "stalled"} or None, "timetable": bool (optional)}.
+    ``line``: {"stops", "run_sec"}. A timetable trip (the feed is only playing the timetable for it) takes the
+    timetable calibration and no lateness carry: its lateness is the timetable's, not the train's.
     """
     route = str(train.get("route") or "")
     pts = [(int(i), float(t)) for i, t in (train.get("points") or []) if t is not None]
     pts.sort()
+    timetable = bool(train.get("timetable"))
     out = {"trip_id": train.get("trip_id"), "points": [], "hold_extra_sec": 0.0, "knock_on_sec": 0.0, "scenario": scenario}
     if not pts:
         return out
@@ -331,9 +377,10 @@ def predict_train(train: dict, line: dict, model: dict, now: float, scenario: st
     eff = train.get("effective_lateness_sec")
     if eff is None:
         eff = lat
-    optimistic = max(0.0, float(eff) - float(lat)) if (eff is not None and lat is not None) else 0.0
+    optimistic = max(0.0, float(eff) - float(lat)) if (eff is not None and lat is not None) and not timetable else 0.0
     pos = train.get("position") or {}
-    held = bool(pos.get("holding") or pos.get("stalled"))
+    # a timetable trip's position is the timetable's too: it neither holds nor stalls
+    held = bool(pos.get("holding") or pos.get("stalled")) and not timetable
     extra = 0.0
     if held:
         rem = remaining_hold((model or {}).get("hold_survival"), float(pos.get("since_sec") or 0.0))
@@ -345,12 +392,12 @@ def predict_train(train: dict, line: dict, model: dict, now: float, scenario: st
     prev_t = None
     for idx, feed in pts:
         h = feed - now
-        cal = calibration_at(model, route, h)
+        cal = calibration_at(model, route, h, timetable)
         eta_f = feed + float(cal["bias"]) + optimistic
         var_f = max(((float(cal["p90"]) - float(cal["p10"])) / 2.56) ** 2, 1.0)
         eta, lo, hi, source = eta_f, feed + float(cal["p10"]) + optimistic, feed + float(cal["p90"]) + optimistic, "feed"
         k = idx - next_idx
-        if sched_next is not None and eff is not None and k >= 1:
+        if sched_next is not None and eff is not None and k >= 1 and not timetable:
             run_sum, ok = 0.0, True
             for s in range(next_idx, idx):
                 r = run[s] if s < len(run) else None

@@ -157,10 +157,11 @@ export function computeBoard(schedule, feeds, now, model = null) {
       if (pos && started && !seen.has(key)) { seen.add(key); if (pos.holding) summary.holding++; if (pos.stalled) summary.stalled++; if (corroboration === "feed_optimistic") summary.feed_optimistic++; }
       // the prediction engine's view of this arrival: the feed's ETA calibrated by route and horizon, shifted when the
       // position proves it optimistic, plus the expected remaining hold for a held train (see predictTrain)
-      const pe = predictTrain({ trip_id: tu.trip.trip_id, route, next_idx: 0, points: [[0, eta]], lateness_sec: lateness, effective_lateness_sec: effective, sched_ts: null,
+      const timetable = isTimetableTrip(tu.stops.map(s => s.arrival ?? s.departure));
+      const pe = predictTrain({ trip_id: tu.trip.trip_id, route, next_idx: 0, points: [[0, eta]], lateness_sec: lateness, effective_lateness_sec: effective, sched_ts: null, timetable,
         position: pos ? { status: pos.status, since_sec: pos.since_sec, holding: !!pos.holding, stalled: !!pos.stalled } : null }, { stops: [], run_sec: [] }, model, now, "baseline").points[0];
       arrivals.push({ key, trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, feed: tu.feed, eta_ts: eta, sched_ts: sched, sched_method: schedMethod, lateness_sec: lateness, effective_lateness_sec: effective,
-        stops_away: i, next_stop_id: tu.stops[0] && tu.stops[0].stop_id, started, position: pos, corroboration,
+        stops_away: i, next_stop_id: tu.stops[0] && tu.stops[0].stop_id, started, position: pos, corroboration, timetable,
         model_eta_ts: pe ? pe.eta_ts : null, model_lo_ts: pe ? pe.lo_ts : null, model_hi_ts: pe ? pe.hi_ts : null,
         track_changed: !!(st.actual_track && st.sched_track && st.actual_track !== st.sched_track), actual_track: st.actual_track });
     }
@@ -271,7 +272,7 @@ export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
       pos = { status: veh.status, stop_id: veh.stop_id, stop_idx: pj ?? null, stop_name: pj != null ? line.names[pj] : veh.stop_id, since_sec: since, holding, stalled, expected_run_sec: expectedRun, position_lateness_sec: plate };
       if (plate != null && lateness != null) { corroboration = plate - lateness > 60 ? "feed_optimistic" : "agree"; effective = Math.max(lateness, plate); }
     }
-    trains.push({ trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, points, next_idx: j, next_name: line.names[j], eta_ts: eta, sched_ts: sched, sched_method: schedMethod, lateness_sec: lateness,
+    trains.push({ trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, points, timetable: isTimetableTrip(points.map(p => p[1])), next_idx: j, next_name: line.names[j], eta_ts: eta, sched_ts: sched, sched_method: schedMethod, lateness_sec: lateness,
       effective_lateness_sec: effective, position: pos, corroboration, track_changed: !!(tu.stops[0].actual_track && tu.stops[0].sched_track && tu.stops[0].actual_track !== tu.stops[0].sched_track),
       segment: pos ? segmentInfo(line, pos, pos.since_sec) : null, last_run: runSpeed(line, lastRun) });
   }
@@ -583,8 +584,16 @@ export const PREDICT_SCENARIOS = ["baseline", "hold_persists", "clears_now"];
 const PRIOR_HOLD = { expected: 300, p50: 180, p90: 720, clears_2min: 0.35 };
 export const priorSpread = h => [-45 - 0.05 * h, 60 + 0.15 * h];
 export function horizonIndex(h) { for (let i = 0; i < HORIZON_EDGES.length - 1; i++) if (HORIZON_EDGES[i] <= h && h < HORIZON_EDGES[i + 1]) return i; return h < 0 ? 0 : HORIZON_EDGES.length - 2; }
-export function calibrationAt(model, route, h) {
-  const cal = (model && model.eta_calibration) || {}; const i = horizonIndex(h);
+/** The feed is only playing the timetable for a trip (client_model.is_timetable_trip): its next stop times all sit
+ *  on the timetable's half-minute grid, three of them (or every one, two at least, when fewer remain). */
+export const TIMETABLE_GRID_SEC = 30, TIMETABLE_MIN_STOPS = 3;
+export function isTimetableTrip(times) {
+  const ts = (times || []).filter(t => t != null).slice(0, TIMETABLE_MIN_STOPS);
+  return ts.length >= 2 && ts.every(t => Number(t) % TIMETABLE_GRID_SEC === 0);
+}
+export function calibrationAt(model, route, h, timetable = false) {
+  let cal = (model && model.eta_calibration) || {}; const i = horizonIndex(h);
+  if (timetable && cal.timetable && cal.timetable.all) cal = cal.timetable;
   const table = (cal.by_route && cal.by_route[route]) || cal.all;
   if (table && i < table.length) return table[i];
   const [p10, p90] = priorSpread(Math.max(0, h)); return { n: 0, bias: 0, p10, p90 };
@@ -629,21 +638,22 @@ export function predictTrain(train, line, model, now, scenario = "baseline") {
   const out = { trip_id: train.trip_id, points: [], hold_extra_sec: 0, knock_on_sec: 0, scenario };
   if (!pts.length) return out;
   const nextIdx = train.next_idx != null ? Number(train.next_idx) : pts[0][0];
+  const timetable = !!train.timetable;   // the feed is only playing the timetable: its calibration, no carry, no hold
   const lat = train.lateness_sec, eff = train.effective_lateness_sec != null ? train.effective_lateness_sec : lat;
-  const optimistic = (eff != null && lat != null) ? Math.max(0, eff - lat) : 0;
-  const pos = train.position || {}; const held = !!(pos.holding || pos.stalled);
+  const optimistic = (eff != null && lat != null && !timetable) ? Math.max(0, eff - lat) : 0;
+  const pos = train.position || {}; const held = !!(pos.holding || pos.stalled) && !timetable;
   let extra = 0;
   if (held) { const rem = remainingHold(model && model.hold_survival, Number(pos.since_sec || 0)); extra = ({ baseline: rem.expected, hold_persists: rem.p90, clears_now: 0 })[scenario] ?? rem.expected; }
   out.hold_extra_sec = extra;
   const run = line.run_sec || []; const schedNext = train.sched_ts; const band = bandAt(now);
   let prevT = null;
   for (const [idx, feed] of pts) {
-    const h = feed - now; const cal = calibrationAt(model, route, h);
+    const h = feed - now; const cal = calibrationAt(model, route, h, timetable);
     const etaF = feed + Number(cal.bias) + optimistic;
     const varF = Math.max(((Number(cal.p90) - Number(cal.p10)) / 2.56) ** 2, 1);
     let eta = etaF, lo = feed + Number(cal.p10) + optimistic, hi = feed + Number(cal.p90) + optimistic, source = "feed";
     const k = idx - nextIdx;
-    if (schedNext != null && eff != null && k >= 1) {
+    if (schedNext != null && eff != null && k >= 1 && !timetable) {
       let runSum = 0, ok = true;
       for (let s = nextIdx; s < idx; s++) { const r = s < run.length ? run[s] : null; if (r == null) { ok = false; break; } runSum += Number(r); }
       const carry = carryAt(model, route, k, band);
@@ -687,7 +697,7 @@ export function predictLine(trains, line, model, now, scenario = "baseline", min
 }
 /** A lineBoard() train in the predictor's input form. */
 export const predictorInput = lb => (lb.trains || []).map(t => ({ trip_id: t.trip_id, route: t.route, next_idx: t.next_idx, points: t.points.map(p => Array.isArray(p) ? [p[0], p[1]] : [p.idx, p.ts]),
-  lateness_sec: t.lateness_sec, effective_lateness_sec: t.effective_lateness_sec, sched_ts: t.sched_ts,
+  lateness_sec: t.lateness_sec, effective_lateness_sec: t.effective_lateness_sec, sched_ts: t.sched_ts, timetable: !!t.timetable,
   position: t.position ? { status: t.position.status, since_sec: t.position.since_sec, holding: !!t.position.holding, stalled: !!t.position.stalled } : null }));
 /** Predictions for a board under every scenario that matters: baseline always, the hold scenarios when a train is held. */
 export function predictBoard(lb, line, model, now) {

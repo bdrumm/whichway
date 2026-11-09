@@ -98,6 +98,12 @@ struct LiveTrain: Identifiable, Codable {
     /// Set on the predicted boards: the feed's own points and the engine's projection for the chosen scenario.
     var feedPoints: [TrainPoint]? = nil
     var pred: PredictedTrain? = nil
+    /// The feed is only playing the timetable for this trip (`Predictor.isTimetableTrip`): its times and its position
+    /// are the timetable's, and the real train may be minutes ahead of them or behind (optional: boards kept before
+    /// Nov 2026 have none).
+    var timetable: Bool? = nil
+
+    var isTimetable: Bool { timetable == true }
 
     var label: String { (trainId ?? tripId).trimmingCharacters(in: .whitespaces) }
     var isHeld: Bool { position?.holding == true || position?.stalled == true }
@@ -315,7 +321,8 @@ func lineBoard(schedule: ClientSchedule, lineSched: [LineSchedEntry], feeds: [St
             trains.append(LiveTrain(key: key, tripId: tu.trip.tripId, trainId: tu.trip.trainId, route: route, points: points, nextIdx: j,
                                     nextName: j < line.names.count ? line.names[j] : line.stops[j], etaTs: eta, schedTs: sched, schedMethod: schedMethod,
                                     latenessSec: lateness, effectiveLatenessSec: effective, position: pos, corroboration: corroboration,
-                                    trackChanged: trackChanged, started: started, segment: segment, lastRun: lastRun))
+                                    trackChanged: trackChanged, started: started, segment: segment, lastRun: lastRun,
+                                    timetable: Predictor.isTimetableTrip(tu.stops.compactMap { $0.eta }) ? true : nil))
         }
     }
     trains.sort { a, b in a.nextIdx != b.nextIdx ? a.nextIdx > b.nextIdx : a.etaTs < b.etaTs }

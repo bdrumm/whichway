@@ -215,6 +215,7 @@ struct RouteInsightsView: View {
 
     private func latenessNote(_ t: LiveTrain) -> String {
         var bits: [String] = []
+        if t.isTimetable { bits.append("not tracked yet: the feed is playing the timetable") }
         if let m = t.schedMethod { bits.append(m == "trip_stem" ? "matched to its scheduled trip" : "nearest scheduled trip") }
         switch t.corroboration {
         case "agree": bits.append("feed and position agree")

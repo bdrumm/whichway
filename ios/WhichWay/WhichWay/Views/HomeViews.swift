@@ -128,7 +128,8 @@ struct HomeCard: View {
     @ViewBuilder private var boardsLine: some View {
         if let it = itinerary, let l0 = it.legs.first {
             let whereNow = onTrain ? stopsToGo(l0, option: option, leg: rideLeg, offAt: offAt) : stopsAway(l0, option: option, leg: rideLeg)
-            let pos = (l0.train.position?.text).map { " · \($0)" } ?? ""
+            // a train the feed only plays the timetable for has no real position: say so instead
+            let pos = l0.timetableNote.map { " · \($0)" } ?? (l0.train.position?.text).map { " · \($0)" } ?? ""
             if onTrain {
                 Text(whereNow.text + pos).font(.body).foregroundStyle(.secondary).lineLimit(1)
             } else {
