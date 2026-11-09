@@ -56,14 +56,28 @@ final class LineInferenceTests: XCTestCase {
         // off the F at W 4 St for the C uptown: the A beside it reaches 14 St too; the B heads off up 6 Av
         XCTAssertEqual(platformLineFit(stationsAfter: ["s1", "dest"], targets: ["dest"], changeStations: []), 1)
         XCTAssertEqual(platformLineFit(stationsAfter: ["s1", "x"], targets: ["dest"], changeStations: ["x"]), 0.6)
-        XCTAssertEqual(platformLineFit(stationsAfter: ["s1", "y"], targets: ["dest"], changeStations: ["x"]), 0.25)
+        XCTAssertEqual(platformLineFit(stationsAfter: ["s1", "y"], targets: ["dest"], changeStations: ["x"]), 0.05)
         // the planned C is not there; an A and a B left together: the A, which goes to the destination, is the likelier
         let c = [cand("c1", key: "C_N", board: 1400, chosen: true), cand("a1", key: "A_N", board: 1000, onLeg: false),
                  cand("b1", key: "B_N", board: 1005, onLeg: false)]
-        let b = inf.fromDeparture(c, departedTs: 1030, leg: 1, chosenKey: "C_N", lineFit: ["A_N": 1, "B_N": 0.25])
+        let b = inf.fromDeparture(c, departedTs: 1030, leg: 1, chosenKey: "C_N", lineFit: ["A_N": 1, "B_N": 0.05])
         XCTAssertGreaterThan(b.byLine["A_N"] ?? 0, 2 * (b.byLine["B_N"] ?? 0), "\(b.byLine)")
         let flat = inf.fromDeparture(c, departedTs: 1030, leg: 1, chosenKey: "C_N")
         XCTAssertLessThan(abs((flat.byLine["A_N"] ?? 0) - (flat.byLine["B_N"] ?? 0)), 0.2, "without the fit they are on a par: \(flat.byLine)")
+    }
+
+    func testAChangeStationCountsOnlyWhereTheLegsOwnLineDoesNotGo() {
+        // home on the F from W 4 St to 7 Av: the D beside it calls at Broadway-Lafayette, where the F calls too (no reason to
+        // take the D), then runs express past every F and G station: it leads away. The G at 4 Av-9 St on the way to 14 St
+        // reaches Hoyt, where the A calls and the F does not: a change that makes sense.
+        let lines = ["F_S": ["w4", "bl", "jay", "7av"], "D_S": ["w4", "bl", "atl", "36"], "G_S": ["hoyt", "7av"]]
+        let home = sensibleChangeStations(lines: lines, dest: "7av", legKeys: ["F_S"], station: { $0 })
+        XCTAssertEqual(home, ["hoyt"])
+        XCTAssertEqual(platformLineFit(stationsAfter: ["bl", "atl", "36"], targets: ["7av"], changeStations: home), 0.05)
+        let work = ["F_N": ["4av", "jay", "w4"], "G_N": ["4av", "hoyt"], "A_N": ["hoyt", "jay", "w4", "14"]]
+        let toWork = sensibleChangeStations(lines: work, dest: "14", legKeys: ["F_N"], station: { $0 })
+        XCTAssertEqual(toWork, ["hoyt"])
+        XCTAssertEqual(platformLineFit(stationsAfter: ["hoyt"], targets: ["14", "w4"], changeStations: toWork), 0.6)
     }
 
     func testADepartureThatMatchesTheOtherLineOverridesThePrior() {
@@ -81,11 +95,19 @@ final class LineInferenceTests: XCTestCase {
         let c = [cand("r1", key: "R_N", board: 1000, alight: 1900, stops: 6, chosen: true), cand("n1", key: "N_N", board: 1020, alight: 1600, stops: 2)]
         var b = inf.fromDeparture(c, departedTs: 1035, leg: 0, chosenKey: "R_N")
         XCTAssertEqual(b.verdict, .unsure, "the departure alone cannot split them: \(b.byLine)")
-        b = inf.withStops(b, candidates: c, stopsFelt: 2)
+        // two stops felt: a floor, not a count; the local may have made six with four missed, so nothing is settled
+        let short = inf.withStops(b, candidates: c, stopsFelt: 2)
+        XCTAssertEqual(short.verdict, .unsure, "\(short.byLine)")
+        XCTAssertEqual(short.byLine["R_N"]!, b.byLine["R_N"]!, accuracy: 1e-9)
+        // five felt: more than the express makes, so it was the local
+        let five = inf.withStops(b, candidates: c, stopsFelt: 5)
+        XCTAssertEqual(five.bestKey, "R_N")
+        XCTAssertEqual(five.verdict, .onPlan)
+        // the walk-off at the express's arrival tells them apart
+        b = inf.withAlighting(short, candidates: c, alightedTs: 1625)
         XCTAssertEqual(b.bestKey, "N_N")
         XCTAssertEqual(b.verdict, .switched)
-        b = inf.withAlighting(b, candidates: c, alightedTs: 1625)
-        XCTAssertGreaterThan(b.confidence, 0.97)
+        XCTAssertGreaterThan(b.confidence, 0.9)
         XCTAssertEqual(b.evidence, ["departure", "stops", "alighting"])
     }
 

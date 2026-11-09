@@ -70,6 +70,42 @@ func earlyChangeOffer(_ changes: [EarlyChange], train c: BoardingCandidate, now:
     return best
 }
 
+/// The latest change in `changes` that the train `c` has reached since the pull-away at `departedTs`, by the feed put back
+/// to the platform moment: where a rider who says they are no longer on it most likely got off. Only changes off the
+/// train's own line count (`stopIdx` is on the ridden line); nil before the first.
+func changeReached(_ changes: [EarlyChange], train c: BoardingCandidate, departedTs: Double, now: Double) -> (change: EarlyChange, atTs: Double)? {
+    var best: (change: EarlyChange, atTs: Double)?
+    for ch in changes where ch.option.legs.first?.idx[c.key]?.to == ch.stopIdx {
+        guard let feedTs = c.stopTs[ch.stopIdx] else { continue }
+        let at = PlatformTiming.atPlatform(feedTs, route: c.route)
+        if at > departedTs, at <= now, at > (best?.atTs ?? -.infinity) { best = (ch, at) }
+    }
+    return best
+}
+
+/// What "not on the train" means, said on a ride the phone believes is under way. The rider changes trains at a station
+/// on the route far more often than they stay on or never left the platform (Nov 9: off the F at Jay St, waiting for the
+/// C; the tap sent the route back to 4 Av-9 St, where a G leaving two stops behind was taken for the next ride and the
+/// route switched to the G). So, in order:
+/// - the train has reached the stop the route had them leave it at: they got off there unfelt (`unfeltAlighting`);
+/// - it has reached a station where another route changes toward the destination (`changesOnTheWay`): they changed
+///   there, the latest such station the train has reached;
+/// - neither: the pull-away was not a train they boarded, and the leg starts over at the platform.
+enum NotOnTrainReading: Equatable {
+    case alighted(at: Double)
+    case changed(EarlyChange, at: Double)
+    case backToPlatform
+}
+
+func readNotOnTrain(train c: BoardingCandidate?, departedTs: Double?, changes: [EarlyChange], now: Double) -> NotOnTrainReading {
+    guard let c = c, let dep = departedTs else { return .backToPlatform }
+    if let at = unfeltAlighting(c, departedTs: dep, now: now) { return .alighted(at: at) }
+    if let r = changeReached(changes, train: c, departedTs: dep, now: now) {
+        return .changed(r.change, at: earlyChangeAlightTs(r.change, train: c, now: now))
+    }
+    return .backToPlatform
+}
+
 /// When the rider stepped off at `ch`, as the ride's record has it: the train's arrival there by the feed, put back to
 /// its doors opening, plus the step across; failing a time for that stop, now.
 func earlyChangeAlightTs(_ ch: EarlyChange, train c: BoardingCandidate?, now: Double) -> Double {

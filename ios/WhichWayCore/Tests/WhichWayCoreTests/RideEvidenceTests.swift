@@ -38,6 +38,7 @@ final class RideEvidenceTests: XCTestCase {
         let start = inf.fromDeparture([f], departedTs: 1030, leg: 0, chosenKey: "F_N")
         XCTAssertTrue(start.settled, "one train left right then: \(start.byLine)")
         var b = inf.withStops(start, candidates: [f], stopsFelt: 0)                 // the F makes ten stops; none were felt
+        XCTAssertEqual(b.byLine, start.byLine, "a short count fits any train: felt stops are a floor")
         b = inf.withAlighting(b, candidates: [f], alightedTs: 1340)               // walked off 13 minutes before the F got there
         b = inf.withLocation(b, candidates: [f], distanceM: ["F_N|f1": 5200])     // and 5 km from where the F would have been
         XCTAssertFalse(b.settled, "nothing fits: \(b.byLine)")
@@ -107,10 +108,12 @@ final class RideEvidenceTests: XCTestCase {
         XCTAssertEqual(onLocal.bestKey, "R_N")
         XCTAssertTrue(onLocal.settled, "\(onLocal.byLine)")
         XCTAssertEqual(onLocal.evidence, ["departure", "ride"])
-        // one stop felt at 1190 while the local has already called twice: the express
+        // one stop felt at 1190 while the local has already called twice: no longer read as the express. Felt stops are a
+        // floor (the phone misses most: 0 of 31 legs to Nov 9 felt the train's own count, all of them short), and a short
+        // count is how the F home was taken for the D at W 4 St on Nov 4
         let onExpress = inf.withRide(start, candidates: c, stopTimes: [1190], now: 1250)
-        XCTAssertEqual(onExpress.bestKey, "N_N")
-        XCTAssertEqual(onExpress.verdict, .switched)
+        XCTAssertEqual(onExpress.verdict, .unsure, "\(onExpress.byLine)")
+        XCTAssertGreaterThan(onExpress.byLine["R_N"]!, 0.3, "\(onExpress.byLine)")
         // nothing felt yet, or no stop times known: the belief stands
         XCTAssertEqual(inf.withRide(start, candidates: c, stopTimes: [], now: 1250), start)
         let blind = [cand("r1", key: "R_N", board: 1000, chosen: true), cand("n1", key: "N_N", board: 1000)]

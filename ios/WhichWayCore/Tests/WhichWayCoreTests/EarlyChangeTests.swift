@@ -160,4 +160,96 @@ final class EarlyChangeTests: XCTestCase {
         XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted])
         XCTAssertEqual(t.phase, .riding)
     }
+
+    // MARK: - "not on the train" said on the way (Nov 9: off the F at Jay St, waiting for the C, the tap sent the route back
+    // to 4 Av-9 St and a G leaving there was taken for the next ride)
+
+    /// A felt ride on the F from 4 Av-9 St: steps-free across the platform at Jay St, then waiting there, the phone none
+    /// the wiser. The tracker, the time of the felt pull-away and the time now.
+    private func offTheFAtJay(waitSec: Int = 120) -> (t: TripTracker, departedTs: Double, now: Double) {
+        var t = TripTracker(TripTimeline(startTs: 1000, startedBy: "gps", startDistanceM: 40, placeId: nil, originStation: "F23", destStation: "A31",
+                                         transferStation: "W 4 St-Wash Sq", legs: 2), distanceToOriginM: 40)
+        var ts = 1000.0
+        func sec(push: Double = 0.005, shake: Double = 0.005, walking: Bool = false) -> MotionSecond {
+            MotionSecond(ts: ts, stepEnergy: walking ? 0.05 : 0.002, pushG: push, shakeG: shake)
+        }
+        for _ in 0..<30 { t.motion(sec()); ts += 1 }
+        for _ in 0..<6 { t.motion(sec(push: 0.08, shake: 0.03)); ts += 1 }       // the F pulls away
+        for _ in 0..<300 { t.motion(sec(shake: 0.04)); ts += 1 }                  // to Jay St
+        for _ in 0..<waitSec { t.motion(sec()); ts += 1 }                         // across the platform, standing, waiting
+        let dep = t.ride(0)?.departedTs ?? 0
+        return (t, dep, ts)
+    }
+
+    func testNotOnTrainOnceTheTrainHasReachedJayStIsTheChangeThere() throws {
+        let (planned, all, index) = try routes()
+        let changes = changesOnTheWay(from: planned, ridingKey: "F_N", among: all, index: index)
+        var (t, dep, now) = offTheFAtJay()
+        XCTAssertTrue(t.onTrain, "the phone has the rider on the F still")
+        // the F reached Jay St (feed 1400, at the platform 80 s before) between the pull-away and now
+        let f = theF(jayFeedTs: 1400)
+        let reading = readNotOnTrain(train: f, departedTs: dep, changes: changes, now: now)
+        guard case let .changed(ch, at) = reading else { return XCTFail("\(reading)") }
+        XCTAssertEqual(ch.stationName, "Jay St-MetroTech")
+        XCTAssertEqual(at, PlatformTiming.doorsOpen(1400, route: "F") + TransferTiming.stepAcrossSec)
+        // the hand-off as the recorder makes it (`takeChange`): the F closed at Jay St, the rider between trains
+        var back = t
+        t.riderChanged(at: min(at, now), legs: ch.option.legs.count, transferStation: ch.stationName)
+        XCTAssertFalse(t.onTrain)
+        XCTAssertEqual(t.timeline.legsRidden, 1)
+        XCTAssertEqual(t.phase, .riding)
+        // the planner then switches to the route changing there (`followEarlyChange` → `replan`)
+        t.replan(legs: ch.option.legs.count, transferStation: ch.stationName)
+        XCTAssertEqual(t.timeline.transferStation, "Jay St-MetroTech")
+        // the next pull-away felt is the C, the second leg; its walk-off ends the trip
+        var ts = now
+        for _ in 0..<60 { t.motion(MotionSecond(ts: ts, stepEnergy: 0.002, pushG: 0.005, shakeG: 0.005)); ts += 1 }
+        for _ in 0..<6 { t.motion(MotionSecond(ts: ts, stepEnergy: 0.002, pushG: 0.08, shakeG: 0.03)); ts += 1 }
+        XCTAssertTrue(t.onTrain)
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted, .departed])
+        for _ in 0..<600 { t.motion(MotionSecond(ts: ts, stepEnergy: 0.002, pushG: 0.005, shakeG: 0.04)); ts += 1 }
+        for _ in 0..<15 { t.motion(MotionSecond(ts: ts, stepEnergy: 0.002, pushG: 0.005, shakeG: 0.005)); ts += 1 }
+        for _ in 0..<20 { t.motion(MotionSecond(ts: ts, stepEnergy: 0.05, pushG: 0.005, shakeG: 0.005)); ts += 1 }
+        t.tick(now: ts)
+        XCTAssertEqual(t.phase, .arrived)
+        // what the tap did before: the F withdrawn, the rider back at the 4 Av-9 St platform with no leg ridden
+        back.notOnTrain()
+        XCTAssertEqual(back.phase, .atStation)
+        XCTAssertEqual(back.timeline.legsRidden, 0)
+    }
+
+    func testNotOnTrainPastThePlannedChangeIsTheWalkOffThere() throws {
+        let (planned, all, index) = try routes()
+        let changes = changesOnTheWay(from: planned, ridingKey: "F_N", among: all, index: index)
+        let (_, dep, _) = offTheFAtJay()
+        // the F has reached W 4 St (stop 3, feed 2700) too: off at the route's own change, ahead of the earlier one
+        let f = theF(jayFeedTs: 1400)
+        let reading = readNotOnTrain(train: f, departedTs: dep, changes: changes, now: 2800)
+        XCTAssertEqual(reading, .alighted(at: PlatformTiming.atPlatform(2700, route: "F")))
+    }
+
+    func testNotOnTrainBeforeAnyChangeIsAPullAwayThatWasNotATrain() throws {
+        let (planned, all, index) = try routes()
+        let changes = changesOnTheWay(from: planned, ridingKey: "F_N", among: all, index: index)
+        let (_, dep, _) = offTheFAtJay()
+        // tapped while the F the phone named is still short of Jay St: the rider never boarded it
+        let early = PlatformTiming.atPlatform(1400, route: "F") - 1
+        XCTAssertEqual(readNotOnTrain(train: theF(jayFeedTs: 1400), departedTs: dep, changes: changes, now: early), .backToPlatform)
+        // no time for Jay St in the feed, no train in hand, or no pull-away on record: the same
+        XCTAssertEqual(readNotOnTrain(train: theF(jayFeedTs: nil), departedTs: dep, changes: changes, now: 2000), .backToPlatform)
+        XCTAssertEqual(readNotOnTrain(train: nil, departedTs: dep, changes: changes, now: 2000), .backToPlatform)
+        XCTAssertEqual(readNotOnTrain(train: theF(jayFeedTs: 1400), departedTs: nil, changes: changes, now: 2000), .backToPlatform)
+        // a Jay St time from before the pull-away is another run, not this ride's
+        XCTAssertEqual(readNotOnTrain(train: theF(jayFeedTs: 1400), departedTs: 1400, changes: changes, now: 2000), .backToPlatform)
+    }
+
+    func testNotOnTrainCountsOnlyTheChangesOffTheLineInHand() throws {
+        let (planned, all, index) = try routes()
+        let changes = changesOnTheWay(from: planned, ridingKey: "F_N", among: all, index: index)
+        let (_, dep, _) = offTheFAtJay()
+        // a train of another line with a time at its own stop 1: that stop is not Jay St on the F
+        var g = theF(jayFeedTs: 1400)
+        g.key = "G_N"; g.route = "G"; g.trainId = "G_N|g1"
+        XCTAssertEqual(readNotOnTrain(train: g, departedTs: dep, changes: changes, now: 2000), .backToPlatform)
+    }
 }
