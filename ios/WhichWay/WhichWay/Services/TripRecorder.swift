@@ -943,6 +943,16 @@ final class TripRecorder {
         Telemetry.shared.checkpoint(timeline: t.timeline, now: now)
     }
 
+    /// "End" on the Live Activity: the route is over by hand, through the same path as an ending the tracker calls itself
+    /// (the phase goes to arrived and the planner closes the route), and the lock screen clears at once rather than on the
+    /// planner's next turn. Works in every phase, whatever the phone believes about the train.
+    func endByHand(now: Double? = nil) {
+        guard tracker != nil else { TripActivityService.shared.endAll(); return }
+        tracker?.endByHand(now: now ?? lastNow ?? Date().timeIntervalSince1970)
+        TripActivityService.shared.end()
+        publish()
+    }
+
     func tick(now: Double) {
         lastNow = now
         tracker?.tick(now: now)

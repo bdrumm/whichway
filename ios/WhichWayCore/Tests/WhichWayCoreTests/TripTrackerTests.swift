@@ -457,6 +457,10 @@ final class TripTrackerTests: XCTestCase {
         t.setLiveArrival(2400)                             // the train actually boarded reaches the destination later
         XCTAssertEqual(t.timeline.forecastArriveTs, 1700)  // the forecast the rider acted on is kept
         XCTAssertEqual(t.timeline.liveArriveTs, 2400)
+        // the ride goes on: rolling, a station stop's braking and pull-away push every two minutes or so
+        while ts < 2310 {
+            for i in 0..<120 { t.motion(sec(ts, walking: false, push: i < 4 ? 0.08 : 0.005, shake: 0.04)); ts += 1 }
+        }
         t.tick(now: 2310)                                  // ten minutes past the old arrival: no timeout
         XCTAssertEqual(t.phase, .riding)
         t.tick(now: 3001)

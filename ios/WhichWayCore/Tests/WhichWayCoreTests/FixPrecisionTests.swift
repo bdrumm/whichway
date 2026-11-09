@@ -146,18 +146,19 @@ final class FixPrecisionTests: XCTestCase {
         XCTAssertEqual(r.t.timeline.endedBy, "arrived")
     }
 
-    func testARouteNobodyEndedStopsAfterThreeHours() {
-        // the forecast keeps sliding to the next train and the rider never boards: the late-arrival timeout never comes
+    func testARouteNobodyBoardsEndsAfterAnHourAtTheStation() {
+        // the forecast keeps sliding to the next train and the rider never boards: the late-arrival timeout never comes, and
+        // an hour at the platform with no ride is the rider gone another way
         var t = TripTracker(start(), distanceToOriginM: 20)
         var now = 1000.0
-        while now < 1000 + 3 * 3600 - 15 {
+        while now < 1000 + 3600 - 15 {
             t.updateForecast(boardTs: now + 300, arriveTs: now + 1500, now: now)
             t.tick(now: now)
             now += 15
         }
         XCTAssertNotEqual(t.phase, .arrived)
-        t.tick(now: 1000 + 3 * 3600)
+        t.tick(now: 1000 + 3600)
         XCTAssertEqual(t.phase, .arrived)
-        XCTAssertEqual(t.timeline.endedBy, "timeout")
+        XCTAssertEqual(t.timeline.endedBy, "stale")
     }
 }

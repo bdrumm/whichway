@@ -16,6 +16,8 @@ struct WhichWayApp: App {
         ChangedTrainIntent.handler = { TripRecorder.shared.takeEarlyChange() }
         // and its note button: the moment marked on the trip, the words to follow in the app
         MarkMomentIntent.handler = { TripRecorder.shared.markMoment() }
+        // and its "End": the route closed by hand, from any phase
+        EndRouteIntent.handler = { TripRecorder.shared.endByHand() }
     }
 
     var body: some Scene {

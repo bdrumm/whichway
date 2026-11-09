@@ -46,6 +46,22 @@ struct ChangedTrainIntent: LiveActivityIntent {
     }
 }
 
+/// "End" from the Live Activity: the rider says the route is over. Always on the activity, so a ride the phone cannot see
+/// end (a change it missed, a connection it keeps waiting for) is one tap from closed. Runs in the app's process, like
+/// `NotOnTrainIntent`.
+struct EndRouteIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "End route"
+    static var description = IntentDescription("Ends the route in progress and closes the Live Activity.")
+
+    /// Set by the app (the extension leaves it nil).
+    @MainActor static var handler: (() -> Void)?
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { EndRouteIntent.handler?() }
+        return .result()
+    }
+}
+
 /// "Note" from the Live Activity: marks this moment on the trip for a note on how the app behaved. No words can be typed
 /// there, so the mark keeps the moment and the words follow in the app. Runs in the app's process, like `NotOnTrainIntent`.
 struct MarkMomentIntent: LiveActivityIntent {

@@ -41,6 +41,7 @@ struct TripLiveActivity: Widget {
                             Spacer()
                             ExtraBadge(state: context.state)
                             MarkMomentButton(marked: context.state.notesMarked ?? 0)
+                            EndRouteButton()
                         }
                         Text(subline(context.state)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                         if context.state.riding {
@@ -143,6 +144,18 @@ struct MarkMomentButton: View {
     }
 }
 
+/// Ends the route (`EndRouteIntent`): on the activity in every phase, so the rider can always close a route the phone
+/// thinks is still going (Nov 9 evening: "still on the train" long after the ride, and no way to say so from the lock screen).
+struct EndRouteButton: View {
+    var body: some View {
+        Button(intent: EndRouteIntent()) {
+            Label("End", systemImage: "stop.circle").font(.caption2.weight(.semibold)).labelStyle(.titleAndIcon).lineLimit(1)
+        }
+        .buttonStyle(.bordered).tint(.white)
+        .accessibilityLabel("End the route")
+    }
+}
+
 struct ExtraBadge: View {
     let state: TripActivityAttributes.ContentState
 
@@ -202,6 +215,7 @@ struct LockScreenView: View {
                 }
                 ExtraBadge(state: state)
                 MarkMomentButton(marked: state.notesMarked ?? 0)
+                EndRouteButton()
             }
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             if state.boarding {
