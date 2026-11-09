@@ -140,6 +140,17 @@ final class RideEvidenceTests: XCTestCase {
         XCTAssertEqual(afterStops.bestKey, "F_S", "\(afterStops.byLine)")
     }
 
+    func testATrainOffTheRouteGetsNoFreeMatchAtTheWalkOff() {
+        // both trains were at a stop of their own as the rider walked off: the F at the stop the route names, the D at
+        // whichever of its stops came nearest. Even at the departure, the walk-off favours the route's train
+        let f = cand("f1", key: "F_S", board: 1000, alightIdx: 6, stopTs: [6: 1900], chosen: true)
+        let d = cand("d1", key: "D_S", board: 1000, stopTs: [3: 1500, 4: 1900, 5: 2300])
+        var b = inf.fromDeparture([f, d], departedTs: 1025, leg: 1, chosenKey: "F_S")
+        b.byTrain = ["F_S|f1": 0.5, "D_S|d1": 0.5]; b.byLine = ["F_S": 0.5, "D_S": 0.5]
+        let off = inf.withAlighting(b, candidates: [f, d], alightedTs: 1920)
+        XCTAssertEqual(off.byLine["F_S"]!, 2 * off.byLine["D_S"]!, accuracy: 1e-6, "\(off.byLine)")
+    }
+
     func testAFixAtTheAlightingStopRulesOutATrainThatWasAKilometreAway() {
         // off at the F's stop by the fix; the D's nearest stop then was 1.4 km off: no floor keeps it in
         let f = cand("f1", key: "F_S", board: 1000, alightIdx: 6, stopTs: [6: 1900], chosen: true)

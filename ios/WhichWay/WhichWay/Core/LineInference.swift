@@ -317,6 +317,10 @@ struct LineInference {
     var rideSigmaSec = 90.0                // a felt station stop against the feed's time at the stop
     var stopLagSec = 0.0                   // a felt station stop begins when the train really reaches the platform
     var locationSigmaM = 150.0             // a fix after walking off against the alighting stop's position
+    /// A train that does not serve the leg's alighting stop is judged at the walk-off against whichever of its own stops
+    /// is nearest in time, and a train is nearly always within a minute of one: that match says about half what a match
+    /// at the one stop the route names does, and counts as much.
+    var nearestStopFactor = 0.5
     /// How far the station stops the phone felt are trusted, as an exponent on their likelihoods (1: in full, 0: not at
     /// all). The trip review has them matching the train's real stops on 0 of 28 legs, yet in full they outvoted the
     /// departure and the plan mid-ride and at the walk-off (Nov 2, 4 and 5 at W 4 St: the F read as the D, the B, the F
@@ -494,7 +498,8 @@ struct LineInference {
         var w: [String: Double] = none(b, informative: true)
         for c in cands {
             let arrival = c.alightTs ?? alightingStop(c, at: alightedTs).flatMap { c.stopTs[$0] }
-            let like = arrival.map { gaussian(alightedTs - ($0 - recordedLag(c.route) + alightLagSec), sigma: alightSigmaSec) } ?? floor
+            let own = c.alightIdx == nil && c.alightTs == nil ? nearestStopFactor : 1
+            let like = arrival.map { own * gaussian(alightedTs - ($0 - recordedLag(c.route) + alightLagSec), sigma: alightSigmaSec) } ?? floor
             w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["alighting"])
