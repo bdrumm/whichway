@@ -16,7 +16,15 @@ struct TripCandidate: Identifiable {
     var arriveHiTs: Double? = nil
     var feedArriveTs: Double? = nil
     var arriveSource: String? = nil
+    /// A train the feed only plays the timetable for boards at the early edge of the engine's window (`boardTs`);
+    /// this is the engine's central time, nil for a tracked train.
+    var boardCentralTs: Double? = nil
     var rideVsSchedSec: Double? { schedRideSec.map { rideSec - $0 } }
+    /// "not tracked yet · may come 1:30 early" for a train the feed only plays the timetable for.
+    var timetableNote: String? {
+        guard train.isTimetable else { return nil }
+        return boardCentralTs.map { $0 - boardTs >= 30 ? "not tracked yet · may come \(Fmt.mmss($0 - boardTs)) early" : "not tracked yet" } ?? "not tracked yet"
+    }
 
     /// "10:49–10:54 · feed says 10:49" when the engine's window and the feed's own time are known.
     var rangeText: String? {
@@ -68,10 +76,14 @@ func segmentTrips(_ lb: LineBoard, line: LineTopology, fromIdx: Int, toIdx: Int,
     for t in lb.trains {
         guard let boardF = t.points.first(where: { $0.idx == fromIdx })?.ts, let arriveF = t.points.first(where: { $0.idx == toIdx })?.ts else { continue }
         let at = { (ts: Double) in PlatformTiming.doorsOpen(ts, route: t.route) }
-        let board = at(boardF), arrive = at(arriveF)
+        // a train the feed only plays the timetable for may be minutes ahead of it, unseen (Nov 4 2026: the G at 4 Av-9 St
+        // minutes before the time every clock showed): be on the platform by the early edge of the engine's window
+        let early = t.isTimetable ? t.pred?.point(at: fromIdx).map { min(boardF, $0.loTs) } : nil
+        let board = at(early ?? boardF), arrive = at(arriveF)
         // a train that has pulled away is gone: the countdown reaching zero (the doors opening) keeps it until it pulls away
         if PlatformTiming.pullsAway(boardF, route: t.route) < now || arrive <= board { continue }
         var c = TripCandidate(train: t, key: lb.key, boardTs: board, arriveTs: arrive, rideSec: arrive - board, schedRideSec: sched, stopsToOrigin: max(1, fromIdx - t.nextIdx + 1))
+        if early != nil { c.boardCentralTs = at(boardF) }
         if let pt = t.pred?.point(at: toIdx) { c.arriveLoTs = at(pt.loTs); c.arriveHiTs = at(pt.hiTs); c.arriveSource = pt.source }
         c.feedArriveTs = t.feedPoints?.first(where: { $0.idx == toIdx }).map { at($0.ts) }
         out.append(c)
@@ -124,7 +136,11 @@ func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: Pa
     var out: [Itinerary] = []
     var seen = Set<String>()
     for a in firsts {
-        guard let c = connection(seconds, ready: a.arriveTs + walk, transfer: transfer), !seen.contains(c.train.train.tripId) else { continue }
+        // a first train the feed only plays the timetable for may reach the change minutes early, unseen (Nov 4 2026: the
+        // G timetabled into Hoyt after the A had left came in early and made it): plan the connection from
+        // the early edge of its window; the next train is shown as the one if it does not come early
+        let early = a.train.isTimetable ? min(a.arriveTs, a.arriveLoTs ?? a.arriveTs) : a.arriveTs
+        guard let c = connection(seconds, ready: early + walk, transfer: transfer), !seen.contains(c.train.train.tripId) else { continue }
         let b = c.train
         seen.insert(b.train.tripId)
         let next = seconds.first(where: { $0.boardTs > b.boardTs })

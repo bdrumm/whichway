@@ -14,6 +14,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * The Kotlin predictor must agree with the Python reference (mta_delay_insights/realtime/client_model.py) on the
@@ -48,7 +49,8 @@ class PredictorTest {
     fun predictLineMatchesPython() {
         val (inp, top) = load()
         val expected = top["expected"]!!.jsonObject
-        assertEquals(5, inp.trains.size)
+        assertEquals(6, inp.trains.size)
+        assertTrue(inp.trains.last().timetable, "the fixture's timetable trip")
         for (sc in inp.scenarios) {
             val py = expected[sc]!!.jsonObject
             val out = Predictor.predictLine(inp.trains, inp.line, inp.model, inp.now, sc)

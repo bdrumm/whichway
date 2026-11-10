@@ -15,7 +15,7 @@ so the next pass knows exactly what moved.
 | `Models/Schedule.swift`, `Models/Geometry.swift` | `core/…/Schedule.kt` | `client_lines.json` parsed by hand (array rows) |
 | `Models/GTFSRealtime.swift` | `core/…/GtfsRealtime.kt` | same wire decoder, no protobuf dependency |
 | `Models/Alerts.swift` | `core/…/Alerts.kt` | |
-| `Core/Predictor.swift` | `core/…/Predictor.kt` | checked against the iOS fixture to 1e-6 |
+| `Core/Predictor.swift` | `core/…/Predictor.kt` | checked against the iOS fixture to 1e-6; timetable trips (Nov 2026: `isTimetableTrip`, `eta_calibration.timetable`, no carry or hold) ported. Not yet: `LineBoard` marking them and the planner boarding them at the early edge (iOS 8cc88c6) |
 | `Core/LineBoard.swift` | `core/…/LineBoard.kt` | `VehicleHistory` is an instance, not a singleton; derived positions (a train with no vehicle report is placed by its trip update, or "at the terminal, not yet departed") |
 | `Core/StationGraph.swift` | `core/…/StationGraph.kt` | complex names tie-break alphabetically (Swift: dictionary order) |
 | `Core/Planner.swift` (itineraries, headways, `evaluate`) | `core/…/Planner.kt` | |

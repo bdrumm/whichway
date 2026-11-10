@@ -29,14 +29,21 @@ def main() -> None:
     a, now = _arrivals(static)
     rng = np.random.default_rng(3)
     es = pd.DataFrame([{"trip_key": r["trip_key"], "route_id": r["route_id"], "stop_id": r["stop_id"], "at_stop": "x", "at_ts": r["arrival_ts"] - 35 - h,
-                        "stops_ahead": 2, "eta_ts": r["arrival_ts"] - 35 + float(rng.normal(0, 20))} for _, r in a.head(800).iterrows() for h in (100, 700, 2000)])
+                        "stops_ahead": 2, "eta_ts": r["arrival_ts"] - 35 + float(rng.normal(0, 20)) + 0.25} for _, r in a.head(800).iterrows() for h in (100, 700, 2000)])
+    # trips the feed only plays the timetable for: times on the half-minute grid, the train well ahead of them
+    tt = pd.DataFrame([{"trip_key": r["trip_key"], "route_id": r["route_id"], "stop_id": r["stop_id"], "at_stop": "x", "at_ts": r["arrival_ts"] - h,
+                        "stops_ahead": 2, "eta_ts": float(np.floor((r["arrival_ts"] + 100 + float(rng.normal(0, 30))) / 30) * 30)}
+                       for _, r in a.iloc[800:1100].iterrows() for h in (100, 700)])
+    es = pd.concat([es, tt], ignore_index=True)
     dw = pd.DataFrame({"trip_key": [f"t{i}" for i in range(120)], "route_id": "6", "direction": "N", "stop_id": "633N", "stopped_from_ts": 1.0, "stopped_to_ts": 2.0,
                        "dwell_sec": np.r_[np.full(60, 220.0), np.full(40, 500.0), np.full(20, 1300.0)], "polls": 3})
     model = cm.fit_client_model(es, a, dw, static, "2026-01-01")
     line = _line()
     trains = [_train("held", 3, now, lateness=60.0, eff=250.0, sched=now + 40, pos={"status": "STOPPED_AT", "since_sec": 330, "holding": True, "stalled": False}),
               _train("follower", 1, now, lateness=-20.0, sched=now + 80), _train("leader", 6, now, lateness=400.0, eff=400.0, sched=now + 30, step=80.0),
-              _train("nosched", 2, now, lateness=None, eff=None), _train("twin", 1, now, lateness=30.0, sched=now + 95, step=110.0)]
+              _train("nosched", 2, now, lateness=None, eff=None), _train("twin", 1, now, lateness=30.0, sched=now + 95, step=110.0),
+              dict(_train("timetable", 4, now, lateness=0.0, eff=200.0, sched=now + 60, pos={"status": "STOPPED_AT", "since_sec": 400, "holding": True, "stalled": False}),
+                   timetable=True)]
     trains[3]["effective_lateness_sec"] = None
     scenarios = list(cm.SCENARIOS)
     elapsed = [100, 200, 330, 1000, 5000]
@@ -44,7 +51,8 @@ def main() -> None:
     fixture = {"input": {"trains": trains, "line": line, "model": model, "now": now, "scenarios": scenarios, "elapsed": elapsed, "horizons": horizons},
                "expected": {sc: cm.predict_line(trains, line, model, now, sc) for sc in scenarios},
                "remaining": [cm.remaining_hold(model["hold_survival"], e) for e in elapsed],
-               "calibration": [cm.calibration_at(model, "6", h) for h in horizons]}
+               "calibration": [cm.calibration_at(model, "6", h) for h in horizons],
+               "timetable_calibration": [cm.calibration_at(model, "6", h, timetable=True) for h in horizons]}
     out = Path(__file__).resolve().parent / "WhichWayCoreTests" / "Fixtures" / "predictor_fixture.json"
     out.write_text(json.dumps(fixture, indent=0, sort_keys=True))
     print(f"wrote {out} ({out.stat().st_size} bytes)")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import numpy as np
 import pandas as pd
@@ -163,13 +164,15 @@ def test_predictor_hold_scenarios_and_cascade():
 
 
 PREDICT_HARNESS = """
-import { predictLine, remainingHold, calibrationAt } from "%s";
+import { predictLine, remainingHold, calibrationAt, isTimetableTrip } from "%s";
 import { readFileSync } from "node:fs";
 const inp = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const out = {};
 for (const sc of inp.scenarios) out[sc] = predictLine(inp.trains, inp.line, inp.model, inp.now, sc);
 out.rem = inp.elapsed.map(e => remainingHold(inp.model.hold_survival, e));
 out.cal = inp.horizons.map(h => calibrationAt(inp.model, "6", h));
+out.ttcal = inp.horizons.map(h => calibrationAt(inp.model, "6", h, true));
+out.grid = [isTimetableTrip([1020, 1140, 1290, 1380]), isTimetableTrip([1020, 1141, 1290]), isTimetableTrip([1020, 1140]), isTimetableTrip([1020])];
 console.log(JSON.stringify(out));
 """
 
@@ -185,14 +188,21 @@ def test_js_predictor_matches_python(static, tmp_path):
     # a fitted model (real tables, shrunk) rather than a synthetic one: the port must read the published shape
     rng = np.random.default_rng(3)
     es = pd.DataFrame([{"trip_key": r["trip_key"], "route_id": r["route_id"], "stop_id": r["stop_id"], "at_stop": "x", "at_ts": r["arrival_ts"] - 35 - h,
-                        "stops_ahead": 2, "eta_ts": r["arrival_ts"] - 35 + float(rng.normal(0, 20))} for _, r in a.head(800).iterrows() for h in (100, 700, 2000)])
+                        "stops_ahead": 2, "eta_ts": r["arrival_ts"] - 35 + float(rng.normal(0, 20)) + 0.25} for _, r in a.head(800).iterrows() for h in (100, 700, 2000)])
+    tt = pd.DataFrame([{"trip_key": r["trip_key"], "route_id": r["route_id"], "stop_id": r["stop_id"], "at_stop": "x", "at_ts": r["arrival_ts"] - h,
+                        "stops_ahead": 2, "eta_ts": float(np.floor((r["arrival_ts"] + 100 + float(rng.normal(0, 30))) / 30) * 30)}
+                       for _, r in a.iloc[800:1100].iterrows() for h in (100, 700)])
+    es = pd.concat([es, tt], ignore_index=True)
     dw = pd.DataFrame({"trip_key": [f"t{i}" for i in range(120)], "route_id": "6", "direction": "N", "stop_id": "633N", "stopped_from_ts": 1.0, "stopped_to_ts": 2.0,
                        "dwell_sec": np.r_[np.full(60, 220.0), np.full(40, 500.0), np.full(20, 1300.0)], "polls": 3})
     model = cm.fit_client_model(es, a, dw, static, "2026-01-01")
+    assert model["eta_calibration"]["timetable"]["n"] == len(tt)
     line = _line()
     trains = [_train("held", 3, now, lateness=60.0, eff=250.0, sched=now + 40, pos={"status": "STOPPED_AT", "since_sec": 330, "holding": True, "stalled": False}),
               _train("follower", 1, now, lateness=-20.0, sched=now + 80), _train("leader", 6, now, lateness=400.0, eff=400.0, sched=now + 30, step=80.0),
-              _train("nosched", 2, now, lateness=None, eff=None), _train("twin", 1, now, lateness=30.0, sched=now + 95, step=110.0)]
+              _train("nosched", 2, now, lateness=None, eff=None), _train("twin", 1, now, lateness=30.0, sched=now + 95, step=110.0),
+              dict(_train("timetable", 4, now, lateness=0.0, eff=200.0, sched=now + 60, pos={"status": "STOPPED_AT", "since_sec": 400, "holding": True, "stalled": False}),
+                   timetable=True)]
     trains[3]["effective_lateness_sec"] = None
     inp = {"trains": trains, "line": line, "model": model, "now": now, "scenarios": list(cm.SCENARIOS), "elapsed": [100, 200, 330, 1000, 5000], "horizons": [-10, 0, 150, 700, 9000]}
     (tmp_path / "in.json").write_text(json.dumps(inp))
@@ -217,6 +227,46 @@ def test_js_predictor_matches_python(static, tmp_path):
         assert all(rj[k] == pytest.approx(rp[k], abs=1e-6) for k in ("expected", "p50", "p90", "clears_2min"))
     for h, cj in zip(inp["horizons"], js["cal"]):
         assert cj == cm.calibration_at(model, "6", h)
+    for h, cj in zip(inp["horizons"], js["ttcal"]):
+        assert cj == cm.calibration_at(model, "6", h, timetable=True)
+    assert js["grid"] == [cm.is_timetable_trip([1020, 1140, 1290, 1380]), cm.is_timetable_trip([1020, 1141, 1290]),
+                          cm.is_timetable_trip([1020, 1140]), cm.is_timetable_trip([1020])] == [True, False, True, False]
     # the scenarios differ where they should
     e5 = lambda out, tid: next(pt["eta_ts"] for t in out["trains"] if t["trip_id"] == tid for pt in t["points"] if pt["idx"] == 5)
     assert e5(js["clears_now"], "held") < e5(js["baseline"], "held") < e5(js["hold_persists"], "held")
+
+
+def test_timetable_trips_get_their_own_calibration_and_no_carry_or_hold(static):
+    """A trip the feed only plays the timetable for: every stop time on the half-minute grid (Nov 4 2026: a G from
+    Church Av "stopped" on the half minute at every station and came into 4 Av-9 St minutes before its time)."""
+    assert cm.is_timetable_trip([1020.0, 1140.0, 1290.0, 1380.0])
+    assert not cm.is_timetable_trip([1020.0, 1141.0, 1290.0])
+    assert cm.is_timetable_trip([1020.0, 1140.0]) and not cm.is_timetable_trip([1020.0])
+    assert not cm.is_timetable_trip([1024.0, 1144.0, 1294.0])
+    a, _ = _arrivals(static)
+    a = a.head(600).copy()
+    rows = []
+    for i, (_, r) in enumerate(a.iterrows()):
+        if i % 2:   # tracked: to the second, 10 s late
+            rows.append({"trip_key": r["trip_key"], "route_id": r["route_id"], "stop_id": r["stop_id"], "at_stop": "x", "at_ts": r["arrival_ts"] - 500,
+                         "stops_ahead": 3, "eta_ts": r["arrival_ts"] - 10.0 + 0.5})
+        else:       # timetable: on the grid, the train 120 s ahead of it
+            eta = math.floor((r["arrival_ts"] + 120) / 30) * 30
+            rows.append({"trip_key": r["trip_key"], "route_id": r["route_id"], "stop_id": r["stop_id"], "at_stop": "x", "at_ts": eta - 500,
+                         "stops_ahead": 3, "eta_ts": float(eta)})
+    cal = cm.fit_eta_calibration(pd.DataFrame(rows), a)
+    assert cal["timetable"]["n"] == 300 and cal["n"] == 300
+    assert cal["timetable"]["all"][2]["bias"] < -80 and abs(cal["all"][2]["bias"] - 9.5) < 2
+    model = _model(bias=0.0, slope=1.0, intercept=200.0)
+    model["eta_calibration"]["timetable"] = {"n": 50, "all": [{"n": 50, "bias": -90.0, "p10": -160.0, "p90": 20.0}] * (len(cm.HORIZON_EDGES) - 1), "by_route": {}}
+    assert cm.calibration_at(model, "6", 400, timetable=True)["bias"] == -90.0 and cm.calibration_at(model, "6", 400)["bias"] == 0.0
+    now = 1_000_000.0
+    held = {"status": "STOPPED_AT", "since_sec": 400, "holding": True, "stalled": False}
+    t = _train("tt", 2, now, lateness=0.0, eff=150.0, sched=now + 60, pos=held)
+    tracked = cm.predict_train(t, _line(), model, now)
+    tt = cm.predict_train({**t, "timetable": True}, _line(), model, now)
+    assert tracked["hold_extra_sec"] > 0 and tt["hold_extra_sec"] == 0.0
+    assert all(p["source"] == "feed" for p in tt["points"])
+    for p in tt["points"]:
+        assert p["eta_ts"] == pytest.approx(max(now, p["feed_ts"] - 90.0)) or p["eta_ts"] >= now
+        assert p["lo_ts"] <= p["eta_ts"] - 50

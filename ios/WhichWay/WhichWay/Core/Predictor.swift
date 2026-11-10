@@ -12,16 +12,33 @@ struct CalBucket: Decodable, Equatable {
     var p90: Double
 }
 
+/// The feed's ETA error by route and horizon; `timetable`: the same for
+/// trips the feed only plays the timetable for (`Predictor.isTimetableTrip`), absent from models fitted before Nov 2026.
 struct EtaCalibration: Decodable {
     var horizons: [Double] = Predictor.horizonEdges
     var n: Int = 0
     var all: [CalBucket] = []
     var byRoute: [String: [CalBucket]] = [:]
-    enum CodingKeys: String, CodingKey { case horizons, n, all, byRoute = "by_route" }
+    var timetable: TimetableCalibration? = nil
+    enum CodingKeys: String, CodingKey { case horizons, n, all, byRoute = "by_route", timetable }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         horizons = try c.decodeIfPresent([Double].self, forKey: .horizons) ?? Predictor.horizonEdges
+        n = try c.decodeIfPresent(Int.self, forKey: .n) ?? 0
+        all = try c.decodeIfPresent([CalBucket].self, forKey: .all) ?? []
+        byRoute = try c.decodeIfPresent([String: [CalBucket]].self, forKey: .byRoute) ?? [:]
+        timetable = try c.decodeIfPresent(TimetableCalibration.self, forKey: .timetable)
+    }
+}
+
+struct TimetableCalibration: Decodable {
+    var n: Int = 0
+    var all: [CalBucket] = []
+    var byRoute: [String: [CalBucket]] = [:]
+    enum CodingKeys: String, CodingKey { case n, all, byRoute = "by_route" }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
         n = try c.decodeIfPresent(Int.self, forKey: .n) ?? 0
         all = try c.decodeIfPresent([CalBucket].self, forKey: .all) ?? []
         byRoute = try c.decodeIfPresent([String: [CalBucket]].self, forKey: .byRoute) ?? [:]
@@ -144,10 +161,13 @@ struct PredictorTrain: Decodable {
     var effectiveLatenessSec: Double?
     var schedTs: Double?
     var position: PredictorPosition?
-    enum CodingKeys: String, CodingKey { case tripId = "trip_id", route, nextIdx = "next_idx", points, latenessSec = "lateness_sec", effectiveLatenessSec = "effective_lateness_sec", schedTs = "sched_ts", position }
-    init(tripId: String, route: String, nextIdx: Int?, points: [[Double]], latenessSec: Double?, effectiveLatenessSec: Double?, schedTs: Double?, position: PredictorPosition?) {
+    /// The feed is only playing the timetable for this trip (`Predictor.isTimetableTrip`).
+    var timetable: Bool = false
+    enum CodingKeys: String, CodingKey { case tripId = "trip_id", route, nextIdx = "next_idx", points, latenessSec = "lateness_sec", effectiveLatenessSec = "effective_lateness_sec", schedTs = "sched_ts", position, timetable }
+    init(tripId: String, route: String, nextIdx: Int?, points: [[Double]], latenessSec: Double?, effectiveLatenessSec: Double?, schedTs: Double?, position: PredictorPosition?,
+         timetable: Bool = false) {
         self.tripId = tripId; self.route = route; self.nextIdx = nextIdx; self.points = points; self.latenessSec = latenessSec
-        self.effectiveLatenessSec = effectiveLatenessSec; self.schedTs = schedTs; self.position = position
+        self.effectiveLatenessSec = effectiveLatenessSec; self.schedTs = schedTs; self.position = position; self.timetable = timetable
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -159,6 +179,7 @@ struct PredictorTrain: Decodable {
         effectiveLatenessSec = try c.decodeIfPresent(Double.self, forKey: .effectiveLatenessSec)
         schedTs = try c.decodeIfPresent(Double.self, forKey: .schedTs)
         position = try c.decodeIfPresent(PredictorPosition.self, forKey: .position)
+        timetable = try c.decodeIfPresent(Bool.self, forKey: .timetable) ?? false
     }
 }
 
@@ -239,10 +260,25 @@ enum Predictor {
         return h < 0 ? 0 : horizonEdges.count - 2
     }
 
-    static func calibrationAt(_ model: ClientModel?, route: String, horizon: Double) -> CalBucket {
+    /// The timetable's half-minute grid, and how many of a trip's next stop times on it mark the feed as only playing
+    /// the timetable (client_model.is_timetable_trip).
+    static let timetableGridSec = 30.0
+    static let timetableMinStops = 3
+
+    /// The feed is only playing the timetable for a trip: its next stop times all sit on the half-minute grid, three
+    /// of them (every one, two at least, when fewer remain). A tracked train's times are to the second. Nov 4 2026: the
+    /// G from Church Av "stopped" on the half minute at every station on its timetable and came into 4 Av-9 St minutes
+    /// before the time the feed, the platform clock and the app all showed.
+    static func isTimetableTrip(_ times: [Double]) -> Bool {
+        let ts = Array(times.prefix(timetableMinStops))
+        return ts.count >= 2 && ts.allSatisfy { $0.truncatingRemainder(dividingBy: timetableGridSec) == 0 }
+    }
+
+    static func calibrationAt(_ model: ClientModel?, route: String, horizon: Double, timetable: Bool = false) -> CalBucket {
         let i = horizonIndex(horizon)
         let cal = model?.etaCalibration
-        let table = cal?.byRoute[route] ?? cal?.all
+        var table = cal?.byRoute[route] ?? cal?.all
+        if timetable, let tt = cal?.timetable, !tt.all.isEmpty { table = tt.byRoute[route] ?? tt.all }
         if let t = table, i < t.count { return t[i] }
         let (p10, p90) = priorSpread(max(0, horizon))
         return CalBucket(n: 0, bias: 0, p10: p10, p90: p90)
@@ -305,11 +341,13 @@ enum Predictor {
         let pts = train.points.filter { $0.count >= 2 }.map { (Int($0[0]), $0[1]) }.sorted { a, b in a.0 != b.0 ? a.0 < b.0 : a.1 < b.1 }
         guard let first = pts.first else { return out }
         let nextIdx = train.nextIdx ?? first.0
+        // a timetable trip: its own calibration, no lateness carry, and its position (the timetable's too) holds nothing
+        let timetable = train.timetable
         let lat = train.latenessSec
         let eff = train.effectiveLatenessSec ?? lat
         var optimistic = 0.0
-        if let e = eff, let l = lat { optimistic = max(0, e - l) }
-        let held = train.position?.holding == true || train.position?.stalled == true
+        if let e = eff, let l = lat, !timetable { optimistic = max(0, e - l) }
+        let held = (train.position?.holding == true || train.position?.stalled == true) && !timetable
         var extra = 0.0
         if held {
             let rem = remainingHold(model?.holdSurvival, elapsed: train.position?.sinceSec ?? 0)
@@ -325,12 +363,12 @@ enum Predictor {
         var prevT: Double? = nil
         for (idx, feed) in pts {
             let h = feed - now
-            let cal = calibrationAt(model, route: train.route, horizon: h)
+            let cal = calibrationAt(model, route: train.route, horizon: h, timetable: timetable)
             let etaF = feed + cal.bias + optimistic
             let varF = max(pow((cal.p90 - cal.p10) / 2.56, 2), 1.0)
             var eta = etaF, lo = feed + cal.p10 + optimistic, hi = feed + cal.p90 + optimistic, source = "feed"
             let k = idx - nextIdx
-            if let schedNext = train.schedTs, let e = eff, k >= 1 {
+            if let schedNext = train.schedTs, let e = eff, k >= 1, !timetable {
                 var runSum = 0.0, ok = true
                 var s = nextIdx
                 while s < idx {
@@ -415,7 +453,8 @@ enum Predictor {
         board.trains.map { t in
             PredictorTrain(tripId: t.tripId, route: t.route, nextIdx: t.nextIdx, points: t.points.map { [Double($0.idx), $0.ts] },
                            latenessSec: t.latenessSec, effectiveLatenessSec: t.effectiveLatenessSec, schedTs: t.schedTs,
-                           position: t.position.map { PredictorPosition(status: $0.status, sinceSec: $0.sinceSec, holding: $0.holding, stalled: $0.stalled) })
+                           position: t.position.map { PredictorPosition(status: $0.status, sinceSec: $0.sinceSec, holding: $0.holding, stalled: $0.stalled) },
+                           timetable: t.isTimetable)
         }
     }
 
