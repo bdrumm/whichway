@@ -61,9 +61,28 @@ A walk across (`PendingBoardingTests`, `checkQuickChange`), an earlier change (`
 keep their own tests. Manual overrides are unchanged and unnarrowed: "On a train?" lists every train, and "Changed to
 the A" and "Not on the train" work as before.
 
+## The trip's replay, and the second fix
+
+The replay of the trip (private review) showed one more gap. The F stood at Jay St while the rider walked off it in
+short bursts of steps with short pauses between them. The walk-off rule wants eight steps in a row, so it never fired.
+The timing rule waited for the F to leave Jay St, and the feed ran well behind that morning, so even the first fix
+called the change minutes late. With both fixes, the replay calls the change seconds into the walk and names the A
+the rider boarded.
+
+- **Steps in bursts count at the route's change** (`TripTracker.brokenWalk`, `RideSession.checkQuickChange`). At the
+  stop the route leaves the train at, while the train stands there by the feed, eight seconds of steps with pauses of
+  up to 3 s are the walk-off. At other stops a walk-off still needs eight steps in a row.
+- **The phone moving while the train in hand stands at the change** (`RideSession.checkLeftStandingTrain`). If the
+  feed still had the train standing at a poll after a push, that push was not this train's. It is the connection's,
+  matched by the feed, or else the first connection that left after the rider got off, once a ride is felt.
+- **Pushes among the rider's own steps are not a train's** (`TripTracker.pushRunsClear`). This applies to the new
+  rule only.
+- Where a held train has stood at the stop, its arrival is the first poll that had it standing there.
+
 ## Still open
 
-- Replay every stored trip (`make replay`, `make trips`) on the Mac before the build. The trip in question had not
-  uploaded when this was written.
+- Replay every stored trip (`make replay`, `make trips`) on the Mac before the build.
+- The timing rule rides on the feed's times, which can run well behind. Calibrating the lag per trip from a felt
+  arrival would make the call sooner.
 - If an A leaves Jay St just as the F runs on, and the F's pull-away is not felt, the phone sides with the plan (the A).
   The alighting location and the rider's word correct it.

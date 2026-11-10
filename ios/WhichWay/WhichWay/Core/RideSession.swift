@@ -260,20 +260,26 @@ struct RideSession {
     /// first (people boarding keep a standing train shaking; a rider heading for the doors keeps the phone moving).
     /// Oct 8: both changes across the platform at Jay St were 11 to 12 s walks the detector let pass.
     private mutating func checkQuickChange() {
-        guard let t = tracker, t.phase == .riding, let walk = t.walking, walk.seconds >= quickChangeWalkSec,
-              let dep = t.timeline.events.last, dep.kind == .departed, let c = trainInHand else { return }
+        guard let t = tracker, t.phase == .riding, let dep = t.timeline.events.last, dep.kind == .departed, let c = trainInHand else { return }
+        let lag = PlatformTiming.recordedLag(route: c.route)
+        func standing(_ idx: Int, at ts: Double) -> Bool {
+            if let feedTs = c.stopTs[idx], ts >= feedTs - lag - quickChangeBeforeSec, ts <= feedTs - lag + quickChangeAfterSec { return true }
+            // or the feed had it standing at the stop then, between polls (a held train's time at the stop is when it leaves)
+            return c.stoodAt[idx].map { ts >= $0.from - pollGapSec && ts <= $0.to + pollGapSec } ?? false
+        }
         // steps this soon after the pull-away are boarding or the platform, not a ride over (Oct 21 at W 4 St: a pull-away
         // at 9:42:16 and steps at 9:42:28 ended the trip there, read as the E already at 14 St)
-        guard walk.startTs - dep.ts >= t.minRideSec else { return }
-        let lag = PlatformTiming.recordedLag(route: c.route)
-        let atStop = c.stopTs.contains { idx, feedTs in
-            idx > c.boardIdx && walk.startTs >= feedTs - lag - quickChangeBeforeSec && walk.startTs <= feedTs - lag + quickChangeAfterSec
-        } || c.stoodAt.values.contains { span in
-            // or the feed had it standing at a stop then, between polls (a held train's time at the stop is when it leaves)
-            walk.startTs >= span.from - pollGapSec && walk.startTs <= span.to + pollGapSec
+        if let walk = t.walking, walk.seconds >= quickChangeWalkSec, walk.startTs - dep.ts >= t.minRideSec,
+           c.stopTs.keys.contains(where: { $0 > c.boardIdx && standing($0, at: walk.startTs) }) || c.stoodAt.keys.contains(where: { standing($0, at: walk.startTs) }) {
+            tracker?.alightWalking(at: walk.startTs)
+            return
         }
-        guard atStop else { return }
-        tracker?.alightWalking(at: walk.startTs)
+        // at the stop the route leaves the train at, steps in bursts count too: getting off there is the plan, and off a
+        // crowded train the walk stops and starts (Nov 10 at Jay St, off the F held there)
+        if let walk = t.brokenWalk, walk.seconds >= quickChangeWalkSec, walk.startTs - dep.ts >= t.minRideSec, let past = c.alightIdx,
+           standing(past, at: walk.startTs) {
+            tracker?.alightWalking(at: walk.startTs)
+        }
     }
 
     /// The believed train has gone on past the stop the route had the rider leave it at, and no walk-off was felt.
@@ -292,12 +298,18 @@ struct RideSession {
         guard let t = tracker, t.phase == .riding, t.sensing else { return }
         let leg = t.timeline.legsRidden
         guard !stayedOnChecked.contains(leg), t.timeline.events.last?.kind == .departed, let c = trainInHand, let past = c.alightIdx,
-              let progress = c.progressIdx, progress > past else { return }
+              let progress = c.progressIdx else { return }
         let lag = PlatformTiming.recordedLag(route: c.route)
-        guard let atStop = (c.stopTs[past] ?? c.alightTs).map({ $0 - lag }),
+        // when it reached the stop: the feed's time there, or the first poll that had it standing there when that is sooner
+        // (a held train keeps republishing its time at the stop as the moment it will leave)
+        guard let atStop = [(c.stopTs[past] ?? c.alightTs).map({ $0 - lag }), c.stoodAt[past]?.from].compactMap({ $0 }).min(),
               let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, atStop > dep else { return }
-        let later = c.stopTs.filter { $0.key > past }.sorted { $0.key < $1.key }.map { $0.value - lag }
         let hasNext = leg + 1 < legs.count
+        guard progress > past else {
+            if hasNext { checkLeftStandingTrain(c, past: past, atStop: atStop, now: now) }
+            return
+        }
+        let later = c.stopTs.filter { $0.key > past }.sorted { $0.key < $1.key }.map { $0.value - lag }
         let connections = hasNext ? transferLog.pullAways() : []
         let left = hasNext ? transferLog.pullAwaySpans() : []
         // when it left the stop, by the feed: after the last poll that had it standing there, else its moment there and a dwell
@@ -320,6 +332,31 @@ struct RideSession {
             tracker?.beginRiding(now: now, departedTs: pullAwayTs)
             handleEvents()
         }
+    }
+
+    /// The train in hand stands at the stop the route leaves it at, by the feed (held there: Nov 2 and Nov 10 at Jay St),
+    /// and the phone has felt a train's push since: not that train's, which has not moved. The rider is on the connection.
+    /// A push the feed shows as a connection pulling away from the platform is that one; two pushes or more (a ride
+    /// running) with none to match make it the first connection that left after the rider got off, by the route's timing.
+    /// Pushes that begin among the rider's own steps (boarding, finding a seat) are not a train's (`pushRunsClear`).
+    private mutating func checkLeftStandingTrain(_ c: BoardingCandidate, past: Int, atStop: Double, now: Double) {
+        guard let t = tracker, let span = c.stoodAt[past], now >= atStop + continuity.afterArrivalSec else { return }
+        let pushes = t.pushRunsClear.filter { $0 >= atStop + continuity.afterArrivalSec && $0 + 10 <= span.to }
+        guard let p = pushes.first else { return }
+        let pulls = transferLog.pullAways(), left = transferLog.pullAwaySpans()
+        let pullAway: Double
+        if continuity.isConnection(p, pullAways: pulls, left: left) {
+            pullAway = p
+        } else if pushes.count >= continuity.pushesForRide,
+                  let first = continuity.firstConnection(after: atStop + stepOnSec, by: p + continuity.connectionWindowSec, pullAways: pulls) {
+            pullAway = first
+        } else {
+            return
+        }
+        tracker?.alightStanding(at: min(atStop, pullAway))
+        handleEvents()
+        tracker?.beginRiding(now: now, departedTs: pullAway)
+        handleEvents()
     }
 
     /// The ride closes at `at`, a walk-off no sensor felt, told now (`checkStayedOn`, `checkSamePlatformChange`). Told
