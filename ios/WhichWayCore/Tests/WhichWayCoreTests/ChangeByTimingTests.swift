@@ -39,10 +39,19 @@ final class ChangeByTimingTests: XCTestCase {
 
     /// The F (stops 4 to 8: Jay St 6, York St 7, East Broadway 8) and A trains at Jay St (their stop 6, then High St 7)
     /// arriving at the given moments, each standing there 30 s.
-    private func feed(aArrivals: [Double]) -> (Double) -> [String: LineBoard] {
+    private func feed(aArrivals: [Double], fHeldTo: Double? = nil) -> (Double) -> [String: LineBoard] {
         { now in
             let fStops: [(Int, Double)] = [(4, self.t0 + 80), (5, self.t0 + 340), (6, self.jay), (7, self.jay + 150), (8, self.jay + 330)]
-            let f = self.live("f1", key: "F_N", stops: fStops, dwell: 40, now: now)
+            var f = self.live("f1", key: "F_N", stops: fStops, dwell: 40, now: now)
+            if let held = fHeldTo, now >= self.jay - 60 {
+                // held at Jay St: standing there until `held`, its time there republished as the moment it will leave
+                let lag = PlatformTiming.recordedLag(route: "F")
+                if now < held {
+                    f = self.train("f1", key: "F_N", points: [(6, max(now + 30, held) + lag), (7, held + 110 + lag), (8, held + 290 + lag)], standingAt: now >= self.jay ? 6 : nil)
+                } else {
+                    f = self.live("f1", key: "F_N", stops: [(7, held + 110), (8, held + 290)], dwell: 40, now: now)
+                }
+            }
             let a = aArrivals.enumerated().compactMap { i, at in
                 self.live("a\(i + 1)", key: "A_N", stops: [(6, at), (7, at + 130), (8, at + 250)], dwell: 30, now: now)
             }
@@ -237,5 +246,50 @@ final class ChangeByTimingTests: XCTestCase {
         XCTAssertEqual(s.belief(leg: 1)?.bestKey, "F_N")
         XCTAssertTrue(s.belief(leg: 1)?.byHand ?? false)
         XCTAssertEqual(s.lineToFollow(routeKeys: ["A_N"], now: jay + 90, lastSwitchTs: 0), "F_N", "the route follows the F on the rider's word")
+    }
+
+    // MARK: - the F held at Jay St (Nov 10: the F stood there for minutes while the rider crossed to the A)
+
+    /// Off the held F in bursts of steps with pauses (a crowded car), onto the A a minute behind it: the walk-off counts at
+    /// the route's change, and the A is the one that left after it.
+    func testWalkingOffAHeldFInBurstsIsTheChange() {
+        var s = session()
+        let fd = feed(aArrivals: [jay + 60, jay + 400], fHeldTo: jay + 420)
+        let bursts: [(Double, Double)] = [(80, 82), (85, 86), (88, 91), (94, 96), (99, 104), (107, 111), (114, 116)]
+        drive(&s, from: t0, until: jay + 125, feed: fd) { ts in
+            if let f = self.onTheF(ts) { return f }
+            let r = ts - self.jay
+            return Second(steps: bursts.contains { r >= $0.0 && r < $0.1 }, shake: 0.03)
+        }
+        XCTAssertEqual(s.currentLeg, 1, "steps in bursts at the route's change, the F standing there: off")
+        drive(&s, from: jay + 125, until: jay + 330, feed: fd) { ts in
+            Second(push: self.inRun(ts, [self.jay + 184, self.jay + 230]), shake: 0.04)
+        }
+        XCTAssertTrue(s.onTrain)
+        XCTAssertEqual(s.belief(leg: 1)?.bestTrain, "A_N|a1")
+        XCTAssertNil(s.stayedOn)
+    }
+
+    /// Two steps onto an A standing across the platform from the held F; its pull-away goes unfelt, then it is felt running
+    /// (braking into High St, pulling out). The F has not moved: those pushes are the A's.
+    func testPushesWhileTheFIsHeldAreTheConnection() {
+        var s = session()
+        let fd = feed(aArrivals: [jay - 10, jay + 400], fHeldTo: jay + 420)
+        drive(&s, from: t0, until: jay + 240, feed: fd) { ts in
+            if let f = self.onTheF(ts) { return f }
+            return Second(push: self.inRun(ts, [self.jay + 114, self.jay + 160]), steps: ts < self.jay + 2, shake: ts >= self.jay + 20 ? 0.04 : 0.01)
+        }
+        XCTAssertEqual(s.currentLeg, 1)
+        XCTAssertTrue(s.onTrain)
+        XCTAssertEqual(s.belief(leg: 1)?.bestTrain, "A_N|a1")
+    }
+
+    /// Sitting on the held F while an A comes and goes: nothing pushes the phone, so the rider is still on the F.
+    func testSittingOnTheHeldFIsNoChange() {
+        var s = session()
+        let fd = feed(aArrivals: [jay + 60, jay + 400], fHeldTo: jay + 360)
+        drive(&s, from: t0, until: jay + 300, feed: fd) { ts in self.onTheF(ts) ?? Second(shake: 0.01) }
+        XCTAssertEqual(s.currentLeg, 0)
+        XCTAssertTrue(s.onTrain)
     }
 }
