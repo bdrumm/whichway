@@ -158,6 +158,39 @@ SPECS['clock-nyc'] = dict(
     reports=[(49.4, 0.3125, 6)], drops=[(0.3, 5, 5), (40, 43.75, 6)], doors=[58.3], gliss=[(26.7, 0.6, 0.8), (72.6, 0.8, 1.0)],
     notify=[54.6875],
 )
+# Know When to Run: the commute as a race, so the score is techno at 150 bpm (Score.techno): four on the floor, a
+# rolling off-beat bass, a 16th-note acid line whose filter keeps opening, claps, stabs, rolls and risers into every
+# drop, in B minor so the app's notification (D, A, F sharp) sits inside it. The train arrives as rail joints slowing,
+# the doors chime, a roll runs up to the dive through the closing doors, and everything stops dead when they shut.
+# Inside the car it turns to half time and to D major; the next morning is calm, the notification sounds once when the
+# app says there is no need to run, and again as the logo
+_BM, _G, _A, _D = [35, 54, 59, 62, 66], [31, 55, 59, 62, 67], [33, 52, 57, 61, 64], [38, 54, 57, 62, 66]
+SPECS['sprint'] = dict(
+    dur=48, beat=0.4, bar=1.6, hit=41.6, bells=[], logo=62, logo_style='notify', riser=None,
+    chords=[_BM] * 2 + [_BM, _BM, _G, _A] * 4 + [_BM, _BM] + [_G, _A] + [_D, _D, _G, _A],  # one a bar
+    hit_notes=SPECS['clock']['hit_notes'],
+    pad=[(0, 0), (31.9, 0), (32.0, 2.4), (35.2, 2.0), (41.6, 2.6)],
+    arp=dict(start=32.8, sub=[(0, 1), (35.2, 2), (38.4, 4)], vel=[(32.8, 1.2), (35.2, 1.3), (41.6, 1.8)], soft=True),
+    rides=[(25.6, 27.2, 28.8)], doors=[28.8], notify=[35.6], gliss=[(32.5, 0.5, 0.7)],
+    blooms=[(32.0, 0.9), (35.2, 0.5), (38.4, 0.6)], swells=[(40.6, 41.6)],
+    techno=dict(
+        span=(0, 32.0),
+        kick=[(0, 0.55), (3.19, 0.7), (3.2, 1.0), (15.99, 1.0), (16.0, 0), (17.59, 0), (17.6, 1.0), (31.99, 1.0), (32, 0)],
+        thump=[(0, 1), (3.19, 1), (3.2, 0)],  # 1 = the kick heard through a wall, for the intro
+        hats=[(0, 0), (1.6, 0.4), (3.19, 0.7), (3.2, 0.8), (15.99, 0.9), (16.0, 0.5), (17.6, 1.0), (28.79, 1.1), (28.8, 0.35), (32, 0.5)],
+        open=[(0, 0), (4.79, 0), (4.8, 0.9), (15.99, 0.9), (16.0, 0), (17.59, 0), (17.6, 1.0), (28.79, 1.0), (28.8, 0)],
+        clap=[(0, 0), (4.79, 0), (4.8, 0.9), (15.99, 0.9), (16.0, 0), (17.59, 0), (17.6, 1.0), (28.79, 1.0), (28.8, 0)],
+        bass=[(0, 0), (3.19, 0), (3.2, 1.0), (15.99, 1.0), (16.0, 0), (17.59, 0), (17.6, 1.0), (31.99, 1.1), (32, 0)],
+        acid=[(0, 0), (3.19, 0), (3.2, 0.5), (4.8, 0.8), (15.99, 1.0), (16.0, 0.6), (17.59, 0.8), (17.6, 1.0), (28.79, 1.2),
+              (28.8, 0), (32, 0)],
+        bright=[(3.2, 2.5), (8.0, 5), (12.8, 8), (16.0, 3), (17.6, 6), (22.4, 9), (25.6, 11), (28.8, 14)],  # how far the filter is open
+        up=[(0, 0), (22.39, 0), (22.4, 12), (32, 12)],  # the acid line's octave
+        stab=[(0, 0), (12.79, 0), (12.8, 0.8), (15.99, 0.8), (16.0, 0), (17.59, 0), (17.6, 0.9), (28.79, 1.0), (28.8, 0)],
+        rolls=[(2.4, 3.2, 0.5), (7.2, 8.0, 0.35), (16.0, 17.6, 0.9), (24.8, 25.6, 0.5), (30.4, 32.0, 1.0)],
+        risers=[(1.6, 3.2, 0.6), (16.0, 17.6, 1.0), (25.6, 28.8, 0.8), (30.4, 32.0, 1.0)],
+        crashes=[(3.2, 1.0), (9.6, 0.5), (12.8, 0.7), (17.6, 1.0), (22.4, 0.8), (28.8, 0.6)],
+        horns=[11.2], blips=[2.4, 21.2], slams=[32.0]),
+)
 # the logo sounds on their own, for choosing between and for reuse: python3 scores.py logo-fork out.wav (see Score.logo)
 LOGOS = ('fork', 'rails', 'chime', 'swell', 'heart', 'clock', 'notify')
 for _style in LOGOS:
@@ -645,6 +678,118 @@ class Score:
             self.add(out, a, (squeal * 0.022 + rumble * 0.05) * np.sin(np.pi * k) ** 0.7 * (1 - k * 0.3))
         return out
 
+    def techno(self):
+        """A techno track laid out by the spec's `techno` (see the sprint spec): each voice has a gain envelope and
+        plays on the 16th-note grid over `span`. The kick ducks the bass, the acid line and the stabs."""
+        out = np.zeros((self.n, 2))
+        T = self.s.get('techno')
+        if not T:
+            return out
+        beat, rng = self.s['beat'], np.random.default_rng(33)
+        step, (t0, t1) = beat / 4, T['span']
+        lev = lambda name, t: float(ramp(t, T[name])) if name in T else 0.0
+        steps = [(j, t0 + j * step) for j in range(int(round((t1 - t0) / step)))]
+        noise = lambda n: rng.standard_normal(n)
+        smooth = lambda x, k: np.convolve(x, np.ones(k) / k, mode='same')
+        dry, wet, ducked = np.zeros((self.n, 2)), np.zeros((self.n, 2)), np.zeros((self.n, 2))
+        duck = np.ones(self.n)
+
+        kt = np.arange(int(0.34 * SR)) / SR
+        kick = np.tanh((np.sin(2 * np.pi * np.cumsum(46 + 150 * np.exp(-kt * 40)) / SR) * np.exp(-kt * 9)
+                        + 0.3 * np.sin(2 * np.pi * 1900 * kt) * np.exp(-kt * 500)) * 2.4)
+        thump = np.sin(2 * np.pi * np.cumsum(44 + 50 * np.exp(-kt * 30)) / SR) * np.exp(-kt * 11)
+        saw = lambda f, t, bright, res=0.0: sum(
+            np.sin(2 * np.pi * f * h * t) * np.exp(-h / bright) / h ** 0.4 * (1 + res * np.exp(-((h - bright) / 0.9) ** 2))
+            for h in range(1, 25) if f * h < 9000)
+        for j, t in steps:
+            c = self.chord(t)
+            # kick, and the hole it punches in everything else
+            if j % 4 == 0 and lev('kick', t) > 0:
+                k = lev('thump', t)
+                self.add(dry, t, (kick * (1 - k) + thump * k) * 0.24 * lev('kick', t))
+                i0 = int(t * SR)
+                d = 1 - 0.75 * (1 - k) * np.exp(-np.arange(int(beat * SR)) / SR / 0.11)
+                duck[i0:i0 + len(d)] = np.minimum(duck[i0:i0 + len(d)], d[: self.n - i0])
+            # hats: every 16th, the off-beat one open
+            if lev('hats', t) > 0:
+                n = int(0.05 * SR)
+                vel = (0.55, 0.3, 0.75, 0.4)[j % 4] * (1.3 if j % 16 == 14 else 1.0)
+                hat = np.diff(noise(n + 2), n=2) * np.exp(-np.arange(n) / SR * 95) * 0.03 * vel * lev('hats', t)
+                self.add(dry, t, hat, (0.8, 1.2) if j % 2 else (1.2, 0.8))
+            if j % 4 == 2 and lev('open', t) > 0:
+                n = int(0.22 * SR)
+                self.add(dry, t, np.diff(noise(n + 2), n=2) * np.exp(-np.arange(n) / SR * 17) * 0.028 * lev('open', t))
+            # clap on two and four
+            if j % 8 == 4 and lev('clap', t) > 0:
+                n = int(0.26 * SR)
+                tt = np.arange(n) / SR
+                env = sum(np.exp(-np.maximum(tt - d, 0) * 240) * (tt >= d) for d in (0, 0.011, 0.023)) * 0.5 + np.exp(-tt * 24) * (tt >= 0.03)
+                clap = (smooth(noise(n), 5) - smooth(noise(n), 28)) * env
+                self.add(wet, t, clap * 0.2 * lev('clap', t))
+            # bass: rolls on the three 16ths between kicks
+            if j % 4 and lev('bass', t) > 0:
+                tt = np.arange(int(0.11 * SR)) / SR
+                f = hz(c[0] + (12 if j % 16 in (7, 15) else 0))
+                note = np.tanh(saw(f, tt, 3.0) * 1.6) * np.exp(-tt * 13) * np.minimum(1, tt / 0.004)
+                self.add(ducked, t, note * 0.075 * (1.15 if j % 4 == 2 else 0.9) * lev('bass', t))
+            # the acid line: chord notes in a pattern of eight, accents in threes against it
+            if lev('acid', t) > 0:
+                tt = np.arange(int(0.16 * SR)) / SR
+                m = (c[1], c[3], c[2], c[4], c[3], c[1] + 12, c[4], c[2])[j % 8] + 12 + lev('up', t)
+                accent = 1.35 if j % 3 == 0 else 0.85
+                bright = lev('bright', t) * (1 + 0.45 * np.sin(2 * np.pi * t / 3.2)) * (1.25 if j % 3 == 0 else 1.0)
+                note = np.tanh(saw(hz(m), tt, max(1.5, bright), 2.2) * 0.9) * np.exp(-tt * (9 if j % 3 == 0 else 16)) * np.minimum(1, tt / 0.003)
+                pan = 0.5 + 0.3 * np.sin(j * 0.7)
+                self.add(ducked, t, note * 0.12 * accent * lev('acid', t), (2 * (1 - pan), 2 * pan))
+                self.add(wet, t + step * 1.5, note * 0.03 * accent * lev('acid', t), (2 * pan, 2 * (1 - pan)))   # an echo across
+            # stabs: the chord, off the beat
+            if j % 16 in (3, 6, 11, 14) and lev('stab', t) > 0:
+                tt = np.arange(int(0.24 * SR)) / SR
+                for side, det in ((0, -0.09), (1, 0.09)):
+                    chordsig = sum(saw(hz(m + 12) * 2 ** (det / 12), tt, 7.0) for m in c[1:4])
+                    g = [0.0, 0.0]
+                    g[side] = 1.0
+                    self.add(wet, t, np.tanh(chordsig * 0.5) * np.exp(-tt * 15) * np.minimum(1, tt / 0.003) * 0.13 * lev('stab', t), g)
+        # rolls: claps in 16ths, then 32nds, getting louder
+        for a, b, g in T.get('rolls', []):
+            t = a
+            while t < b - 1e-6:
+                k = (t - a) / (b - a)
+                n = int(0.09 * SR)
+                tt = np.arange(n) / SR
+                hitn = (smooth(noise(n), 4) - smooth(noise(n), 30)) * np.exp(-tt * 45) + 0.4 * np.sin(2 * np.pi * (190 + 60 * k) * tt) * np.exp(-tt * 30)
+                self.add(wet, t, hitn * 0.26 * g * (0.25 + 0.75 * k ** 1.5))
+                t += step / (2 if k > 0.5 else 1)
+        # risers: a note climbing two octaves with a tremolo that speeds up, air opening over it
+        for a, b, g in T.get('risers', []):
+            n = int((b - a) * SR)
+            k = np.arange(n) / n
+            ph = 2 * np.pi * np.cumsum(hz(59) * 4 ** k) / SR
+            trem = 0.6 + 0.4 * np.sin(2 * np.pi * np.cumsum(6 + 26 * k) / SR)
+            air = np.diff(noise(n + 1)) * k ** 2 * 0.25
+            self.add(wet, a, ((np.sin(ph) + 0.4 * np.sin(2 * ph)) * trem * 0.5 + air) * k ** 1.6 * 0.2 * g)
+        for at, g in T.get('crashes', []):
+            n = int(1.6 * SR)
+            tt = np.arange(n) / SR
+            self.add(wet, at, np.diff(noise(n + 2), n=2) * np.exp(-tt * 3.0) * 0.035 * g)
+        for at in T.get('horns', []):   # a cab's horn going by: two notes, falling a little as it passes
+            n = int(0.5 * SR)
+            tt = np.arange(n) / SR
+            fall = np.cumsum(1 - 0.07 * np.clip((tt - 0.12) / 0.3, 0, 1)) / SR
+            horn = sum(np.tanh(sum(np.sin(2 * np.pi * hz(m) * h * fall) / h for h in range(1, 9)) * 1.4) for m in (66, 69))
+            self.add(wet, at, horn * np.minimum(1, tt / 0.01) * np.clip((0.5 - tt) / 0.08, 0, 1) * 0.1, (0.7, 1.3))
+        for at in T.get('blips', []):   # the reader says go
+            tt = np.arange(int(0.12 * SR)) / SR
+            for dt, m in ((0, 88), (0.1, 95)):
+                self.add(wet, at + dt, np.sin(2 * np.pi * hz(m) * tt) * np.exp(-tt * 28) * np.minimum(1, tt / 0.002) * 0.12)
+        for at in T.get('slams', []):   # the doors shut
+            n = int(2.2 * SR)
+            tt = np.arange(n) / SR
+            boom = np.sin(2 * np.pi * np.cumsum(38 + 90 * np.exp(-tt * 14)) / SR) * np.exp(-tt * 2.2)
+            clack = (smooth(noise(n), 3) - smooth(noise(n), 40)) * np.exp(-tt * 30) * 1.5
+            self.add(wet, at, (boom + clack) * np.minimum(1, tt / 0.002) * 0.3)
+        return dry + ducked * duck[:, None] + self.reverb(wet + ducked * duck[:, None] * 0.25, 0.3)
+
     def reverb(self, x, mix=0.35):
         n = self.n
         out = np.zeros_like(x)
@@ -672,7 +817,7 @@ class Score:
 
     def render(self):
         mixed = self.reverb(self.pad() + self.arp() + self.hit()) + self.drums() + self.bass() + self.riser()
-        mixed += self.fx() * 0.6 + self.reverb(self.fx(), 0.6) * 0.5 + self.reverb(self.fx2(), 0.4)
+        mixed += self.fx() * 0.6 + self.reverb(self.fx(), 0.6) * 0.5 + self.reverb(self.fx2(), 0.4) + self.techno()
         dur = self.s['dur']
         mixed *= ramp(self.t, [(0, 0), (0.3 if 'pad' not in self.s else 1.2, 1), (dur - 1.0, 1), (dur, 0)])[:, None]
         mixed = np.tanh(mixed * 2.2)

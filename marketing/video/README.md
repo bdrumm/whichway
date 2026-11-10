@@ -80,9 +80,9 @@ signals a day, so two people can find each other") and has no charts or percenta
 will be under the clock. `nyc.js` is the illustration kit (skyline, concourse, subway cars, street, platform in
 perspective, figures, crowds), `cine.js` the shared titles, grain and letterbox (also used by `clock-live.html`).
 The score is the `clock-nyc` spec: every effect is made of notes from the chord under it (`Score.fx2`), no noise.
-The station clock is the beat (`ticktock`): it starts ticking in key when the clock first appears, stays on the
-96 bpm grid through the stopped trains and the waiting, and is the hi-hat whenever the band plays; the film ends on
-the clock striking as the logo lands (`logo_style='clock'`).
+Each scene gets the effects that belong to it; the station clock ticks in key wherever the clock or the wait is the
+scene, always on the 96 bpm grid, and stays on quietly as the band's hi-hat (`ticktock`). The app's notification
+sounds once when it speaks and again as the logo sound that ends the film (`logo_style='notify'`).
 
 ```bash
 python3 scores.py clock-nyc clock-nyc.wav
@@ -95,15 +95,36 @@ ffmpeg -i clock-nyc_silent.mp4 -i clock-nyc.wav -vf scale=1280:720:flags=lanczos
   whichway-under-the-clock-nyc-phone.mp4
 ```
 
+## Know When to Run
+
+`sprint.html` (48 s) is the commute as a race: a man whose record from his front door to the doors of the 8:14 is
+2:08, and an app that tells him to the second when those doors open. Out of the door at dawn, down the block (`chase`:
+the camera runs with him along the brownstone row, which repeats and smears with speed), across the side streets,
+down the stairs (`stairs`), through the turnstile, along the passage (`sCorridor`, from where he is) and through the
+closing doors, with two clocks on screen all the way (`hud`: the app's count to the doors, and his own with splits).
+The next morning the train is four minutes late, the app says so, and he walks. It is cut to techno at 150 bpm: a
+beat is 0.4 s, a bar 1.6 s, cuts fall on bars and he lands a foot on every eighth note. The score is the `sprint`
+spec (`Score.techno`: kick, rolling bass, an acid line whose filter keeps opening, claps, stabs, rolls and risers,
+in B minor so the app's notification sits inside it), and it ends on the notification as the logo sound.
+
+```bash
+python3 scores.py sprint sprint.wav
+./render_parts.sh sprint.html sprint_silent.mp4 4
+ffmpeg -i sprint_silent.mp4 -i sprint.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
+  -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-know-when-to-run.mp4
+node stills.mjs sprint.html stills 4 12.5 30     # half-size stills of any film, with page errors printed
+```
+
 ## Sound samples
 
-The logo sound has six candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,
-`swell`, `heart`, `clock`), each timed to the icon drawing its stem, fork, dot and name. `clock` is the one in use:
-the film's own tick and tock on the beat, then the hour striking where the dot lands. `sounds.html` plays them one after
+The logo sound has seven candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,
+`swell`, `heart`, `clock`, `notify`), each timed to the icon drawing itself. `notify` is the one in use: the app's
+own notification sound (a quick rise of a fifth and a glass note), landing where the dot does, so the phone and the
+logo make the same sound. `sounds.html` plays them one after
 another over the end card with a letter on screen, and with `?effects` names each score-born effect as it plays.
 
 ```bash
-for s in fork rails chime swell heart clock; do python3 scores.py logo-$s logo-$s.wav; done   # then join in A to F order
+for s in fork rails chime swell heart clock notify; do python3 scores.py logo-$s logo-$s.wav; done   # then join in A to G order
 FILM=sounds.html node render.mjs logo-sounds_silent.mp4 30
 python3 scores.py effects effects.wav
 FILM='sounds.html?effects' node render.mjs sound-effects_silent.mp4 30

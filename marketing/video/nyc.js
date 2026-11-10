@@ -429,12 +429,13 @@ function signal(x, y, color = '255,50,40', a = 1) {
 
 // ---------- a wet street of brownstones ----------
 const STOOPS = (() => { const r = rng(61), out = []; let x = -80; while (x < W + 100) { const w = 250 + r() * 70; out.push({ x, w, h: 520 + r() * 110, c: ['#2a1622', '#33201a', '#241a2e', '#3a1c1c', '#1f1b30'][Math.floor(r() * 5)], seed: Math.floor(r() * 1e5), escape: r() < 0.45 }); x += w; } return out; })();
-function street(t, { ground = 850, lit = 1 } = {}) {
-  nightSky('#050716', '#191c44', 0.35);
-  drawBlock(BLOCKS.far, t, { base: 600, fill: '#141845', dx: -260, winA: 0.4, lit: 0.3, sx: 10, sy: 13, ww: 3.5, wh: 5 });
-  empire(460, 640, 0.62, '#131741', 0.9);
-  STOOPS.forEach(b => {
-    const top = ground - b.h;
+/** The row of brownstones on its own, shifted by `dx` (it repeats every STOOPS_W), drawn only where it falls inside
+ *  x0..x1: a film that runs along the street draws it as often as its camera needs. */
+const STOOPS_W = STOOPS[STOOPS.length - 1].x + STOOPS[STOOPS.length - 1].w - STOOPS[0].x;
+function stoopRow(t, { ground = 850, lit = 1, dx = 0, x0 = -50, x1 = W + 50 } = {}) {
+  STOOPS.forEach(b0 => {
+    const b = dx ? { ...b0, x: b0.x + dx } : b0, top = ground - b.h;
+    if (b.x > x1 || b.x + b.w < x0) return;
     ctx.fillStyle = b.c; ctx.fillRect(b.x, top, b.w, b.h);
     ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(b.x, top, b.w, 16); ctx.fillRect(b.x + b.w - 5, top, 5, b.h);
     ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fillRect(b.x - 4, top - 8, b.w + 8, 10);
@@ -450,6 +451,12 @@ function street(t, { ground = 850, lit = 1 } = {}) {
     const sx = b.x + b.w * 0.62; ctx.fillStyle = '#0c0a14'; ctx.fillRect(sx - 4, ground - 150, 56, 110); ctx.fillStyle = `rgba(255,200,120,${0.5 * lit})`; ctx.fillRect(sx + 4, ground - 144, 40, 20);
     for (let k = 0; k < 5; k++) { ctx.fillStyle = k % 2 ? '#1a1320' : '#231a2a'; ctx.fillRect(sx - 14 - k * 9, ground - 40 + k * 8, 76 + k * 18, 8); }
   });
+}
+function street(t, { ground = 850, lit = 1 } = {}) {
+  nightSky('#050716', '#191c44', 0.35);
+  drawBlock(BLOCKS.far, t, { base: 600, fill: '#141845', dx: -260, winA: 0.4, lit: 0.3, sx: 10, sy: 13, ww: 3.5, wh: 5 });
+  empire(460, 640, 0.62, '#131741', 0.9);
+  stoopRow(t, { ground, lit });
   // street lamps
   [330, 1130].forEach(x => { ctx.strokeStyle = '#07070f'; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(x, ground); ctx.lineTo(x, ground - 330); ctx.quadraticCurveTo(x, ground - 380, x + 46, ground - 380); ctx.stroke(); ctx.fillStyle = '#ffe9b8'; ctx.beginPath(); ctx.ellipse(x + 52, ground - 372, 15, 9, 0, 0, Math.PI * 2); ctx.fill(); glowAt(x + 52, ground - 366, 300, '255,205,130', 0.4); ctx.save(); ctx.globalCompositeOperation = 'lighter'; const cg = ctx.createLinearGradient(0, ground - 366, 0, ground); cg.addColorStop(0, 'rgba(255,205,130,0.16)'); cg.addColorStop(1, 'rgba(255,205,130,0)'); poly([[x + 40, ground - 366], [x + 64, ground - 366], [x + 250, ground], [x - 150, ground]], cg); ctx.restore(); });
   // the pavement and the road, wet
@@ -458,8 +465,8 @@ function street(t, { ground = 850, lit = 1 } = {}) {
   const r = rng(12);
   for (let i = 0; i < 90; i++) { const x = r() * W, len = 30 + r() * 150, c = r() < 0.2 ? '62,224,143' : r() < 0.3 ? '255,90,70' : '255,205,130', lg = ctx.createLinearGradient(0, ground + 50, 0, ground + 50 + len); lg.addColorStop(0, `rgba(${c},${0.3 * r()})`); lg.addColorStop(1, `rgba(${c},0)`); ctx.fillStyle = lg; ctx.fillRect(x + Math.sin(t * 2 + i) * 3, ground + 50, 3 + r() * 9, len); }
 }
-/** The way down: the railings, the two green globes, the sign. Its stairs start at x and go down to the right. */
-function subwayEntrance(x, ground, t) {
+/** The way down: the railings, the two green globes, the sign for `line`. Its stairs start at x and go down to the right. */
+function subwayEntrance(x, ground, t, line = '6') {
   ctx.fillStyle = '#020207'; poly([[x, ground], [x + 250, ground], [x + 250, ground + 70], [x + 40, ground + 70]], '#020207');
   for (let k = 0; k < 7; k++) { ctx.fillStyle = `rgba(255,214,150,${0.05 + k * 0.03})`; ctx.fillRect(x + 30 + k * 30, ground + 6 + k * 9, 220 - k * 30, 3); }
   glowAt(x + 180, ground + 50, 190, '255,214,150', 0.3);
@@ -468,7 +475,7 @@ function subwayEntrance(x, ground, t) {
   [x - 6, x + 260].forEach((px, i) => { ctx.strokeStyle = '#0d3b2a'; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(px, ground - 70); ctx.lineTo(px, ground - 210); ctx.stroke(); ctx.fillStyle = NY.globe; ctx.beginPath(); ctx.arc(px, ground - 232, 24, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(px - 7, ground - 240, 7, 0, Math.PI * 2); ctx.fill(); glowAt(px, ground - 232, 200, '62,224,143', 0.5 + 0.05 * Math.sin(t * 3 + i)); });
   ctx.fillStyle = '#0a0a12'; ctx.beginPath(); ctx.roundRect(x + 30, ground - 190, 196, 56, 6); ctx.fill();
   text('Subway', x + 52, ground - 151, { size: 30, weight: 800, color: '#fff', display: false });
-  bullet(x + 196, ground - 162, 17, '6');
+  bullet(x + 196, ground - 162, 17, line);
 }
 /** A cab going by, its lights on the wet road. */
 function taxi(x, y, s, dir = 1) {
