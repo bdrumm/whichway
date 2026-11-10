@@ -50,3 +50,21 @@ python3 scores.py clock clock.wav
 ./render_parts.sh clock.html clock_silent.mp4 4
 ffmpeg -i clock_silent.mp4 -i clock.wav -c:v copy -c:a aac -b:a 256k -shortest whichway-under-the-clock.mp4
 ```
+
+## Under the Clock, live-action cut
+
+`clock-live.html` (87.5 s) is the same film on real footage, cut on a 96 bpm grid, with the math drawn over the
+pictures. `footage.py` fetches the clips (free stock video from Mixkit, by id; they are not committed) and unpacks
+each shot into `footage/<shot>/0001.jpg…`; the page's `SHOTS` table says when each plays, its grade, its push-in and,
+for the two tunnels, a time map that brakes the train to a dead stop. The concourse clock is followed through its shots
+(`track_clock`, written to `footage/track.js`) so the film can repaint its face to seven o'clock in 1986 and 6:56
+tonight. `galton` and `city` live in `mathkit.js`, shared with `clock.html`. The score is the `clock-live` spec, with
+booms on the cuts, a brake squeal, a heartbeat and a ticking clock through the hold (`Score.fx`).
+
+```bash
+pip install opencv-python-headless numpy
+python3 footage.py
+python3 scores.py clock-live clock-live.wav
+./render_parts.sh clock-live.html clock-live_silent.mp4 6
+ffmpeg -i clock-live_silent.mp4 -i clock-live.wav -c:v copy -c:a aac -b:a 256k -shortest whichway-under-the-clock-live.mp4
+```

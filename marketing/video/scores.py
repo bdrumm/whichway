@@ -99,6 +99,26 @@ SPECS['clock'] = dict(
     kick=(12.6, 0.5), hats=None, bass=(12.6, 0.7), riser=2.4,
     mute=[(22.2, 51.4), (54.4, 61.0)],  # the pulse stops for 1986 and the hold, returns as he crosses, and again when she arrives
 )
+# Under the Clock, live-action cut: the same key on a 96 bpm grid the picture is cut to, with what a trailer needs:
+# booms on the cuts, a brake squeal into the stop, a heartbeat and a ticking clock through the hold, swells into
+# the memory and into the run, the band back when he crosses the platform and at full height for the promise kept
+SPECS['clock-live'] = dict(
+    dur=87.5, beat=0.625, bar=2.5, hit=80.2, bells=[], chime=62,
+    chords=SPECS['clock']['chords'], hit_notes=SPECS['clock']['hit_notes'],
+    pad=[(0, 0.5), (5, 0.6), (12.3, 0.9), (13.75, 1.0), (22.5, 0.6), (27.5, 0.7), (37.5, 0.95), (42.5, 0.6), (46.25, 0.7),
+         (48.6, 0.7), (48.7, 0.25), (56.25, 0.5), (59.3, 0.6), (59.4, 1.0), (65, 0.8), (71.25, 1.3), (80, 1.1)],
+    arp=dict(start=0.6, sub=[(0, 1), (5, 2), (13.75, 4), (22.5, 1), (27.5, 2), (32.5, 1), (37.5, 2), (42.5, 2), (46.25, 4),
+                             (48.65, 1), (59.4, 4), (65, 2), (71.25, 4)],
+             vel=[(0.6, 0.5), (5, 0.6), (12, 0.8), (13.75, 0.95), (22.4, 0.9), (22.5, 0.45), (37.5, 0.7), (42.5, 0.5),
+                  (46.25, 0.8), (48.6, 0.85), (48.7, 0.0), (51.2, 0.0), (51.3, 0.3), (59.3, 0.35), (59.4, 0.95), (65, 0.6),
+                  (71.25, 1.0)], soft=True),
+    kick=(13.75, 0.8), hats=(13.75, 0.6), bass=(13.75, 0.9), riser=2.4,
+    mute=[(22.5, 46.25), (48.65, 59.4), (65.0, 71.25)],
+    impacts=[(5, 0.6), (13.75, 0.8), (22.5, 0.5), (27.5, 0.5), (42.5, 0.7), (48.65, 1.2), (49.5, 1.0), (59.4, 1.0), (65, 0.9),
+             (71.25, 0.8)],
+    heart=[(49.6, 59.0)], ticks=[(32.5, 36.25, 0.625), (36.25, 37.5, 0.15625), (51.25, 59.3, 0.625)],
+    whoosh=[(26.6, 27.5), (41.7, 42.5), (58.4, 59.4), (63.6, 65.0)], brake=(47.4, 48.65),
+)
 # engine cuts: the same scores, ending on the signature chime instead of the plucked bells
 SPECS['maya-engine'] = dict(SPECS['maya'], chime=61)
 SPECS['curtain-engine'] = dict(SPECS['curtain'], chime=65)
@@ -268,6 +288,50 @@ class Score:
             self.add(out, hit + dt, sig * g, gain=(1 - pan, 1 + pan))
         return out
 
+    def fx(self):
+        """Trailer furniture, laid out by the spec: `impacts` (a boom at each time), `heart` (a heartbeat over each
+        range), `ticks` (a clock over each range at an interval), `whoosh` (a swell that peaks at the end of each range)
+        and `brake` (a squeal falling to a stop)."""
+        out = np.zeros((self.n, 2))
+        s = self.s
+        for at, g in s.get('impacts', []):
+            t = np.arange(int(2.4 * SR)) / SR
+            boom = np.sin(2 * np.pi * np.cumsum(34 + 60 * np.exp(-t * 9)) / SR) * np.exp(-t * 1.8)
+            crack = np.convolve(self.rng.standard_normal(len(t)), np.ones(40) / 40, mode='same') * np.exp(-t * 7) * 2.0
+            self.add(out, at, (boom + crack) * np.minimum(1, t / 0.003) * 0.22 * g)
+        for a, b in s.get('heart', []):
+            t0 = a
+            while t0 < b:
+                for dt, g in ((0.0, 1.0), (0.27, 0.7)):
+                    t = np.arange(int(0.4 * SR)) / SR
+                    thump = np.sin(2 * np.pi * np.cumsum(46 + 40 * np.exp(-t * 28)) / SR) * np.exp(-t * 11)
+                    self.add(out, t0 + dt, thump * 0.2 * g * float(ramp(t0, [(a, 0.6), (b, 1.0)])))
+                t0 += 1.0
+        for a, b, iv in s.get('ticks', []):
+            t0, k = a, 0
+            while t0 < b - 0.01:
+                t = np.arange(int(0.05 * SR)) / SR
+                f = 2100 if k % 2 == 0 else 1700
+                tick = (np.sin(2 * np.pi * f * t) + 0.5 * np.sin(2 * np.pi * f * 2.3 * t)) * np.exp(-t * 160)
+                pan = 0.4 if k % 2 == 0 else 0.6
+                self.add(out, t0, tick * 0.05, (1 - pan, pan))
+                t0 += iv
+                k += 1
+        for a, b in s.get('whoosh', []):
+            n = int((b - a) * SR)
+            k = np.arange(n) / n
+            noise = np.convolve(self.rng.standard_normal(n), np.ones(18) / 18, mode='same')
+            self.add(out, a, noise * k ** 3 * 0.11)
+        if 'brake' in s:
+            a, b = s['brake']
+            n = int((b - a) * SR)
+            k = np.arange(n) / n
+            ph = 2 * np.pi * np.cumsum(1900 - 1300 * k ** 1.5) / SR
+            squeal = (np.sin(ph) + 0.4 * np.sin(1.51 * ph)) * (0.6 + 0.4 * np.sin(2 * np.pi * 31 * k * (b - a)))
+            rumble = np.convolve(self.rng.standard_normal(n), np.ones(120) / 120, mode='same') * 6
+            self.add(out, a, (squeal * 0.022 + rumble * 0.05) * np.sin(np.pi * k) ** 0.7 * (1 - k * 0.3))
+        return out
+
     def reverb(self, x, mix=0.35):
         n = self.n
         out = np.zeros_like(x)
@@ -295,6 +359,7 @@ class Score:
 
     def render(self):
         mixed = self.reverb(self.pad() + self.arp() + self.hit()) + self.drums() + self.bass() + self.riser()
+        mixed += self.fx() * 0.6 + self.reverb(self.fx(), 0.6) * 0.5
         dur = self.s['dur']
         mixed *= ramp(self.t, [(0, 0), (1.2, 1), (dur - 1.0, 1), (dur, 0)])[:, None]
         mixed = np.tanh(mixed * 2.2)

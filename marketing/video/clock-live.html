@@ -1,0 +1,322 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Under the Clock (live-action cut)</title>
+<style>html, body { margin: 0; background: #000; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script src="engine.js"></script>
+<script src="mathkit.js"></script>
+<script src="footage/track.js"></script>
+<script>
+// "Under the Clock", live-action cut: the same film on real footage (footage.py fetches and unpacks it), cut on a
+// 96 bpm grid, with the math drawn over the pictures. A train's headlights and the question "when?"; arrivals falling
+// through the board over the city's lights until the answer has a shape; the network over the skyline. A man with a
+// photo album: 1986, the clock, his train dead in a tunnel for forty minutes, she waited, he promised. Forty years on
+// the train stops again, the odds of making seven fall to 9%, the engine weighs the hold against the express across
+// the platform, and tonight he is the one waiting. 87.5 s.
+const DURATION = 87.5;
+const END = 80.2;
+
+// ---------- the pictures ----------
+const OLD = 'sepia(0.75) contrast(1.12) brightness(0.92) saturate(1.25)';
+/** Time into a shot (s) to source seconds, for a train that runs at `v` then brakes to a dead stop between u0 and u1. */
+const brake = (v, u0, u1) => u => (u < u0 ? v * u : v * u0 + v * (Math.min(u, u1) - u0) * (1 - (Math.min(u, u1) - u0) / (2 * (u1 - u0))));
+// name, in, out, frames on disk, {grade, zoom [from, to], map (shot seconds -> source seconds), dim, old}
+const SHOTS = [
+  ['arrive', 0, 5, 156, { grade: 'brightness(0.85) contrast(1.15) saturate(0.8)', zoom: [1.02, 1.1] }],
+  ['bokeh', 5, 13.75, 270, { grade: 'blur(5px) brightness(0.5) saturate(1.15)', zoom: [1.06, 1.14] }],
+  ['pass', 13.75, 16.25, 81, { grade: 'brightness(0.72) contrast(1.15) saturate(0.85)', zoom: [1.08, 1.02] }],
+  ['skyline', 16.25, 22.5, 195, { grade: 'brightness(0.5) contrast(1.15) saturate(0.7)', zoom: [1.02, 1.1] }],
+  ['album', 22.5, 26.25, 119, { grade: 'brightness(0.8) contrast(1.08) saturate(0.85)', zoom: [1.02, 1.1] }],
+  ['remember', 26.25, 27.5, 45, { grade: 'brightness(0.85) contrast(1.08) saturate(0.85)', zoom: [1.1, 1.2] }],
+  ['clock86', 27.5, 32.5, 156, { grade: OLD, zoom: [1.14, 1.22], shift: [-40, 70], old: true, face: () => 7 * 60 }],
+  ['tunnel86', 32.5, 36.25, 360, { grade: 'sepia(0.6) contrast(1.25) brightness(1.05)', zoom: [1.06, 1.06], map: brake(1.3, 0.9, 2.5), old: true, stop: 35 }],
+  ['hands', 36.25, 37.5, 45, { grade: OLD, zoom: [1.04, 1.1], old: true }],
+  ['young', 37.5, 42.5, 156, { grade: OLD, zoom: [1.03, 1.12], old: true }],
+  ['rider', 42.5, 46.25, 120, { grade: 'brightness(0.72) contrast(1.18) saturate(0.55)', zoom: [1.03, 1.1] }],
+  ['tunnel', 46.25, 56.25, 660, { grade: 'brightness(0.95) contrast(1.2) saturate(0.6)', zoom: [1.06, 1.06], map: brake(1.7, 1.2, 2.4), stop: 48.65 }],
+  ['board', 56.25, 61.25, 155, { grade: 'brightness(0.7) contrast(1.15) saturate(0.85)', zoom: [1.02, 1.1] }],
+  ['nyc', 61.25, 62.5, 45, { grade: 'brightness(0.85) contrast(1.15) saturate(0.9)', zoom: [1.02, 1.12] }],
+  ['wagon', 62.5, 63.75, 45, { grade: 'brightness(0.9) contrast(1.15) saturate(0.8)', zoom: [1.02, 1.12] }],
+  ['tunnel', 63.75, 65, 660, { grade: 'brightness(1) contrast(1.2) saturate(0.7)', zoom: [1.04, 1.16], map: u => 9 + 3 * u }],
+  ['hall', 65, 67.5, 81, { grade: 'brightness(0.82) contrast(1.1) saturate(1.1)', zoom: [1.02, 1.08] }],
+  ['clock', 67.5, 71.25, 120, { grade: 'brightness(0.85) contrast(1.1) saturate(1.1)', zoom: [1.12, 1.22], shift: [0, 50], face: () => 6 * 60 + 56 }],
+  ['couple', 71.25, 76.25, 156, { grade: 'brightness(0.92) contrast(1.06) saturate(1.15)', zoom: [1.02, 1.1] }],
+  ['sunset', 76.25, 80, 120, { grade: 'brightness(0.95) contrast(1.05) saturate(1.1)', zoom: [1.02, 1.08] }],
+  ['bokeh2', 80, 87.5, 240, { grade: 'blur(6px) brightness(0.3) saturate(1.1)', zoom: [1.04, 1.1] }],
+].map(([name, a, b, n, o]) => ({ name, a, b, n, ...o }));
+const CUTS = SHOTS.slice(1).map(s => s.a);
+const FRAMES = new Map();
+function frame(name, i) {
+  const key = `${name}/${i}`;
+  if (!FRAMES.has(key)) {
+    const im = new Image(); im.src = `footage/${name}/${String(i).padStart(4, '0')}.jpg`;
+    FRAMES.set(key, im.decode().then(() => im, () => null));
+    if (FRAMES.size > 48) FRAMES.delete(FRAMES.keys().next().value);
+  }
+  return FRAMES.get(key);
+}
+const GRAIN = (() => {
+  const g = document.createElement('canvas'); g.width = g.height = 512;
+  const x = g.getContext('2d'), d = x.createImageData(512, 512), r = rng(5);
+  for (let i = 0; i < d.data.length; i += 4) { const v = 128 + (r() - 0.5) * 255; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; }
+  x.putImageData(d, 0, 0); return g;
+})();
+/** The concourse clock's own face, repainted at the hour the story needs (footage.py follows it through the shot). */
+function clockFace(x, y, r, minutes) {
+  ctx.save(); ctx.translate(x, y);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r); g.addColorStop(0, '#fffef4'); g.addColorStop(0.8, '#fff8d8'); g.addColorStop(1, '#ffeeb0');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r * 0.99, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(120,84,30,0.6)'; ctx.font = `500 ${r * 0.24}px Georgia, "DejaVu Serif", serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 1; i <= 12; i++) { const a = i / 12 * Math.PI * 2; ctx.fillText(String(i), Math.sin(a) * r * 0.72, -Math.cos(a) * r * 0.72); }
+  for (let i = 0; i < 60; i++) { const a = i / 60 * Math.PI * 2; ctx.beginPath(); ctx.arc(Math.sin(a) * r * 0.9, -Math.cos(a) * r * 0.9, r * (i % 5 ? 0.012 : 0.022), 0, Math.PI * 2); ctx.fill(); }
+  const hand = (a, len, w) => {
+    ctx.save(); ctx.rotate(a); ctx.fillStyle = '#5c1c2c';
+    ctx.beginPath(); ctx.moveTo(-w, r * 0.12); ctx.lineTo(-w * 0.9, -len * 0.62); ctx.lineTo(-w * 2.1, -len * 0.74); ctx.lineTo(0, -len); ctx.lineTo(w * 2.1, -len * 0.74); ctx.lineTo(w * 0.9, -len * 0.62); ctx.lineTo(w, r * 0.12); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  };
+  hand((minutes / 720) * Math.PI * 2, r * 0.5, r * 0.035); hand((minutes / 60) * Math.PI * 2, r * 0.8, r * 0.026);
+  ctx.fillStyle = '#5c1c2c'; ctx.beginPath(); ctx.arc(0, 0, r * 0.06, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+async function picture(t) {
+  const s = SHOTS.find(s => t >= s.a && t < s.b) || SHOTS[SHOTS.length - 1], u = t - s.a;
+  const src = s.map ? s.map(u) : u;
+  const fi = clamp(Math.round(src * 30), 0, s.n - 1);
+  const im = await frame(s.name, fi + 1);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  if (!im) return s;
+  const k = lerp(s.zoom[0], s.zoom[1], u / (s.b - s.a));
+  // a hand on the camera, a jolt when the train stops, a weave in the gate of the old film
+  let dx = noise1(t * 0.7, 3) * 6, dy = noise1(t * 0.6, 9) * 4;
+  if (s.stop) { const j = Math.exp(-Math.max(0, t - s.stop) * 5) * (t > s.stop - 0.5 ? 1 : 0); dx += Math.sin(t * 70) * 14 * j; dy += Math.cos(t * 83) * 9 * j; }
+  if (s.old) { dx += noise1(t * 9, 4) * 2.5; dy += noise1(t * 11, 6) * 3.5; }
+  ctx.save();
+  if (s.shift) { dx += s.shift[0]; dy += s.shift[1]; }
+  ctx.translate(W / 2 + dx, H / 2 + dy); ctx.scale(k, k); ctx.translate(-W / 2, -H / 2);
+  ctx.filter = s.grade; ctx.drawImage(im, 0, 0, W, H);
+  if (s.face && TRACK[s.name]) { const [x, y, r] = TRACK[s.name][fi]; ctx.filter = `${s.grade} blur(${(r / 60).toFixed(2)}px)`; clockFace(x, y, r, s.face(u)); }
+  ctx.filter = 'none';
+  ctx.restore();
+  // grain, heavier on the memory
+  const r = rng(Math.round(t * 30) + 11);
+  ctx.save(); ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = s.old ? 0.34 : 0.12;
+  const ox = Math.floor(r() * 512), oy = Math.floor(r() * 512);
+  for (let x = -ox; x < W; x += 512) for (let y = -oy; y < H; y += 512) ctx.drawImage(GRAIN, x, y);
+  ctx.restore();
+  if (s.old) {   // light leaking in at the edge of the frame, and the year burnt into the corner
+    ctx.save(); ctx.globalCompositeOperation = 'screen';
+    const lx = W * (0.85 + 0.1 * noise1(t * 0.8, 2)), g = ctx.createRadialGradient(lx, 200, 0, lx, 200, 900);
+    g.addColorStop(0, `rgba(255,150,60,${0.3 + 0.1 * noise1(t * 3, 1)})`); g.addColorStop(1, 'rgba(255,150,60,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+  }
+  return s;
+}
+/** Darkness for the words to sit on: from the left, or rising from the bottom. */
+function scrim(side, a = 0.8) {
+  const g = side === 'left' ? ctx.createLinearGradient(0, 0, 1250, 0) : ctx.createLinearGradient(0, H, 0, H - 520);
+  g.addColorStop(0, `rgba(3,5,10,${a})`); g.addColorStop(0.55, `rgba(3,5,10,${a * 0.6})`); g.addColorStop(1, 'rgba(3,5,10,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+// ---------- the words ----------
+function shadowed(fn) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 26; ctx.shadowOffsetY = 2; fn(); ctx.restore(); }
+const say = (t, s, x, y, at, out, o) => shadowed(() => riseText(t, s, x, y, at, out, o));
+/** A line that lands hard: big, then exactly in place. */
+function slam(t, s, x, y, at, out, o = {}) {
+  if (t < at) return;
+  const k = expoOut(seg(t, at, at + 0.5)), a = seg(t, at, at + 0.1) * (out == null ? 1 : 1 - easeIn(seg(t, out, out + 0.4)));
+  if (a <= 0) return;
+  const z = lerp(1.5, 1, k), cx = o.align === 'center' ? x : x + measure(s, o.size, o.weight ?? 800) / 2;
+  shadowed(() => {
+    ctx.translate(cx, y - o.size * 0.35); ctx.scale(z, z); ctx.translate(-cx, -(y - o.size * 0.35));
+    ctx.filter = `blur(${(1 - k) * 8}px)`;
+    text(s, x, y, { weight: 800, ...o, alpha: a });
+  });
+}
+/** A number rolling from one value to another. */
+const roll = (t, at, dur, from, to) => Math.round(lerp(from, to, easeInOut(seg(t, at, at + dur))));
+
+// ---------- the readout that rides with him: the odds of being under the clock by seven ----------
+function odds(t) {
+  if (t < 48.65) return 94;
+  if (t < 59.4) return roll(t, 48.65, 1.6, 94, 9);
+  return roll(t, 59.4, 1.1, 9, 98);
+}
+const TOD = [[42.5, 391], [46.25, 397], [48.65, 398], [56.25, 400.4], [61.25, 402], [65, 416], [67.5, 416]];   // film time -> minutes past noon
+function readout(t) {
+  const a = life(t, 43.1, 65.1, 0.4);
+  if (a <= 0) return;
+  let m = TOD[0][1]; for (let i = 1; i < TOD.length; i++) if (t >= TOD[i - 1][0]) m = lerp(TOD[i - 1][1], TOD[i][1], seg(t, TOD[i - 1][0], TOD[i][0]));
+  const p = odds(t), col = p >= 80 ? C.ok : p >= 30 ? HELD : C.red, x = 140, y = 150;
+  const hit = Math.max(Math.exp(-Math.max(0, t - 48.65) * 3) * (t > 48.65 ? 1 : 0), Math.exp(-Math.max(0, t - 59.4) * 3) * (t > 59.4 ? 1 : 0));
+  ctx.save(); ctx.globalAlpha = a * 0.5; ctx.fillStyle = '#03050a'; rrect(x - 30, y - 24, 430, 232, 24); ctx.fill(); ctx.restore();
+  shadowed(() => {
+    ctx.globalAlpha *= a;
+    text(`${Math.floor(m / 60)}:${String(Math.floor(m % 60)).padStart(2, '0')} PM`, x, y + 16, { size: 30, weight: 700, mono: true, color: C.ink });
+    text('UNDER THE CLOCK BY 7:00', x, y + 56, { size: 17, weight: 700, color: ENG.label, spacing: 3, display: false });
+    text(`${p}%`, x, y + 150, { size: 92 + hit * 14, weight: 800, color: col });
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.fillStyle = 'rgba(255,255,255,0.16)'; rrect(x, y + 172, 360, 8, 4); ctx.fill();
+    ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 16; rrect(x, y + 172, 360 * p / 100, 8, 4); ctx.fill();
+  });
+}
+
+function overlays(t) {
+  // 1: every train is a question
+  if (t < 5) {
+    scrim('left', 0.75);
+    say(t, 'Every train', 140, 470, 0.7, 4.6, { size: 96, weight: 800 });
+    say(t, 'is a question.', 140, 578, 1.1, 4.6, { size: 96, weight: 800 });
+    slam(t, 'When?', 140, 720, 3.1, 4.6, { size: 120, color: C.ice });
+    // the board on the platform, unable to make up its mind
+    const a = life(t, 0.9, 4.8, 0.4), opts = [2, 7, 1, 4, 9, 3, 6], n = t < 3.1 ? opts[Math.floor(t / 0.16) % opts.length] : '?';
+    shadowed(() => {
+      ctx.globalAlpha *= a;
+      text('NEXT TRAIN', 1780, 190, { size: 20, weight: 700, color: ENG.label, spacing: 4, align: 'right', display: false });
+      text(`${n} min`, 1780, 270, { size: 76, weight: 800, color: t < 3.1 ? C.ink : C.ice, align: 'right', mono: true });
+    });
+  }
+  // 2: ask it a million times
+  if (t >= 5 && t < 13.75) {
+    scrim('left', 0.6);
+    galton(t, life(t, 5, 13.75, 0.4), { first: 5.3, spread: 5.5, step: 0.11, curve: [10.9, 12.3], win: 12.2, trails: 3, r: 7.5 });
+    const boom = seg(t, 12.3, 13.3);   // the moment it becomes a shape
+    if (boom > 0 && boom < 1) {
+      ctx.save(); ctx.strokeStyle = `rgba(255,216,154,${0.7 * (1 - boom)})`; ctx.lineWidth = 6 * (1 - boom) + 1;
+      ctx.beginPath(); ctx.ellipse(G.cx, G.base - 120, 380 * easeOut(boom) + 40, 240 * easeOut(boom) + 30, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+    }
+    say(t, 'Ask it', 140, 470, 5.5, 13.3, { size: 84, weight: 800 });
+    say(t, 'a million times,', 140, 566, 5.9, 13.3, { size: 84, weight: 800 });
+    slam(t, 'and the answer', 140, 690, 10.6, 13.3, { size: 84, color: WARM });
+    slam(t, 'has a shape.', 140, 786, 11.2, 13.3, { size: 84, color: WARM });
+  }
+  // 3: one city
+  if (t >= 13.75 && t < 16.25) {
+    scrim('left', 0.7);
+    slam(t, 'One city.', 140, 520, 13.9, 16.05, { size: 120 });
+    say(t, 'Thousands of trains.', 140, 620, 14.7, 16.05, { size: 60, weight: 700, color: C.ice });
+  }
+  if (t >= 16.25 && t < 22.5) {
+    ctx.fillStyle = 'rgba(3,5,10,0.35)'; ctx.fillRect(0, 0, W, H);
+    city(t, life(t, 16.25, 22.5, 0.3), { draw: [16.3, 18.1], pick: [20.5, 21.7], scrim: false });
+    scrim('left', 0.85);
+    say(t, 'Each with', 140, 470, 16.5, 19.1, { size: 84, weight: 800 });
+    say(t, 'its own curve.', 140, 566, 16.9, 19.1, { size: 84, weight: 800, color: C.ice });
+    say(t, 'WhichWay reads them all,', 140, 470, 19.4, 22.3, { size: 62, weight: 800 });
+    say(t, 'every 30 seconds,', 140, 546, 19.7, 22.3, { size: 62, weight: 800 });
+    slam(t, 'to answer for one.', 140, 650, 20.7, 22.3, { size: 72, color: WARM });
+  }
+  // 4: the man, and the promise
+  if (t >= 22.5 && t < 27.5) {
+    scrim('bottom', 0.85);
+    slam(t, 'One man.', W / 2, 850, 23, 27.1, { size: 104, align: 'center' });
+    slam(t, 'One promise.', W / 2, 950, 24.7, 27.1, { size: 72, align: 'center', color: WARM });
+  }
+  // 5: 1986
+  if (t >= 27.5 && t < 42.5) {
+    scrim('bottom', 0.8);
+    const stamp = t < 32.5 ? 'OCT 17 1986  7:00 PM' : t < 37.5 ? `OCT 17 1986  7:${String(roll(t, 32.5, 5, 2, 39)).padStart(2, '0')} PM` : 'OCT 17 1986  7:40 PM';
+    shadowed(() => text(stamp, 1780, 950, { size: 34, weight: 700, color: '#ff9b3d', align: 'right', mono: true, alpha: 0.9 }));
+    say(t, '1986. Under the clock, at seven.', 140, 880, 27.9, 32.2, { size: 72, weight: 800 });
+    say(t, 'Their first date.', 140, 954, 29.7, 32.2, { size: 50, weight: 700, color: WARM });
+    say(t, 'His train sat in a tunnel', 140, 880, 32.8, 37.2, { size: 72, weight: 800 });
+    slam(t, 'for forty minutes.', 140, 962, 34.9, 37.2, { size: 72, color: HELD });
+    slam(t, 'She waited.', 140, 870, 38, 42.1, { size: 110, color: WARM });
+    say(t, 'He promised her: never again.', 140, 954, 39.9, 42.1, { size: 54, weight: 700 });
+  }
+  // 6: forty years later
+  if (t >= 42.5 && t < 46.25) {
+    scrim('left', 0.7); scrim('bottom', 0.7);
+    slam(t, 'Forty years later.', 140, 870, 42.8, 46, { size: 96 });
+    say(t, 'Same clock. Seven o’clock.', 140, 950, 43.9, 46, { size: 52, weight: 700, color: C.ice });
+  }
+  // 7: the train stops, again
+  if (t >= 46.25 && t < 56.25) {
+    const stopped = seg(t, 48.65, 49.4);
+    ctx.fillStyle = `rgba(3,5,10,${0.5 * stopped + 0.12 * stopped * noise1(t * 14, 2)})`; ctx.fillRect(0, 0, W, H);   // the lights falter
+    if (stopped > 0) { const g = ctx.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 1100); g.addColorStop(0, 'rgba(255,60,40,0)'); g.addColorStop(1, `rgba(255,60,40,${0.22 * stopped * (0.7 + 0.3 * Math.sin(t * 5))})`); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
+    scrim('left', 0.75);
+    say(t, '6:38.', 140, 560, 46.6, 51, { size: 84, weight: 800 });
+    slam(t, 'The train stops.', 140, 660, 48.65, 51, { size: 84 });
+    slam(t, 'Again.', 140, 800, 49.5, 51, { size: 132, color: C.red });
+    const m2 = life(t, 51.25, 56.25, 0.5);
+    if (m2 > 0) {
+      ctx.save(); ctx.globalAlpha = m2;
+      ctx.fillStyle = 'rgba(3,5,10,0.45)'; rrect(930, 250, 920, 590, 28); ctx.fill();
+      holdCurve(t, { x: 990, y: 380, w: 800, h: 340 }, { at: 51.4, mu: 9, p90: 16, heldFor: [0.6, 1.9] });
+      ctx.restore();
+    }
+    say(t, 'How long this time?', 140, 560, 51.6, 56, { size: 66, weight: 800 });
+    slam(t, 'About 9 more minutes.', 140, 650, 53, 56, { size: 66, color: HELD });
+    say(t, 'Learned from every hold on this stretch.', 144, 720, 54, 56, { size: 28, weight: 500, color: C.dim, display: false });
+  }
+  // 8: the way across the platform
+  if (t >= 56.25 && t < 61.25) {
+    scrim('left', 0.8);
+    const m3 = life(t, 56.25, 61.25, 0.4);
+    ctx.save(); ctx.globalAlpha = m3;
+    ctx.fillStyle = 'rgba(3,5,10,0.55)'; rrect(930, 250, 920, 590, 28); ctx.fill();
+    routeOdds(t, { x: 990, y: 420, w: 800, h: 320 }, { at: 56.35, from: mins(6, 45), to: mins(7, 15), deadline: mins(7, 0), deadlineLabel: 'under the clock', pickAt: 59.4,
+      routes: [{ label: 'Stay on the 6', mu: mins(7, 4), sd: 3, color: HELD_C, bullet: '6' }, { label: 'The 4, across the platform', mu: mins(6, 54), sd: 3, color: C.ok, bullet: '4' }] });
+    ctx.restore();
+    say(t, 'Stay: 9% by seven.', 140, 560, 56.6, 61, { size: 66, weight: 800, color: HELD });
+    slam(t, 'Cross the platform:', 140, 650, 58, 61, { size: 66, color: C.ok });
+    slam(t, '98%.', 140, 790, 59.4, 61, { size: 150, color: C.ok });
+  }
+  // 9: the run, the window closing in
+  if (t >= 61.25 && t < 65) {
+    scrim('bottom', 0.9);
+    const a = life(t, 61.25, 65, 0.3);
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(3,5,10,0.55)'; rrect(480, 540, 960, 400, 28); ctx.fill();
+    arrivalWindow(t, { x: 560, y: 690, w: 800, h: 220 }, { at: 61.2, from: mins(6, 45), to: mins(7, 10), center: mins(6, 56), lo: mins(6, 51), hi: mins(7, 2), deadline: mins(7, 0), deadlineLabel: 'under the clock', color: C.ok, tighten: [61.5, 64.6] });
+    ctx.restore();
+  }
+  // 10: tonight
+  if (t >= 65 && t < 71.25) {
+    scrim('bottom', 0.85);
+    slam(t, '6:56.', 140, 930, 65.1, 67.2, { size: 150, color: C.ok });
+    say(t, 'Tonight, he is the one waiting.', 140, 930, 67.8, 70.9, { size: 72, weight: 800 });
+  }
+  if (t >= 71.25 && t < 76.25) {
+    scrim('bottom', 0.8);
+    shadowed(() => riseText(t, 'He kept his promise.', W / 2, 880, 72, 75.9, { size: 108, weight: 800, align: 'center', color: WARM, blur: true }));
+  }
+  if (t >= 76.25 && t < 80) {
+    scrim('bottom', 0.75);
+    say(t, 'All that math,', W / 2, 850, 76.6, 79.7, { size: 64, weight: 700, align: 'center' });
+    say(t, 'for the minutes that matter.', W / 2, 930, 77.2, 79.7, { size: 64, weight: 800, align: 'center', color: WARM });
+  }
+  readout(t);
+}
+
+/** The cuts: a blink of light on each, and the long white bloom into the memory and back out of it. */
+function flashes(t) {
+  let a = 0;
+  CUTS.forEach(c => { if (t >= c && t < c + 0.14) a = Math.max(a, 0.2 * (1 - (t - c) / 0.14)); });
+  [27.5, 42.5].forEach(c => { a = Math.max(a, t < c ? easeIn(seg(t, c - 0.35, c)) : 1 - easeOut(seg(t, c, c + 0.9))); });
+  a = Math.max(a, 0.5 * (1 - seg(t, 12.3, 12.7)) * (t >= 12.3 ? 1 : 0), 0.4 * (1 - seg(t, 59.4, 59.8)) * (t >= 59.4 ? 1 : 0));
+  if (a > 0) { ctx.fillStyle = `rgba(255,244,224,${a})`; ctx.fillRect(0, 0, W, H); }
+}
+
+async function render(t) {
+  ctx.save(); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  await picture(t);
+  overlays(t);
+  if (t >= END - 0.6) endCardData(t, END, 'Know before it matters.', 'COMING SOON FOR IPHONE');
+  flashes(t);
+  vignette(0.55);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, 70); ctx.fillRect(0, H - 70, W, 70);   // the cinema's bars
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>
