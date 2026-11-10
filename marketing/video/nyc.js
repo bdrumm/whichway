@@ -387,7 +387,7 @@ function subwayCar(x, y, len, { era = 'steel', lit = 1, door = 0, riders = 9, bu
   for (let i = 0; i < doors.length - 1; i++) { const a = x + len * doors[i] + len * 0.055, b = x + len * doors[i + 1] - len * 0.055, pw = (b - a - 8) / 2; pane(a, pw); pane(a + pw + 8, pw); }
   pane(x + len * 0.02, len * 0.05); pane(x + len * 0.93, len * 0.05);
   ctx.restore();
-  if (bullet) { const bx = x + len * 0.26, by = top + h * 0.13; ctx.fillStyle = L[bullet] || '#333'; ctx.beginPath(); ctx.arc(bx, by, h * 0.06, 0, Math.PI * 2); ctx.fill(); text(bullet, bx, by + 1, { size: h * 0.085, weight: 800, color: '#fff', align: 'center', base: 'middle', display: false }); }
+  if (bullet) { const bx = x + len * 0.26, by = top + h * 0.13; ctx.fillStyle = L[bullet] || '#333'; ctx.beginPath(); ctx.arc(bx, by, h * 0.06, 0, Math.PI * 2); ctx.fill(); text(bullet, bx, by + 1, { size: h * 0.085, weight: 800, color: 'NQR'.includes(bullet) ? '#111' : '#fff', align: 'center', base: 'middle', display: false }); }
   if (lit > 0.2) { const lg = ctx.createLinearGradient(0, y, 0, y + h * 0.5); lg.addColorStop(0, glowC + 0.18 * lit + ')'); lg.addColorStop(1, glowC + '0)'); ctx.fillStyle = lg; ctx.fillRect(x, y + h * 0.14, len, h * 0.4); }
 }
 /** The tunnel going by behind the train: ribs, lamps that smear with speed, cable runs, the track bed. `pos` is how
@@ -524,4 +524,47 @@ function islandPlatform(t, { left = {}, right = {}, between = null } = {}) {
     const [lx, ly] = px3(0, -330, z + 0.3), lw = 260 / (z + 0.3); ctx.fillStyle = 'rgba(225,238,255,0.95)'; ctx.fillRect(lx - lw / 2, ly, lw, 7 / (z + 0.3)); glowAt(lx, ly, 320 / (z + 0.3), '200,220,255', 0.3);
     const [bx0, by0] = px3(-640, -340, z), [bx1] = px3(640, -340, z); ctx.fillStyle = '#0a0b16'; ctx.fillRect(bx0, by0, bx1 - bx0, 16 / z);
   }
+}
+
+// ---------- a train braking, held, and the station it stops in ----------
+const stride = (x, h, s = 1) => (x / (0.84 * h * s)) * Math.PI * 2;   // the walk keeps step with the ground covered
+/** Car lights that have lost their nerve. */
+const flicker = (t, seed = 2) => (noise1(t * 11, seed) > -0.1 ? 1 : 0.35) * (0.86 + 0.14 * noise1(t * 31, seed + 1));
+/** A train that runs at `v0` px/s from t0, brakes from b0 and stands still at b1: where it is, its speed, how hard it brakes. */
+function ride(t, t0, b0, b1, v0) {
+  if (t < b0) return { pos: v0 * (t - t0), v: v0, brake: 0 };
+  const T = b1 - b0, d = Math.min(t, b1) - b0;
+  return { pos: v0 * (b0 - t0) + v0 * (d - d * d / (2 * T)), v: v0 * (1 - d / T), brake: Math.sin(Math.PI * d / T) };
+}
+/** The lurch of the frame as it stops. */
+const jolt = (t, at) => (t > at ? 18 * Math.exp(-(t - at) * 5) * Math.cos((t - at) * 17) : 0);
+/** Three cars filling the frame, sparks at the wheels while they brake, the lights dimmed to `o.dim` once stopped. */
+function train(t, r, v0, y, o, stopAt) {
+  const lit = stopAt != null && t > stopAt ? o.dim * flicker(t) : 1;
+  [-760, 250, 1260].forEach((x, i) => subwayCar(x, y, 1000, { ...o, lit, seed: i + 1 }));
+  if (r.brake > 0.02) [-620, -520, 0, 100, 390, 490, 1010, 1110, 1400, 1500].forEach(x => sparks(t + x, x + 2, y + 86, r.brake * (0.5 + 0.5 * hash(x + Math.floor(t * 20)))));
+}
+/** A local station going by behind the train: tile, a band of mosaic, the name, columns, people waiting. `blur` (px) smears it. */
+function stationWall(x0, name, blur = 0, len = 2700, y = 770) {
+  const n = blur > 10 ? 14 : 1;
+  for (let i = 0; i < n; i++) {
+    ctx.save(); ctx.globalAlpha *= 1 / (i + 1); ctx.translate(i * blur / n, 0);
+    const g = ctx.createLinearGradient(0, 150, 0, y + 20); g.addColorStop(0, '#9fa598'); g.addColorStop(0.25, '#e3e6d8'); g.addColorStop(1, '#8b9186'); ctx.fillStyle = g; ctx.fillRect(x0, 150, len, y - 130);
+    ctx.fillStyle = '#1f5e4c'; ctx.fillRect(x0, 236, len, 30); ctx.fillStyle = '#d7b45a'; ctx.fillRect(x0, 232, len, 4); ctx.fillRect(x0, 266, len, 4);
+    ctx.fillStyle = '#4a4e52'; ctx.fillRect(x0, y - 24, len, 64); ctx.fillStyle = NY.taxi; ctx.fillRect(x0, y - 24, len, 7);
+    for (let x = x0 + 112; x < x0 + len - 300; x += 660) {
+      ctx.fillStyle = '#10244a'; ctx.beginPath(); ctx.roundRect(x, 300, 256, 92, 6); ctx.fill(); ctx.strokeStyle = '#d7b45a'; ctx.lineWidth = 4; ctx.stroke();
+      text(name, x + 128, 348, { size: 44, weight: 700, color: '#fff', align: 'center', base: 'middle', display: false });
+      if (blur < 60) [90, 400, 470].forEach((dx, j) => figure(x + dx, y - 22, 170 + j * 8, { coat: '#22263a', legs: '#151726', skin: '#22263a', dir: j % 2 ? 1 : -1, hat: j === 1 ? '#22263a' : false }));
+    }
+    for (let x = x0 + 60; x < x0 + len; x += 330) { ctx.fillStyle = '#143a2c'; ctx.fillRect(x, 150, 30, y - 130); ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(x, 150, 7, y - 130); }
+    ctx.restore();
+  }
+}
+/** A sign hung over the platform: a line's bullet and a word. */
+function hangSign(x, y, b, s, color, a = 1) {
+  ctx.save(); ctx.globalAlpha *= a;
+  ctx.fillStyle = '#0a0b12'; ctx.fillRect(x - 3, y - 80, 6, 80); ctx.beginPath(); ctx.roundRect(x - 150, y, 300, 76, 8); ctx.fill();
+  bullet(x - 106, y + 38, 25, b); text(s, x - 66, y + 39, { size: 28, weight: 700, color, base: 'middle', display: false });
+  ctx.restore();
 }

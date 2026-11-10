@@ -250,8 +250,8 @@ function netAt(l, f) {
   return [lerp(l.P[i - 1][0], l.P[i][0], k), lerp(l.P[i - 1][1], l.P[i][1], k)];
 }
 /** The whole network breathing behind the logo: lines, trains moving, and a slow scan of the data the model reads
- *  (stringlines fading through, a pulse along every line). */
-function dataField(t, a) {
+ *  (stringlines fading through, a pulse along every line). `well` false leaves out the dark centre the logo sits in. */
+function dataField(t, a, well = true) {
   if (a <= 0) return;
   ctx.save(); ctx.globalAlpha *= a;
   NETWORK.forEach((l, i) => {
@@ -277,10 +277,11 @@ function dataField(t, a) {
     ctx.strokeStyle = k % 7 === 3 ? HELD_C : C.sky; ctx.lineWidth = 2; ctx.stroke(p);
   }
   ctx.restore();
-  // a dark well behind the tile so the logo reads
-  const w = ctx.createRadialGradient(W / 2, 560, 80, W / 2, 560, 700);
-  w.addColorStop(0, 'rgba(5,7,13,0.94)'); w.addColorStop(0.5, 'rgba(5,7,13,0.75)'); w.addColorStop(1, 'rgba(5,7,13,0)');
-  ctx.fillStyle = w; ctx.fillRect(0, 0, W, H);
+  if (well) {   // a dark well behind the tile so the logo reads
+    const w = ctx.createRadialGradient(W / 2, 560, 80, W / 2, 560, 700);
+    w.addColorStop(0, 'rgba(5,7,13,0.94)'); w.addColorStop(0.5, 'rgba(5,7,13,0.75)'); w.addColorStop(1, 'rgba(5,7,13,0)');
+    ctx.fillStyle = w; ctx.fillRect(0, 0, W, H);
+  }
   ctx.restore();
 }
 /** The end card over the living network. */

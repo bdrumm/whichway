@@ -115,6 +115,25 @@ ffmpeg -i sprint_silent.mp4 -i sprint.wav -c:v libx264 -preset slow -crf 23 -max
 node stills.mjs sprint.html stills 4 12.5 30     # half-size stills of any film, with page errors printed
 ```
 
+## Every Day at 3:30
+
+`threethirty.html` (67 s) is school pickup told by the one who is picked up. A six-year-old draws her mom in crayon:
+she comes at 3:30, every day, on the F train, which is never late. Then the paper is gone and we are under the city
+on the day the F is held: twenty-one minutes to the gate, the app says the hold will run fourteen more and that the Q
+across the platform still makes it, and she crosses. Back on the paper the drawing ends the way it always does. She
+never knew. `crayon.js` is the drawing kit: `page` (a sheet of paper and a camera over it), `mark` (one wax stroke that
+draws itself, skips on the paper's tooth, wanders and boils six times a second), `scribble` (the zigzag a child fills a
+shape with), and `write` (a ball-and-stick alphabet, no two letters the same size). The tunnel is `nyc.js`. The score
+is the `threethirty` spec (`Score.box`: a music box in D major that is cut off dead when the train stops, then the
+station clock and a heartbeat, the app's notification, the band as she crosses, and the music box again).
+
+```bash
+python3 scores.py threethirty threethirty.wav
+./render_parts.sh threethirty.html threethirty_silent.mp4 4
+ffmpeg -i threethirty_silent.mp4 -i threethirty.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
+  -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-every-day-at-3-30.mp4
+```
+
 ## Sound samples
 
 The logo sound has seven candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,

@@ -1,0 +1,307 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Every Day at 3:30</title>
+<style>html, body { margin: 0; background: #000; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script src="engine.js"></script>
+<script src="cine.js"></script>
+<script src="nyc.js"></script>
+<script src="crayon.js"></script>
+<script>
+// "Every Day at 3:30": school pickup, told by the one who is picked up. A six-year-old draws her mom in crayon: she
+// comes at 3:30, every day, on the F train, which is never late. Then the paper is gone and we are under the city on
+// the day the F is held: twenty-one minutes to the gate, the app says the hold will run fourteen more and that the Q
+// across the platform still makes it, and she crosses. Back on the paper the drawing ends the way it always does.
+// She never knew. 67 s, on an 80 bpm grid (a beat is 0.75 s, a bar 3 s; every scene starts on a bar).
+// The pages are drawn with crayon.js, the tunnel with nyc.js; the score is `threethirty`, a music box.
+const DURATION = 67, END = 60, B = 0.75;
+const K = CRAYON, GY = 850, DONE = -99;        // the crayons, the ground line of her pictures, "drawn before we looked"
+const PINK = '#f0468f', WARMINK = '#ffe6bd';   // her mom's coat, in the tunnel as on the paper
+const MOM = { coat: PINK, flare: 1, hair: { style: 'long', color: '#2a1612' }, legs: '#17131d', skin: '#e9b08c', bag: '#2a1c14' };
+const line1 = { size: 64, weight: 700, spacing: -1.2 };
+const STOP = 31.3;                             // when the F stands still
+
+// ---------- what she draws ----------
+function grass(at) {
+  const pts = []; for (let x = 70, i = 0; x <= 1850; x += 21, i++) pts.push([x, GY + (i % 2 ? 26 : -4)]);
+  mark(pts, K.green, 11, at, 1.1, { seed: 3, wob: 3 });
+}
+function sun(x, y, at, r = 72) {
+  mark(ovalPts(x, y, r), K.yellow, 13, at, 0.4, { seed: 5 });
+  scribble(ovalPoly(x, y, r - 6), K.yellow, at + 0.35, 0.45, { gap: 13, w: 14, seed: 6, press: 0.85 });
+  for (let i = 0; i < 9; i++) { const a = i * Math.PI * 2 / 9 + 0.2, far = r * (2.05 + 0.3 * (i % 2)); mark([[x + Math.cos(a) * r * 1.35, y + Math.sin(a) * r * 1.35], [x + Math.cos(a) * far, y + Math.sin(a) * far]], K.orange, 11, at + 0.8 + i * 0.06, 0.08, { seed: 7 + i }); }
+}
+/** The school: brick, two windows, a door, and a tower with the clock on it, at half past three. About 6 s of drawing. */
+function schoolhouse(x, at) {
+  const y = GY, X = x - 300, Y = y - 330, cy = Y - 118;
+  mark(rectPts(X, Y, 600, 330), K.brown, 13, at, 0.8, { seed: 11 });
+  mark([[x - 95, Y], [x - 95, Y - 230], [x + 95, Y - 230], [x + 95, Y + 4]], K.brown, 13, at + 0.8, 0.5, { seed: 12 });
+  mark([[x - 125, Y - 228], [x, Y - 318], [x + 125, Y - 228], [x - 128, Y - 226]], K.blue, 13, at + 1.3, 0.45, { seed: 13 });
+  scribble([[x - 110, Y - 234], [x, Y - 308], [x + 110, Y - 234]], K.blue, at + 1.7, 0.35, { angle: 0.3, gap: 12, w: 12, seed: 14 });
+  mark([[x, Y - 318], [x, Y - 420]], K.black, 9, at + 2.05, 0.15, { seed: 15 });
+  mark([[x, Y - 420], [x + 86, Y - 398], [x, Y - 372]], K.red, 10, at + 2.2, 0.2, { seed: 16 });
+  scribble([[x + 4, Y - 414], [x + 76, Y - 398], [x + 4, Y - 378]], K.red, at + 2.4, 0.15, { angle: 1.2, gap: 9, w: 9, seed: 17, press: 0.9 });
+  scribble(boxPoly(X + 8, Y + 8, 584, 314), K.red, at + 2.55, 1.25, { angle: -0.5, gap: 17, w: 15, seed: 18, press: 0.6 });
+  scribble(boxPoly(x - 48, y - 164, 96, 158), K.brown, at + 3.8, 0.3, { gap: 10, w: 12, angle: 1.35, seed: 19, press: 1 });
+  mark(rectPts(x - 55, y - 170, 110, 168), K.black, 10, at + 4.05, 0.3, { seed: 20 });
+  mark(ovalPts(x + 26, y - 84, 5), K.black, 8, at + 4.35, 0.05, { seed: 21, wob: 0.5 });
+  [x - 190, x + 190].forEach((c, i) => {
+    scribble(boxPoly(c - 52, Y + 62, 104, 104), K.yellow, at + 4.4 + i * 0.35, 0.18, { gap: 10, w: 12, angle: 0.2, seed: 22 + i, press: 1 });
+    mark(rectPts(c - 56, Y + 58, 112, 112), K.black, 9, at + 4.55 + i * 0.35, 0.14, { seed: 24 + i });
+    mark([[c, Y + 60], [c, Y + 168]], K.black, 7, at + 4.68 + i * 0.35, 0.04, { seed: 26 + i }); mark([[c - 54, Y + 114], [c + 54, Y + 114]], K.black, 7, at + 4.71 + i * 0.35, 0.04, { seed: 28 + i });
+  });
+  // the clock: half past three
+  mark(ovalPts(x, cy, 66), K.black, 11, at + 5.15, 0.4, { seed: 30 });
+  [0, 1, 2, 3].forEach(i => { const a = i * Math.PI / 2; mark([[x + Math.sin(a) * 50, cy - Math.cos(a) * 50], [x + Math.sin(a) * 58, cy - Math.cos(a) * 58]], K.black, 8, at + 5.5 + i * 0.04, 0.03, { seed: 31 + i, wob: 0.6 }); });
+  mark([[x, cy], [x + 1, cy + 46]], K.red, 9, at + 5.7, 0.12, { seed: 36, wob: 1 });                                         // the long hand, on the six
+  mark([[x, cy], [x + 30, cy + 9]], K.red, 11, at + 5.85, 0.1, { seed: 37, wob: 1 });                                       // the short one, between three and four
+}
+const smile = (x, y, r) => Array.from({ length: 7 }, (_, i) => { const a = (25 + 130 * i / 6) * Math.PI / 180; return [x + Math.cos(a) * r, y + Math.sin(a) * r]; });
+/** Herself: feet at (x, GY). `hand` is where the arm on the mom's side reaches. 1.3 s. */
+function kid(x, at, hand = [-78, -148]) {
+  const y = GY;
+  mark(ovalPts(x, y - 160, 30), K.black, 9, at, 0.25, { seed: 40 });
+  [-1, 1].forEach((s, i) => mark(ovalPts(x + s * 41, y - 150, 11, 17), K.brown, 10, at + 0.25 + i * 0.07, 0.07, { seed: 41 + i }));   // pigtails
+  mark([[x - 10, y - 167], [x - 9, y - 165]], K.black, 9, at + 0.4, 0.02, { wob: 0.4 }); mark([[x + 10, y - 167], [x + 11, y - 165]], K.black, 9, at + 0.43, 0.02, { wob: 0.4 });
+  mark(smile(x, y - 160, 15), K.red, 7, at + 0.46, 0.08, { seed: 43, wob: 0.8 });
+  mark([[x, y - 130], [x - 44, y - 52], [x + 44, y - 52], [x + 2, y - 132]], K.purple, 10, at + 0.55, 0.22, { seed: 44 });
+  scribble([[x, y - 122], [x - 37, y - 57], [x + 37, y - 57]], K.purple, at + 0.75, 0.22, { gap: 10, w: 11, angle: 0.9, seed: 45, press: 0.95 });
+  [-1, 1].forEach((s, i) => mark([[x + s * 14, y - 52], [x + s * 16, y - 2], [x + s * 32, y - 1]], K.black, 9, at + 0.97 + i * 0.07, 0.07, { seed: 46 + i }));
+  mark([[x + 16, y - 108], [x + 58, y - 78]], K.black, 9, at + 1.12, 0.06, { seed: 48 });
+  mark([[x - 16, y - 108], [x + hand[0], y + hand[1]]], K.black, 9, at + 1.2, 0.08, { seed: 49 });
+}
+/** Her mom: taller than the door, a pink coat, long hair. Feet at (x, GY), her hand out to the right. 2 s. */
+function mom(x, at) {
+  const y = GY;
+  mark(ovalPts(x, y - 292, 38), K.black, 10, at, 0.25, { seed: 50 });
+  mark(Array.from({ length: 9 }, (_, i) => { const a = (195 + 150 * i / 8) * Math.PI / 180; return [x + Math.cos(a) * 41, y - 292 + Math.sin(a) * 41]; }), K.brown, 14, at + 0.25, 0.12, { seed: 51 });
+  [-1, 1].forEach((s, i) => mark([[x + s * 38, y - 304], [x + s * 52, y - 270], [x + s * 47, y - 236], [x + s * 57, y - 204]], K.brown, 13, at + 0.37 + i * 0.1, 0.1, { seed: 52 + i }));
+  mark([[x - 13, y - 300], [x - 12, y - 298]], K.black, 10, at + 0.58, 0.02, { wob: 0.4 }); mark([[x + 13, y - 300], [x + 14, y - 298]], K.black, 10, at + 0.61, 0.02, { wob: 0.4 });
+  mark(smile(x, y - 292, 20), K.red, 8, at + 0.64, 0.09, { seed: 54, wob: 0.8 });
+  mark([[x - 28, y - 250], [x - 92, y - 78], [x + 92, y - 78], [x + 28, y - 252], [x - 31, y - 249]], K.pink, 12, at + 0.75, 0.35, { seed: 55 });
+  scribble([[x - 24, y - 244], [x - 82, y - 86], [x + 82, y - 86], [x + 24, y - 244]], K.pink, at + 1.05, 0.55, { gap: 13, w: 14, angle: -0.7, seed: 56, press: 0.9 });
+  [-1, 1].forEach((s, i) => mark([[x + s * 26, y - 78], [x + s * 28, y - 2], [x + s * 50, y - 1]], K.black, 10, at + 1.6 + i * 0.07, 0.07, { seed: 57 + i }));
+  mark([[x - 34, y - 222], [x - 86, y - 150]], K.black, 10, at + 1.76, 0.07, { seed: 59 });
+  mark([[x + 34, y - 222], [x + 100, y - 150]], K.black, 10, at + 1.86, 0.1, { seed: 60 });
+}
+function heart(x, y, s, at) {
+  const pts = Array.from({ length: 29 }, (_, i) => { const a = i / 28 * Math.PI * 2; return [x + 16 * Math.sin(a) ** 3 * s, y - (13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a)) * s]; });
+  mark(pts, K.red, 10, at, 0.4, { seed: 70 });
+  scribble(pts, K.red, at + 0.35, 0.35, { gap: 10, w: 11, angle: -0.8, seed: 71, press: 0.95 });
+}
+
+// ---------- page one: my mom ----------
+function sPage1(t) {
+  const pull = easeInOut(seg(t, 2.7, 4.7)), drift = seg(t, 4.7, 18.6);
+  page(t, { k: lerp(1.62, 1.0, pull) + 0.05 * drift, fx: lerp(590, 960, pull) - 20 * drift, fy: lerp(290, 540, pull) + 16 * drift, rot: -0.014 + 0.006 * t / 18 }, () => {
+    write('My mom', 150, 255, 66, K.blue, 0.45, { per: 0.2, seed: 2, rise: 0.02 });
+    write('by Nora, age 6', 165, 356, 28, K.purple, 1.75, { per: 0.075, seed: 3 });
+    grass(3.0); schoolhouse(1330, 3.25); sun(1735, 165, 9.3);
+    const x = write('My mom comes at 3:30.', 150, 1000, 42, K.black, 9.6, { per: 0.095, seed: 4, rise: 0.012 });
+    kid(900, 11.5); mom(720, 12.9); heart(862, 506, 2.3, 15.0);
+    write('Every day.', x + 24, 990, 42, K.red, 15.75, { per: 0.12, seed: 5, rise: 0.012 });
+  });
+}
+
+// ---------- page two: the F train ----------
+const SKY = 520, TRACK = 862;
+function tower(x, w, h, color, at, seed) {
+  mark(rectPts(x, SKY - h, w, h - 3), color, 11, at, 0.22, { seed });
+  scribble(boxPoly(x + 5, SKY - h + 5, w - 10, h - 10), color, at + 0.18, 0.2, { gap: 15, w: 12, seed: seed + 1, press: 0.4, angle: -0.6 + (seed % 3) * 0.6 });
+  const cols = Math.max(2, Math.round(w / 50)), rows = Math.max(2, Math.round(h / 64));
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) mark(rectPts(x + (c + 0.5) * w / cols - 8, SKY - h + (r + 0.5) * h / rows - 11, 16, 20), K.yellow, 9, at + 0.36 + (r * cols + c) * 0.012, 0.02, { seed: seed + r * 5 + c, wob: 0.8 });
+}
+/** The F as she sees it: a blue box on wheels with an orange F, and her mom at the window. Its left end at x = 150. */
+function ftrain(at) {
+  const X = 150, Y = TRACK - 202, mx = X + 322, my = Y + 60;
+  mark(rectPts(X, Y, 520, 150), K.black, 12, at, 0.6, { seed: 81 });
+  scribble(boxPoly(X + 6, Y + 6, 508, 138), K.sky, at + 0.5, 0.6, { gap: 16, w: 14, seed: 82, press: 0.55, angle: -0.35 });
+  [X + 110, X + 410].forEach((cx, i) => { mark(ovalPts(cx, TRACK - 27, 24), K.black, 11, at + 1.1 + i * 0.14, 0.12, { seed: 83 + i }); scribble(ovalPoly(cx, TRACK - 27, 19), K.black, at + 1.18 + i * 0.14, 0.08, { gap: 8, w: 9, seed: 85 + i, press: 1 }); });
+  [X + 160, X + 280, X + 400].forEach((w0, i) => { scribble(boxPoly(w0, Y + 22, 84, 70), K.yellow, at + 1.4 + i * 0.13, 0.1, { gap: 9, w: 11, seed: 87 + i, press: 1, angle: 0.15 }); mark(rectPts(w0 - 2, Y + 20, 88, 74), K.black, 9, at + 1.47 + i * 0.13, 0.08, { seed: 90 + i }); });
+  mark(ovalPts(X + 78, Y + 64, 42), K.orange, 10, at + 1.85, 0.16, { seed: 94 });
+  scribble(ovalPoly(X + 78, Y + 64, 38), K.orange, at + 1.98, 0.2, { gap: 9, w: 11, seed: 93, press: 1, angle: 0.6 });
+  write('F', X + 64, Y + 88, 23, K.black, at + 2.2, { per: 0.22, seed: 6, w: 8 });
+  // her mom, at the middle window
+  mark(ovalPts(mx, my - 6, 19), K.black, 7, at + 2.45, 0.14, { seed: 95, wob: 1 });
+  [-1, 1].forEach((s, i) => mark([[mx + s * 19, my - 14], [mx + s * 25, my + 16]], K.brown, 9, at + 2.59 + i * 0.05, 0.05, { seed: 96 + i, wob: 1 }));
+  mark(smile(mx, my - 6, 10), K.red, 6, at + 2.7, 0.05, { seed: 98, wob: 0.5 });
+  mark([[mx - 30, my + 31], [mx - 15, my + 17], [mx + 15, my + 17], [mx + 30, my + 31]], K.pink, 12, at + 2.76, 0.12, { seed: 99, wob: 1 });
+  // and who that is
+  write('mom', mx - 46, Y - 46, 24, K.purple, at + 2.95, { per: 0.1, seed: 10, w: 7 });
+  mark([[mx, Y - 34], [mx + 3, my - 34]], K.purple, 7, at + 3.3, 0.08, { seed: 100, wob: 1 }); mark([[mx - 9, my - 46], [mx + 3, my - 33], [mx + 14, my - 47]], K.purple, 7, at + 3.38, 0.06, { seed: 101, wob: 0.8 });
+}
+function drawPage2(t) {
+  let x = write('She takes the', 150, 172, 42, K.black, 18.45, { per: 0.085, seed: 7, rise: 0.01 });
+  x = write('F', x, 170, 42, K.orange, 19.5, { per: 0.2, seed: 8, w: 11 });
+  write('train.', x - 10, 168, 42, K.black, 19.7, { per: 0.085, seed: 9, rise: 0.01 });
+  mark([[60, SKY + 3], [1860, SKY - 3]], K.green, 12, 19.2, 0.6, { seed: 110, wob: 4 });
+  [[170, 120, 190, K.blue], [296, 100, 262, K.purple], [404, 150, 150, K.gray], [562, 104, 235, K.sky], [674, 140, 170, K.green], [822, 96, 255, K.blue], [926, 130, 140, K.orange], [1064, 110, 215, K.purple], [1182, 120, 160, K.gray]]
+    .forEach(([bx, bw, bh, col], i) => tower(bx, bw, bh, col, 19.8 + i * 0.2, 120 + i * 7));
+  sun(1770, 150, 21.3, 48);
+  // the school at the far end, small, and herself beside it
+  mark(rectPts(1500, SKY - 104, 190, 101), K.brown, 10, 21.6, 0.2, { seed: 200 });
+  scribble(boxPoly(1506, SKY - 98, 178, 92), K.red, 21.75, 0.2, { gap: 13, w: 12, seed: 201, press: 0.6 });
+  mark([[1568, SKY - 104], [1568, SKY - 180], [1622, SKY - 180], [1622, SKY - 104]], K.brown, 10, 21.95, 0.1, { seed: 202 });
+  mark([[1556, SKY - 180], [1595, SKY - 216], [1634, SKY - 180], [1556, SKY - 180]], K.blue, 10, 22.05, 0.1, { seed: 203 });
+  mark(ovalPts(1595, SKY - 143, 18), K.black, 7, 22.15, 0.08, { seed: 204, wob: 1 }); mark([[1595, SKY - 143], [1595, SKY - 131]], K.red, 6, 22.23, 0.02, { wob: 0.5 }); mark([[1595, SKY - 143], [1604, SKY - 140]], K.red, 6, 22.25, 0.02, { wob: 0.5 });
+  mark(ovalPts(1752, SKY - 62, 13), K.black, 7, 22.3, 0.06, { seed: 205, wob: 1 });
+  mark([[1752, SKY - 48], [1736, SKY - 16], [1768, SKY - 16], [1752, SKY - 48]], K.purple, 9, 22.36, 0.08, { seed: 206, wob: 1 });
+  mark([[1746, SKY - 16], [1745, SKY - 2]], K.black, 7, 22.44, 0.02, { wob: 0.5 }); mark([[1758, SKY - 16], [1759, SKY - 2]], K.black, 7, 22.46, 0.02, { wob: 0.5 });
+  write('me', 1728, SKY - 122, 24, K.purple, 22.5, { per: 0.1, seed: 11, w: 7 });
+  mark([[1752, SKY - 110], [1752, SKY - 84]], K.purple, 7, 22.72, 0.05, { seed: 207, wob: 1 });
+  // under the ground: the stairs, the track, the train
+  const st = [[1420, SKY + 2]]; for (let i = 0; i < 9; i++) { const [sx, sy] = st[st.length - 1]; st.push([sx + 24, sy], [sx + 24, sy + 37]); }
+  mark(st, K.black, 8, 22.8, 0.45, { seed: 210, wob: 1.5 });
+  mark([[60, TRACK], [1860, TRACK + 3]], K.black, 9, 23.2, 0.4, { seed: 211, wob: 3 });
+  for (let i = 0; i < 26; i++) mark([[96 + i * 70, TRACK + 8], [92 + i * 70, TRACK + 30]], K.brown, 8, 23.55 + i * 0.012, 0.02, { seed: 212 + i, wob: 1 });
+  const u = Math.max(0, onTwos(t) - 26.6), go = 205 * (u - 0.6 * (1 - Math.exp(-u / 0.6)));
+  wx.save(); wx.translate(go, 0);
+  ftrain(23.0);
+  if (u > 0.3) [0, 1, 2].forEach(i => { const yy = TRACK - 150 + i * 44, l = 40 + 50 * hash(BOIL * 3 + i); mark([[120 - l, yy], [128, yy]], K.gray, 8, 0, 0, { seed: 230 + i + BOIL, wob: 1.5 }); });   // it is going fast
+  wx.restore();
+  x = write('It is', 150, 1012, 42, K.black, 27.0, { per: 0.1, seed: 12, rise: 0.008 });
+  const x2 = write('never', x, 1010, 42, K.black, 27.45, { per: 0.1, seed: 13 });
+  write('late.', x2, 1008, 42, K.black, 28.0, { per: 0.1, seed: 14 });
+  mark([[x - 4, 1030], [x2 - 34, 1026]], K.red, 9, 28.65, 0.2, { seed: 240, wob: 2 });
+  mark([[x2 - 40, 1040], [x + 2, 1043]], K.red, 9, 28.9, 0.2, { seed: 241, wob: 2 });
+}
+function sPage2(t) {
+  const slide = 1 - easeOut(seg(t, 18, 18.5)), d = seg(t, 18.5, 30);
+  if (slide > 0) sPage1(t);   // the first sheet, still on the table as the next comes over it
+  page(t, { k: 1.0 + 0.05 * d, fx: 960 + 34 * d, fy: 540 + 22 * d, rot: 0.012 - 0.006 * d, dx: slide * (W + PAPER_M + 140) }, () => drawPage2(t));
+}
+
+// ---------- under the city, today ----------
+/** The F braking into 63 St and standing there with its doors open; she is in a doorway of the middle car. */
+function heldShot(t) {
+  const r = ride(t, 29.0, 30.0, STOP, 2700), end = ride(99, 29.0, 30.0, STOP, 2700).pos, rm = (r.v / 2700) * 3;
+  const door = easeInOut(seg(t, STOP + 0.5, STOP + 1.1)), push = easeInOut(seg(t, 32.7, 34.4)), u = t - 30;
+  const dx = 250 + 1000 * 0.38;   // that doorway
+  ctx.save(); ctx.translate(jolt(t, STOP) + noise1(t * 23, 1) * rm, noise1(t * 29, 2) * rm);
+  camera(lerp(1.04, 2.15, push) + 0.012 * u, lerp(960, dx - 150, push), lerp(560, 628, push), () => {
+    tunnel(t, r.pos, r.v, { y: 770 });
+    stationWall(-640 + end - r.pos, '63 St', r.v * 0.035, 3600);
+    signal(1830 + end - r.pos, 520, '255,50,40', 1);
+    train(t, r, 2700, 770, { era: 'steel', riders: 10, bullet: 'F', dim: 0.82, door }, STOP);
+    if (door > 0.04) {
+      const open = door * 85 * 0.48;
+      ctx.save(); ctx.beginPath(); ctx.rect(dx - open - 1, 770 - 340, open * 2 + 2, 340); ctx.clip();
+      figure(dx + 4, 768, 250, { ...MOM, dir: 1, arm: 'hold', breathe: t * 2.6, nod: 0.2 });
+      ctx.fillStyle = '#dcebff'; ctx.fillRect(dx + 4 + 30, 768 - 164, 9, 15); glowAt(dx + 38, 768 - 158, 60, '170,205,255', 0.5);   // her phone
+      ctx.restore();
+    }
+  });
+  ctx.restore();
+}
+function card(t, at, out, title, sub) {
+  const a = life(t, at, out, 0.4), cy = 96 - (1 - easeOut(seg(t, at, at + 0.5))) * 70;
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a; ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 40; ctx.fillStyle = 'rgba(16,22,44,0.95)'; rrect(510, cy, 900, 150, 34); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = C.cardLine; ctx.lineWidth = 2; rrect(510, cy, 900, 150, 34); ctx.stroke();
+  iconTile(588, cy + 75, 88, 1, { stem: 1, right: 1, left: 1, dot: 1 });
+  text(title, 656, cy + 66, { size: 38, weight: 700 });
+  text(sub, 656, cy + 110, { size: 27, weight: 500, color: C.ice, display: false });
+  ctx.restore();
+}
+function sHeld(t) {
+  heldShot(t);
+  scrim('bottom', 0.85);
+  say(t, 'Today.', 150, 940, 30.25, 31.35, { ...line1, size: 76 });
+  say(t, 'The F is held at 63 St.', 150, 940, 31.6, 33.2, { ...line1, size: 76 });
+  say(t, 'Twenty-one minutes to the gate.', 150, 950, 33.6, 38.6, { ...line1, size: 76 });
+  card(t, 36.4, 38.9, 'Your F is being held', 'About 14 more minutes. Cross to the Q: there by 3:26.');
+}
+function sData(t) {
+  const u = t - 39, F = NETWORK.find(l => l.n === 'F'), Q = NETWORK.find(l => l.n === 'Q');
+  ctx.fillStyle = '#04050d'; ctx.fillRect(0, 0, W, H);
+  camera(1.04 + 0.05 * u / 3, 1010, 540, () => {
+    dataField(t, 1, false);
+    for (let i = 0; i < 90; i++) {   // signals going off all along the lines
+      const l = NETWORK[i % NETWORK.length], per = 0.9 + hash(i * 3.1) * 1.4, ph = ((t + hash(i * 7.7) * per) % per) / per, [sx, sy] = netAt(l, hash(i * 1.9 + Math.floor((t + hash(i * 7.7) * per) / per) * 0.37));
+      ctx.strokeStyle = `rgba(190,215,255,${0.7 * (1 - ph)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 3 + ph * 26, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.save(); ctx.setLineDash([Q.len * easeInOut(seg(t, 40.2, 41.6)), Q.len * 2]); glowStroke(Q.path, L.Q, 9, 26, 0.95); ctx.restore();   // the other way lights up
+    const [hx, hy] = netAt(F, 0.3), beat = 0.6 + 0.4 * Math.sin(t * Math.PI * 2 / B);
+    glowAt(hx, hy, 120, '240,70,143', 0.8 * beat); ctx.fillStyle = PINK; ctx.beginPath(); ctx.arc(hx, hy, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(hx, hy, 19, 0, Math.PI * 2); ctx.stroke();
+    shadowed(() => text('HER TRAIN', hx + 36, hy + 7, { size: 22, weight: 700, color: C.ink, spacing: 3, display: false }));
+  });
+  scrim('left', 0.82);
+  say(t, '1.7 million signals a day.', 150, 470, 39.25, 41.75, line1);
+  slam(t, 'So one mom can be on time.', 150, 580, 40.3, 41.75, { size: 88, color: WARMINK, spacing: -2 });
+}
+function sCross(t) {
+  const u = t - 42, cross = seg(t, 42.25, 44.75), X = lerp(-600, 570, cross), z = 1.35;
+  camera(1.02 + 0.06 * u / 3, 960, 520, () => {
+    islandPlatform(t, { left: { lit: 0.55 * flicker(t, 9), door: 1, tint: '190,205,235', body: '#566070' }, right: { lit: 1, door: 1, tint: '255,222,164' }, between: () => {
+      const [fx, fy] = px3(X, 430, z), h = 560 / z;
+      standing(fx, fy, h, { ...MOM, dir: 1, walk: stride(X + 600, h * 2.0, 1), stride: 1, lean: 0.1, arm: 'pump', tails: 0.35 }, 0.2);
+    } });
+    hangSign(300, 340, 'F', 'Held', C.red); hangSign(1620, 340, 'Q', '34 St', C.ok);
+  });
+  scrim('bottom', 0.8);
+  say(t, 'Across the platform.', 150, 950, 42.25, 44.6, { ...line1, size: 76 });
+}
+function sQ(t) {
+  const u = t - 45, v = 3000, pos = v * u;
+  ctx.save(); ctx.translate(noise1(t * 23, 1) * 3, noise1(t * 29, 2) * 3);
+  camera(1.05 + 0.04 * u / 3, 960, 560, () => {
+    tunnel(t, pos, v, { y: 770, lamp: '255,214,150' });
+    if (t > 46.95) stationWall(W + 300 - (t - 46.95) * v, '34 St', v * 0.035, 6000);
+    [-760, 250, 1260].forEach((x, i) => subwayCar(x, 770, 1000, { era: 'steel', riders: 11, bullet: 'Q', lit: 1, seed: i + 4 }));
+  });
+  ctx.restore();
+  scrim('bottom', 0.85);
+  slam(t, 'Four minutes to spare.', 150, 960, 46.1, null, { size: 104, color: WARMINK, spacing: -3 });
+}
+/** The time, and the time that matters. */
+function hud(t) {
+  const a = Math.min(seg(t, 30.1, 30.4), 1 - seg(t, 47.9, 48));
+  if (a <= 0) return;
+  const m = t < 34.5 ? 9 : t < 42 ? 10 : t < 45 ? 11 : roll(t, 45.2, 2.0, 12, 22), safe = t >= 44.6;
+  ctx.save(); ctx.globalAlpha = a;
+  ctx.fillStyle = 'rgba(8,10,20,0.82)'; rrect(1500, 48, 362, 138, 26); ctx.fill(); ctx.strokeStyle = C.cardLine; ctx.lineWidth = 2; ctx.stroke();
+  text(`3:${String(m).padStart(2, '0')}`, 1528, 128, { size: 70, weight: 700, mono: true });
+  text('PM', 1752, 128, { size: 28, weight: 600, color: C.dim, display: false });
+  text('PICKUP AT 3:30', 1530, 164, { size: 20, weight: 700, color: safe ? C.ok : C.late, spacing: 3, display: false });
+  ctx.restore();
+}
+
+// ---------- page three: today ----------
+function sPage3(t) {
+  const d = seg(t, 48, 60);
+  page(t, { k: 1.0 + 0.045 * d, fx: 960 - 26 * d, fy: 540 - 4 * d, rot: 0.01 - 0.005 * d }, () => {
+    grass(DONE); schoolhouse(1330, DONE); sun(1735, 165, DONE); kid(900, DONE);
+    mom(720, 48.35); heart(862, 506, 2.3, 50.35);
+    write('Today my mom', 150, 192, 50, K.blue, 51.0, { per: 0.095, seed: 15, rise: 0.015 });
+    write('came at 3:30.', 150, 326, 50, K.blue, 52.15, { per: 0.095, seed: 16, rise: 0.015 });
+    write('Like every day.', 156, 436, 36, K.red, 53.5, { per: 0.09, seed: 17, rise: 0.01 });
+  });
+  text('She never knew.', 960, 1004, { size: 74, weight: 700, color: '#2a2522', align: 'center', spacing: -1.5, alpha: easeOut(seg(t, 55.5, 56.6)) });
+}
+
+// ---------- the cut ----------
+const SCENES = [[0, sPage1], [18, sPage2], [30, sHeld], [39, sData], [42, sCross], [45, sQ], [48, sPage3]];
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none'; ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  let scene = SCENES[0][1]; SCENES.forEach(([at, fn]) => { if (t >= at) scene = fn; });
+  ctx.save(); scene(t); ctx.restore();
+  hud(t);
+  const paper = t < 30 || t >= 48;
+  if (t >= 48 && t < 48.5) { ctx.fillStyle = `rgba(255,250,240,${0.7 * (1 - seg(t, 48, 48.5))})`; ctx.fillRect(0, 0, W, H); }   // out into the light
+  if (t >= END - 1.0) { const a = seg(t, END - 1.0, END + 0.1); ctx.fillStyle = `rgba(5,7,13,${a})`; ctx.fillRect(0, 0, W, H); endCardData(t, END, 'Every day at 3:30.', 'COMING SOON FOR IPHONE'); }
+  grain(t, paper && t < END - 0.5 ? 0.05 : 0.1);
+  vignette(paper && t < END - 0.5 ? 0.22 : 0.5);
+  blackFades(t, DURATION);
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

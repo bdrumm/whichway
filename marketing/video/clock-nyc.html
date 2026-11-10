@@ -28,8 +28,6 @@ const HIM86 = { coat: CAMEL, hair: { style: 'short', color: '#22150e' }, legs: '
 const HER = { coat: NY.red, flare: 1, hair: { style: 'bun', color: '#dfe1ea' }, legs: '#17131d', skin: '#efc5a4' };
 const HIM = { coat: CAMEL, hair: { style: 'short', color: '#d3d6df' }, hat: '#2b2334', legs: '#17131d', skin: '#e2b28e' };
 const HER_X = 1170, FEET = 890;
-const stride = (x, h, s = 1) => (x / (0.84 * h * s)) * Math.PI * 2;   // the walk keeps step with the ground covered
-const flicker = (t, seed = 2) => (noise1(t * 11, seed) > -0.1 ? 1 : 0.35) * (0.86 + 0.14 * noise1(t * 31, seed + 1));
 const line1 = { size: 76, weight: 700, spacing: -1.5 }, line2 = { size: 46, weight: 500, color: C.ice, display: false };
 
 /** 1986 is remembered on film: warm, flickering, scratched. */
@@ -73,17 +71,6 @@ function sHall86(t) {
 }
 /** A train ridden alongside: travelled distance, speed and how hard it is braking, for a run at v0 from t0 that
  *  brakes to a stand between b0 and b1. */
-function ride(t, t0, b0, b1, v0) {
-  if (t < b0) return { pos: v0 * (t - t0), v: v0, brake: 0 };
-  const T = b1 - b0, d = Math.min(t, b1) - b0;
-  return { pos: v0 * (b0 - t0) + v0 * (d - d * d / (2 * T)), v: v0 * (1 - d / T), brake: Math.sin(Math.PI * d / T) };
-}
-const jolt = (t, at) => (t > at ? 18 * Math.exp(-(t - at) * 5) * Math.cos((t - at) * 17) : 0);
-function train(t, r, v0, y, o, stopAt) {
-  const lit = stopAt != null && t > stopAt ? o.dim * flicker(t) : 1;
-  [-760, 250, 1260].forEach((x, i) => subwayCar(x, y, 1000, { ...o, lit, seed: i + 1 }));
-  if (r.brake > 0.02) [-620, -520, 0, 100, 390, 490, 1010, 1110, 1400, 1500].forEach(x => sparks(t + x, x + 2, y + 86, r.brake * (0.5 + 0.5 * hash(x + Math.floor(t * 20)))));
-}
 function sTunnel86(t) {
   const r = ride(t, 12.5, 13.3, 14.5, 2700), rm = (r.v / 2700) * 3;
   ctx.save(); ctx.translate(jolt(t, 14.5) + noise1(t * 23, 1) * rm, noise1(t * 29, 2) * rm);
@@ -238,23 +225,6 @@ function sStreet(t) {
   say(t, 'Tonight is forty years.', 150, 330, 40.4, 43.3, line1);
   say(t, "He can't run like he used to.", 150, 398, 41.9, 43.3, line2);
 }
-/** A local station going by behind the train: tile, a band of mosaic, the name, columns, people waiting. `blur` (px) smears it. */
-function stationWall(x0, name, blur = 0, len = 2700, y = 770) {
-  const n = blur > 10 ? 14 : 1;
-  for (let i = 0; i < n; i++) {
-    ctx.save(); ctx.globalAlpha *= 1 / (i + 1); ctx.translate(i * blur / n, 0);
-    const g = ctx.createLinearGradient(0, 150, 0, y + 20); g.addColorStop(0, '#9fa598'); g.addColorStop(0.25, '#e3e6d8'); g.addColorStop(1, '#8b9186'); ctx.fillStyle = g; ctx.fillRect(x0, 150, len, y - 130);
-    ctx.fillStyle = '#1f5e4c'; ctx.fillRect(x0, 236, len, 30); ctx.fillStyle = '#d7b45a'; ctx.fillRect(x0, 232, len, 4); ctx.fillRect(x0, 266, len, 4);
-    ctx.fillStyle = '#4a4e52'; ctx.fillRect(x0, y - 24, len, 64); ctx.fillStyle = NY.taxi; ctx.fillRect(x0, y - 24, len, 7);
-    for (let x = x0 + 112; x < x0 + len - 300; x += 660) {
-      ctx.fillStyle = '#10244a'; ctx.beginPath(); ctx.roundRect(x, 300, 256, 92, 6); ctx.fill(); ctx.strokeStyle = '#d7b45a'; ctx.lineWidth = 4; ctx.stroke();
-      text(name, x + 128, 348, { size: 44, weight: 700, color: '#fff', align: 'center', base: 'middle', display: false });
-      if (blur < 60) [90, 400, 470].forEach((dx, j) => figure(x + dx, y - 22, 170 + j * 8, { coat: '#22263a', legs: '#151726', skin: '#22263a', dir: j % 2 ? 1 : -1, hat: j === 1 ? '#22263a' : false }));
-    }
-    for (let x = x0 + 60; x < x0 + len; x += 330) { ctx.fillStyle = '#143a2c'; ctx.fillRect(x, 150, 30, y - 130); ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(x, 150, 7, y - 130); }
-    ctx.restore();
-  }
-}
 function sTunnel(t) {
   const r = ride(t, 43.75, 44.9, 46.15, 2700), end = ride(99, 43.75, 44.9, 46.15, 2700).pos, rm = (r.v / 2700) * 3;
   ctx.save(); ctx.translate(jolt(t, 46.15) + noise1(t * 23, 1) * rm, noise1(t * 29, 2) * rm);
@@ -316,12 +286,6 @@ function sAnswer(t) {
   say(t, 'Every train ahead, reporting in.', 150, 398, 50.2, 53.3, line2);
   say(t, 'HELD AHEAD · ABOUT', 152, 500, 51.2, 53.3, { size: 20, weight: 700, color: HELD, spacing: 4, display: false });
   if (t < 53.5) signalWords(t, '9 minutes', 146, 520, 150, 51.0, 1.9);
-}
-function hangSign(x, y, b, s, color, a = 1) {
-  ctx.save(); ctx.globalAlpha *= a;
-  ctx.fillStyle = '#0a0b12'; ctx.fillRect(x - 3, y - 80, 6, 80); ctx.beginPath(); ctx.roundRect(x - 150, y, 300, 76, 8); ctx.fill();
-  bullet(x - 106, y + 38, 25, b); text(s, x - 66, y + 39, { size: 28, weight: 700, color, base: 'middle', display: false });
-  ctx.restore();
 }
 function sPlatform(t) {
   const u = t - 53.75, cross = easeInOut(seg(t, 55.0, 58.4)), X = lerp(-590, 560, cross), z = 1.35;

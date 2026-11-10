@@ -191,6 +191,38 @@ SPECS['sprint'] = dict(
         crashes=[(3.2, 1.0), (9.6, 0.5), (12.8, 0.7), (17.6, 1.0), (22.4, 0.8), (28.8, 0.6)],
         horns=[11.2], blips=[2.4, 21.2], slams=[32.0]),
 )
+# Every Day at 3:30: a six-year-old's crayon drawing of her mom, so the score is a music box (Score.box) in D major at
+# 80 bpm, one bar a line of the tune, with a soft low note under each bar. It stops dead with the train: the chord runs
+# down like a brake, and under the city there is only the station clock, a heartbeat and a low chord, until the app
+# speaks (the notification, once). The city answers in glass notes, the band comes in as she crosses the platform and
+# the rail joints carry her downtown; then the music box again, as if nothing had happened, and the notification as
+# the logo
+_ = None
+_D, _AC, _BM, _G, _A = [38, 54, 57, 62, 66], [37, 52, 57, 61, 64], [35, 54, 59, 62, 66], [31, 55, 59, 62, 67], [33, 52, 57, 61, 64]
+SPECS['threethirty'] = dict(
+    dur=67, beat=0.75, bar=3.0, hit=60.0, bells=[], logo=62, logo_style='notify', riser=None,
+    chords=[_D, _AC, _BM, _G, _D, _AC, _BM, _G, _D, _AC] + [_BM, _BM, _G, _BM] + [_G, _A] + [_D, _AC, _BM, _G] + [_D] * 3,  # one a bar
+    hit_notes=SPECS['clock']['hit_notes'],
+    pad=[(0, 0.0), (3, 0.5), (18, 0.7), (29.95, 0.8), (30.0, 0.0), (31.3, 0.0), (33, 0.6), (39, 0.8), (42, 1.1), (45, 1.3), (47.95, 1.4),
+         (48, 0.8), (55.4, 0.8), (56, 0.5), (60, 1.0)],
+    arp=dict(start=42.0, sub=[(0, 2), (45, 4), (48, 1)],
+             vel=[(42, 0.7), (45, 0.9), (47.9, 1.1), (48, 0.4), (55.4, 0.4), (55.5, 0.0), (60, 0.0)], soft=True),
+    kick=(42.0, 0.6), hats=None, bass=(42.0, 0.9), mute=[(48, 60)],
+    box=dict(
+        bars={0: [78, _, 81, _, 86, _, 81, 78], 1: [76, _, 81, _, 85, _, 81, 76], 2: [74, _, 78, _, 83, _, 78, 74],
+              3: [74, _, 79, _, 83, 81, 79, 78], 4: [86, _, 81, 78, 81, _, 86, _], 5: [85, _, 81, 76, 81, _, 88, _],
+              6: [86, _, 83, 78, 83, _, 90, _], 7: [91, 90, 86, 83, 86, _, 81, _], 8: [78, _, 81, _, 86, _, 81, 78],
+              9: [76, _, 81, _, 85, 88, 85, 81],
+              16: [78, _, 81, _, 86, _, 81, 78], 17: [76, _, 81, _, 85, _, 81, 76], 18: [74, _, 78, _, 83, _, 78, 74],
+              19: [74, _, 79, _, 83, _, 86, _]},
+        gain=[(0, 0.9), (18, 1.0), (30, 1.0), (48, 1.0), (55.4, 1.0), (55.5, 0.7), (60, 0.6)],
+        cuts=[30.0]),  # where the tune is cut off mid-phrase
+    bends=[(30.0, 31.3)], blooms=[(31.3, 0.9), (36.0, 0.4), (42.0, 0.8), (45.0, 0.9), (48.0, 0.5)],
+    clock=[(31.5, 39.0, 0.75, 1.1)], pulse=[(33.0, 39.0)], notify=[36.4],
+    pings=[(39.0, 42.0, 0.3, 1.3)], reports=[(39.3, 0.1875, 6)],
+    swells=[(41.2, 42.0), (44.2, 45.0), (58.6, 60.0)], doors=[44.3], rides=[(45.0, 47.0, 48.0)],
+    gliss=[(17.75, 0.3, 0.35), (47.3, 0.7, 0.9)],
+)
 # the logo sounds on their own, for choosing between and for reuse: python3 scores.py logo-fork out.wav (see Score.logo)
 LOGOS = ('fork', 'rails', 'chime', 'swell', 'heart', 'clock', 'notify')
 for _style in LOGOS:
@@ -790,6 +822,36 @@ class Score:
             self.add(wet, at, (boom + clack) * np.minimum(1, tt / 0.002) * 0.3)
         return dry + ducked * duck[:, None] + self.reverb(wet + ducked * duck[:, None] * 0.25, 0.3)
 
+    def box(self):
+        """A music box: `box` is `bars` (bar number -> eight eighth-note slots, a MIDI note or None), a `gain` envelope
+        and `cuts`, the moments the tune is cut off dead. Each note is a comb's tooth: a pure tone with two quick
+        inharmonic partials; a low soft note sits under the first and third beats of every bar that has a tune."""
+        out = np.zeros((self.n, 2))
+        if 'box' not in self.s:
+            return out
+        b, bar, rng = self.s['box'], self.s['bar'], np.random.default_rng(33)
+        for k, slots in b['bars'].items():
+            c = self.chord(k * bar + 0.01)
+            for i, m in enumerate(slots):
+                at = k * bar + i * bar / 8
+                if i in (0, 4):
+                    low = self.mallet(hz(c[0] + 12 if i == 0 else c[2] - 12), 2.2, 2.2)
+                    self.add(out, at, low * 0.07)
+                if m is None:
+                    continue
+                f = hz(m)
+                t = np.arange(int(1.8 * SR)) / SR
+                note = np.sin(2 * np.pi * f * t) * np.exp(-t * 3.0) + 0.28 * np.sin(2 * np.pi * f * 3.01 * t) * np.exp(-t * 10)
+                note += 0.1 * np.sin(2 * np.pi * f * 5.4 * t) * np.exp(-t * 18)
+                note *= np.minimum(1, t / 0.002) * (0.078 if i % 2 == 0 else 0.06) * rng.uniform(0.85, 1.0)
+                pan = 0.5 + 0.3 * np.sin(k * 1.7 + i * 0.9)
+                self.add(out, at + rng.uniform(0, 0.006), note, (2 * (1 - pan), 2 * pan))
+        env = ramp(self.t, b['gain'])
+        for cut in b.get('cuts', []):
+            nxt = min([k * bar for k in b['bars'] if k * bar >= cut] + [self.s['dur']])
+            env = env * np.where((self.t >= cut) & (self.t < nxt), 0.0, 1.0) * np.clip((cut - self.t) / 0.03, 0, 1) ** (self.t < cut)
+        return out * env[:, None]
+
     def reverb(self, x, mix=0.35):
         n = self.n
         out = np.zeros_like(x)
@@ -816,7 +878,7 @@ class Score:
         return x * (1 - mix) + out * mix
 
     def render(self):
-        mixed = self.reverb(self.pad() + self.arp() + self.hit()) + self.drums() + self.bass() + self.riser()
+        mixed = self.reverb(self.pad() + self.arp() + self.hit() + self.box()) + self.drums() + self.bass() + self.riser()
         mixed += self.fx() * 0.6 + self.reverb(self.fx(), 0.6) * 0.5 + self.reverb(self.fx2(), 0.4) + self.techno()
         dur = self.s['dur']
         mixed *= ramp(self.t, [(0, 0), (0.3 if 'pad' not in self.s else 1.2, 1), (dur - 1.0, 1), (dur, 0)])[:, None]
