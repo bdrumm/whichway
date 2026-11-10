@@ -117,6 +117,9 @@ struct ReplayOutcome {
     var endedBy: String?
     var routeLabel = ""
     var events: [MotionEvent] = []
+    /// On the route's last train when the trace ran out: the trace stops where the phone ended the trip, so the walk-off
+    /// at the destination is often not in it (and the replay has no location fixes to end the trip by). Not a miss.
+    var onLastLegAtEnd = false
 }
 
 final class TripReplayTests: XCTestCase {
@@ -297,6 +300,7 @@ final class TripReplayTests: XCTestCase {
         let t = session.tracker
         out.legsRidden = t?.timeline.legsRidden ?? 0
         out.routeLegs = sel.legs.count
+        out.onLastLegAtEnd = t.map { $0.onTrain && $0.timeline.legsRidden == sel.legs.count - 1 } ?? false
         out.events = t?.timeline.events ?? []
         out.endedBy = t?.timeline.endedBy
         out.called = (0..<sel.legs.count).map { l in
@@ -309,7 +313,7 @@ final class TripReplayTests: XCTestCase {
     }
 
     private func short(_ o: ReplayOutcome) -> String {
-        "\(o.called.joined(separator: "→")) · \(o.legsRidden)/\(o.routeLegs) legs\(o.legsRidden < o.routeLegs ? " **short**" : "")" + (o.routeLabel.isEmpty ? "" : " · \(o.routeLabel)")
+        "\(o.called.joined(separator: "→")) · \(o.legsRidden)/\(o.routeLegs) legs\(o.legsRidden >= o.routeLegs ? "" : o.onLastLegAtEnd ? " (on the last train at trace end)" : " **short**")" + (o.routeLabel.isEmpty ? "" : " · \(o.routeLabel)")
     }
 
     private func recordedSummary(_ fx: ReplayFixture) -> String {
