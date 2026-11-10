@@ -66,5 +66,7 @@ pip install opencv-python-headless numpy
 python3 footage.py
 python3 scores.py clock-live clock-live.wav
 ./render_parts.sh clock-live.html clock-live_silent.mp4 6
-ffmpeg -i clock-live_silent.mp4 -i clock-live.wav -c:v copy -c:a aac -b:a 256k -shortest whichway-under-the-clock-live.mp4
+# the grain makes the lossless-ish render huge (about 300 MB), so the deliverable is encoded again
+ffmpeg -i clock-live_silent.mp4 -i clock-live.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
+  -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-under-the-clock-live.mp4
 ```
