@@ -20,6 +20,15 @@ data class EtaCalibration(
     val n: Int = 0,
     val all: List<CalBucket> = emptyList(),
     @SerialName("by_route") val byRoute: Map<String, List<CalBucket>> = emptyMap(),
+    /** Trips the feed only plays the timetable for (Predictor.isTimetableTrip); absent from models before Nov 2026. */
+    val timetable: TimetableCalibration? = null,
+)
+
+@Serializable
+data class TimetableCalibration(
+    val n: Int = 0,
+    val all: List<CalBucket> = emptyList(),
+    @SerialName("by_route") val byRoute: Map<String, List<CalBucket>> = emptyMap(),
 )
 
 @Serializable
@@ -86,6 +95,8 @@ data class PredictorTrain(
     @SerialName("effective_lateness_sec") val effectiveLatenessSec: Double? = null,
     @SerialName("sched_ts") val schedTs: Double? = null,
     val position: PredictorPosition? = null,
+    /** The feed is only playing the timetable for this trip (Predictor.isTimetableTrip). */
+    val timetable: Boolean = false,
 ) {
     /** [idx, ts] pairs with both present. */
     val points: List<Pair<Int, Double>>
@@ -93,8 +104,8 @@ data class PredictorTrain(
 
     companion object {
         fun of(tripId: String, route: String, nextIdx: Int?, points: List<Pair<Int, Double>>, latenessSec: Double?, effectiveLatenessSec: Double?,
-               schedTs: Double?, position: PredictorPosition?) =
-            PredictorTrain(tripId, route, nextIdx, points.map { listOf(it.first.toDouble(), it.second) }, latenessSec, effectiveLatenessSec, schedTs, position)
+               schedTs: Double?, position: PredictorPosition?, timetable: Boolean = false) =
+            PredictorTrain(tripId, route, nextIdx, points.map { listOf(it.first.toDouble(), it.second) }, latenessSec, effectiveLatenessSec, schedTs, position, timetable)
     }
 }
 
@@ -142,10 +153,21 @@ object Predictor {
         return if (h < 0) 0 else HORIZON_EDGES.size - 2
     }
 
-    fun calibrationAt(model: ClientModel?, route: String, horizon: Double): CalBucket {
+    const val TIMETABLE_GRID_SEC = 30.0
+    const val TIMETABLE_MIN_STOPS = 3
+
+    /** The feed is only playing the timetable for a trip: its next stop times all sit on the half-minute grid, three of
+     *  them (every one, two at least, when fewer remain); mirrors client_model.is_timetable_trip. */
+    fun isTimetableTrip(times: List<Double>): Boolean {
+        val ts = times.take(TIMETABLE_MIN_STOPS)
+        return ts.size >= 2 && ts.all { it % TIMETABLE_GRID_SEC == 0.0 }
+    }
+
+    fun calibrationAt(model: ClientModel?, route: String, horizon: Double, timetable: Boolean = false): CalBucket {
         val i = horizonIndex(horizon)
         val cal = model?.etaCalibration
-        val table = cal?.byRoute?.get(route) ?: cal?.all
+        val tt = cal?.timetable
+        val table = if (timetable && tt != null && tt.all.isNotEmpty()) (tt.byRoute[route] ?: tt.all) else (cal?.byRoute?.get(route) ?: cal?.all)
         if (table != null && i < table.size) return table[i]
         val (p10, p90) = priorSpread(max(0.0, horizon))
         return CalBucket(0, 0.0, p10, p90)
@@ -205,11 +227,13 @@ object Predictor {
         val nextIdx = train.nextIdx ?: first.first
         val lat = train.latenessSec
         val eff = train.effectiveLatenessSec ?: lat
-        val optimistic = if (eff != null && lat != null) max(0.0, eff - lat) else 0.0
-        val held = train.position?.holding == true || train.position?.stalled == true
+        // a timetable trip: its own calibration, no lateness carry, and its position (the timetable's too) holds nothing
+        val timetable = train.timetable
+        val optimistic = if (eff != null && lat != null && !timetable) max(0.0, eff - lat) else 0.0
+        val held = (train.position?.holding == true || train.position?.stalled == true) && !timetable
         var extra = 0.0
         if (held) {
-            val rem = remainingHold(model?.holdSurvival, train.position.sinceSec)
+            val rem = remainingHold(model?.holdSurvival, train.position?.sinceSec ?: 0.0)
             extra = when (scenario) { "hold_persists" -> rem.p90; "clears_now" -> 0.0; else -> rem.expected }
         }
         out.holdExtraSec = extra
@@ -219,7 +243,7 @@ object Predictor {
         val points = ArrayList<PredictedPoint>()
         for ((idx, feed) in pts) {
             val h = feed - now
-            val cal = calibrationAt(model, train.route, h)
+            val cal = calibrationAt(model, train.route, h, timetable)
             val etaF = feed + cal.bias + optimistic
             val varF = max(((cal.p90 - cal.p10) / 2.56).pow(2), 1.0)
             var eta = etaF
@@ -228,7 +252,7 @@ object Predictor {
             var source = "feed"
             val k = idx - nextIdx
             val schedNext = train.schedTs
-            if (schedNext != null && eff != null && k >= 1) {
+            if (schedNext != null && eff != null && k >= 1 && !timetable) {
                 var runSum = 0.0
                 var ok = true
                 for (s in nextIdx until idx) {
