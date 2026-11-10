@@ -12,7 +12,7 @@
 <script src="engine.js"></script>
 <script>
 // Sound samples to choose from, with names on screen (scores.py makes the sound). Open plainly for the logo sounds:
-// the end card six times, once per sound (logo-fork, -rails, -chime, -swell, -heart, -clock). Open with ?effects for the
+// the end card once per sound (logo-fork, -rails, -chime, -swell, -heart, -clock, -notify). Open with ?effects for the
 // score-born effects one at a time (scores.py effects).
 const EFFECTS = location.search.includes('effects') || window.SAMPLES === 'effects';
 const TAKE = 6.5;
@@ -23,6 +23,7 @@ const LOGOS = [
   ['D', 'Swell', 'No attack at all. One bowed note opens into a wide chord.'],
   ['E', 'Heartbeat', 'Two heartbeats, then one clear bell.'],
   ['F', 'Clock', 'The film\u2019s clock, on its beat: tick, tock, tick, and the hour strikes. The ticking goes on.'],
+  ['G', 'Notification', 'The app\u2019s own notification sound, landing where the dot does.'],
 ];
 const FX = [
   [0, 'Cut', 'A low struck octave with a glass glint, on a scene change.'],
@@ -35,7 +36,7 @@ const FX = [
   [27.5, 'Rain', 'High plucked drops in place of noise.'],
   [31.5, 'Doors', 'A two-note door chime.'],
   [34.5, 'Reunion', 'A run up the scale into the embrace.'],
-  [38.5, 'Notification', 'The logo sound made small, when the app speaks.'],
+  [38.5, 'Notification', 'A quick rise and a glass note, when the app speaks. Also the logo sound.'],
   [42],
 ];
 const DURATION = EFFECTS ? 42 : LOGOS.length * TAKE;

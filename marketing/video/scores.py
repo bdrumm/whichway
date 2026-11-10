@@ -120,13 +120,14 @@ SPECS['clock-live'] = dict(
     whoosh=[(26.6, 27.5), (41.7, 42.5), (58.4, 59.4), (63.6, 65.0)], brake=(47.4, 48.65),
 )
 # Under the Clock, illustrated cut: the story first, so the score carries it. No noise: every effect is made of notes
-# from the chord under it (see Score.fx2). The station clock is the film's beat (`ticktock`): it starts ticking in key
-# when the clock first appears, never leaves the 96 bpm grid, and when the band comes in it is the band's hi-hat, so
-# the music's beat is the clock's. Rain is high plucked drops, a train is rail joints on the root and brakes as the
-# chord running down like a record stopping, the city talking is a shower of glass notes, the trains ahead answer up
-# a scale, the doors chime, and the film ends on the clock striking as the logo lands (Score.logo, style `clock`)
+# from the chord under it (see Score.fx2), and each scene gets the ones that belong to it. Rain is high plucked drops;
+# the station clock ticks in key wherever the clock or the wait is the scene, always on the 96 bpm grid, and stays on
+# quietly as the band's hi-hat so the music keeps the clock's beat (`ticktock`); a train is rail joints on the root and
+# brakes as the chord running down like a record stopping; the stopped train is a heartbeat; the city talking is a
+# shower of glass notes and the trains ahead answer up a scale; the doors chime. The app's notification sounds once
+# when it speaks, and the same sound is the logo sound that ends the film (Score.logo, style `notify`)
 SPECS['clock-nyc'] = dict(
-    dur=90, beat=0.625, bar=2.5, hit=82.7, bells=[], logo=62, logo_style='clock', riser=None,
+    dur=90, beat=0.625, bar=2.5, hit=82.7, bells=[], logo=62, logo_style='notify', riser=None,
     chords=SPECS['clock']['chords'], hit_notes=SPECS['clock']['hit_notes'],
     pad=[(0, 0.5), (5, 0.7), (12.5, 0.5), (15.6, 0.3), (20, 0.45), (22.5, 0.7), (27.2, 1.0), (30, 0.95), (36.4, 1.1), (40, 0.55),
          (43.75, 0.4), (46.9, 0.3), (48.75, 0.5), (53.75, 0.6), (56.9, 0.95), (62.5, 0.6), (68.75, 0.75), (73.2, 1.35), (79, 1.1),
@@ -140,13 +141,12 @@ SPECS['clock-nyc'] = dict(
     kick=(30, 0.8), hats=None, bass=(30, 0.9),
     # the band stops with the train, returns as he crosses, holds its breath while he waits; it comes back on the beat
     mute=[(40, 56.87), (62.5, 73.12)],
-    # the clock: every tick on the grid, a tick and a tock per beat (sub 1) or per half beat (sub 2). Alone in the hall
-    # and in the stopped trains, under the rail joints while they run, and the hi-hat whenever the band plays
+    # the clock: every tick on the grid, a tick and a tock per beat (sub 1) or per half beat (sub 2). Up front in the
+    # hall and in the stopped trains, silent in the tunnels and the street, and a soft hi-hat whenever the band plays
     ticktock=dict(
-        gain=[(4.9, 0), (5, 1.0), (12.45, 1.0), (12.5, 0.5), (14.5, 0.5), (14.6, 0.8), (15.6, 0.9), (15.625, 1.2), (22.4, 1.2),
-              (22.5, 0.9), (25, 0.6), (28.75, 0.6), (30, 2.2), (39.9, 2.2), (40, 0.9), (43.7, 0.9), (43.75, 0.5), (46.1, 0.5),
-              (46.2, 0.9), (46.875, 1.4), (53.75, 1.3), (56.875, 2.2), (58.7, 2.2), (58.75, 1.6), (62.4, 1.6), (62.5, 1.0),
-              (70, 1.0), (72.4, 0.6), (72.5, 0), (73.1, 0), (73.125, 2.2), (82.6, 1.8)],
+        gain=[(4.9, 0), (5, 1.0), (12.45, 1.0), (12.5, 0), (14.6, 0), (15.6, 0.9), (15.625, 1.2), (22.4, 1.2), (22.5, 0.9),
+              (25, 0.6), (28.75, 0.6), (30, 1.0), (39.9, 1.0), (40, 0), (46.2, 0), (46.875, 1.0), (48.75, 0.7), (53.75, 0.6),
+              (56.875, 1.0), (62.4, 1.0), (62.5, 1.0), (70, 1.0), (72.4, 0.6), (72.5, 0), (73.1, 0), (73.125, 1.0), (82.6, 0.9)],
         sub=[(5, 1), (8.75, 2), (12.5, 1), (22.5, 2), (25, 1), (28.75, 2), (40, 1), (53.75, 2), (62.5, 1), (73.125, 2)]),
     blooms=[(5, 0.6), (12.5, 0.8), (15.625, 0.9), (22.5, 0.8), (27.1875, 1.0), (30, 1.1), (36.40625, 1.0), (40, 0.6), (43.75, 0.7),
             (46.875, 1.1), (52.9, 0.6), (56.875, 1.0), (58.75, 0.8), (62.5, 0.8), (68.75, 0.5), (73.125, 1.2), (76.25, 0.5)],
@@ -159,7 +159,7 @@ SPECS['clock-nyc'] = dict(
     notify=[54.6875],
 )
 # the logo sounds on their own, for choosing between and for reuse: python3 scores.py logo-fork out.wav (see Score.logo)
-LOGOS = ('fork', 'rails', 'chime', 'swell', 'heart', 'clock')
+LOGOS = ('fork', 'rails', 'chime', 'swell', 'heart', 'clock', 'notify')
 for _style in LOGOS:
     SPECS['logo-' + _style] = dict(dur=6.5, beat=0.625, bar=2.5, hit=0.3, logo=62, logo_style=_style, chords=SPECS['clock']['chords'])
 # and the score-born effects one at a time (sounds.html names them): python3 scores.py effects out.wav
@@ -377,7 +377,7 @@ class Score:
 
     def logo(self):
         """The WhichWay logo sound, timed to the icon drawing itself (stem 0.4 s, fork 1.0 s, dot 2.0 s, name 2.8 s
-        after `hit`). `logo` is the root note; `logo_style` picks one of six:
+        after `hit`). `logo` is the root note; `logo_style` picks one of seven:
         fork   the mark, heard: one warm note, which splits (the way not taken falls a third to the left and fades,
                the way taken bends up a fifth to the right) and lands on a glass note where the dot is
         rails  a train over the joints: two soft double knocks, then a plucked chord
@@ -385,7 +385,9 @@ class Score:
         swell  no attack at all: one bowed note opens into a wide chord, a few sparks at the dot
         heart  two heartbeats, then one clear bell
         clock  the film's clock (the `ticktock` of Score.fx2, same notes, same beat): tick as the stem draws, tock as
-               it forks, a last tick, and the hour strikes where the dot lands; the ticking goes on under the name"""
+               it forks, a last tick, and the hour strikes where the dot lands; the ticking goes on under the name
+        notify the app's own notification (the `notify` of Score.fx2, the same notes): a quick rise of a fifth and a
+               glass note, landing where the dot does. What the phone plays is what the logo plays"""
         out = np.zeros((self.n, 2))
         root, hit = self.s['logo'], self.s['hit']
         left = self.s['dur'] - hit
@@ -475,6 +477,11 @@ class Score:
                 k += 1
             sub(2.0)
             opens()
+        elif style == 'notify':
+            self.add(out, hit + 2.0 - 0.22, self.glide(hz(root + 12), hz(root + 19), 0.7, 0.14, 4.5) * 0.078, (0.8, 1.2))
+            self.add(out, hit + 2.0, self.bell(hz(root + 28), left - 2.0, 1.0) * 0.056, (0.9, 1.1))
+            sub(2.0, 0.035)
+            opens()
         return out
 
     PENT = (62, 64, 66, 69, 71)  # D major pentatonic: sits over every chord these films use in D
@@ -486,7 +493,7 @@ class Score:
         root, slowing between b0 and b1), `clock` (a, b, interval, gain: tick and tock on two chord notes), `pulse`
         (a, b: a heartbeat on the root), `pings` (a, b, d0, d1: a shower of glass notes, density per 16th), `reports`
         (t, interval, n: voices answering up the scale), `drops` (a, b, rate: rain as high plucks), `doors` (a
-        two-note chime), `gliss` (t, length, gain: a run up the scale) and `notify` (the logo sound, small).
+        two-note chime), `gliss` (t, length, gain: a run up the scale) and `notify` (the app's notification: a quick rise and a glass note).
         `ticktock` (gain and sub envelopes) is the same clock run through a whole film on the beat grid, tick on the
         even steps and tock on the odd ones, so it can be the hi-hat when the band plays."""
         out = np.zeros((self.n, 2))
@@ -590,11 +597,6 @@ class Score:
                 k = i / (len(scale) - 1)
                 self.add(out, at + length * k ** 0.8, self.pluck(hz(m), 1.6, True) * (0.035 + 0.035 * k) * g, (1.4 - 0.8 * k, 0.6 + 0.8 * k))
         for at in s.get('notify', []):
-            if s.get('logo_style') == 'clock':  # tick, tock, and a small strike
-                self.add(out, at, self.tick(62, True) * 0.05, (1.2, 0.8))
-                self.add(out, at + beat / 4, self.tick(62, False) * 0.05, (0.8, 1.2))
-                self.add(out, at + beat / 2, self.bell(hz(86), 1.4, 1.0) * 0.034 + self.mallet(hz(74), 1.4, 3) * 0.03, (0.9, 1.1))
-                continue
             self.add(out, at, self.glide(hz(74), hz(81), 0.7, 0.14, 4.5) * 0.045, (0.8, 1.2))
             self.add(out, at + 0.22, self.bell(hz(90), 1.3, 1.0) * 0.032, (0.9, 1.1))
         return out
