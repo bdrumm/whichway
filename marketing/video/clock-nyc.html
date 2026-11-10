@@ -1,0 +1,474 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Under the Clock (illustrated cut)</title>
+<style>html, body { margin: 0; background: #000; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script src="engine.js"></script>
+<script src="cine.js"></script>
+<script src="nyc.js"></script>
+<script>
+// "Under the Clock", illustrated cut: the story first, drawn as a New York night (nyc.js), cut on a 96 bpm grid.
+// Eight million people, each on the way to someone. 1986: she waits under the clock in a red coat, his train dies in
+// a tunnel for forty minutes with no way to tell her, he runs in as she turns to go, and promises: never again. Forty
+// years later the city never stops talking: every train, every station, every 30 seconds, 1.7 million signals a day.
+// Tonight his train stops again. This time the trains ahead report in, the city knows another way, and he is the one
+// waiting under the clock when the red coat comes through the crowd. 90 s. No charts: the data is the city itself.
+const DURATION = 90, END = 82.7, B = 0.625;
+const CUTS = [5, 12.5, 15.625, 20, 25, 40, 43.75, 46.875, 48.75, 53.75, 58.75, 62.5, 68.75];
+const CAMEL = '#d4a868', WARMINK = '#ffe6bd';
+// the two of them, then and now: she is the red coat, he is the camel one
+const HER86 = { coat: NY.red, flare: 1, hair: { style: 'bob', color: '#2a1612' }, legs: '#1c1014', skin: '#f2c6a2' };
+const HIM86 = { coat: CAMEL, hair: { style: 'short', color: '#22150e' }, legs: '#17131d', skin: '#e4b28c' };
+const HER = { coat: NY.red, flare: 1, hair: { style: 'bun', color: '#dfe1ea' }, legs: '#17131d', skin: '#efc5a4' };
+const HIM = { coat: CAMEL, hair: { style: 'short', color: '#d3d6df' }, hat: '#2b2334', legs: '#17131d', skin: '#e2b28e' };
+const HER_X = 1170, FEET = 890;
+const stride = (x, h, s = 1) => (x / (0.84 * h * s)) * Math.PI * 2;   // the walk keeps step with the ground covered
+const flicker = (t, seed = 2) => (noise1(t * 11, seed) > -0.1 ? 1 : 0.35) * (0.86 + 0.14 * noise1(t * 31, seed + 1));
+const line1 = { size: 76, weight: 700, spacing: -1.5 }, line2 = { size: 46, weight: 500, color: C.ice, display: false };
+
+/** 1986 is remembered on film: warm, flickering, scratched. */
+function oldFilm(t) {
+  ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.fillStyle = 'rgba(255,170,80,0.42)'; ctx.fillRect(0, 0, W, H); ctx.restore();
+  const f = 0.05 * noise1(t * 14, 3); ctx.fillStyle = f > 0 ? `rgba(255,240,210,${f})` : `rgba(0,0,0,${-f * 1.6})`; ctx.fillRect(0, 0, W, H);
+  const r = rng(Math.floor(t * 12) + 99);
+  for (let i = 0; i < 2; i++) if (r() < 0.45) { ctx.fillStyle = `rgba(255,240,210,${0.05 + r() * 0.09})`; ctx.fillRect(r() * W, 0, 1.5, H); }
+  for (let i = 0; i < 6; i++) { ctx.fillStyle = 'rgba(20,10,0,0.4)'; ctx.beginPath(); ctx.arc(r() * W, r() * H, 1 + r() * 2.6, 0, Math.PI * 2); ctx.fill(); }
+  grain(t, 0.3); vignette(0.45);
+}
+
+// ---------- 0-5: the city ----------
+function sSkyline(t) {
+  camera(1.03 + 0.05 * t / 5, 960, 600, () => skyline(t, { drift: 40 + t * 18, wake: seg(t, 0.2, 4.6), lights: easeOut(seg(t, 0.6, 2.4)) }));
+  rain(t, 0.8);
+  scrim('bottom', 0.8);
+  say(t, 'Eight million people.', 150, 880, 0.9, 4.4, { size: 88, weight: 700, spacing: -2 });
+  say(t, 'Each one on the way to someone.', 150, 955, 2.3, 4.4, line2);
+}
+
+// ---------- 5-30: 1986 ----------
+function sHall86(t) {
+  const u = t - 5, sweep = easeInOut(seg(t, 8.4, 12.2)), day = lerp(1, 0.16, sweep), tau = t + 18 * sweep, smear = Math.sin(Math.PI * seg(t, 8.4, 12.2));
+  camera(1 + 0.05 * u / 7.5, 960 + 50 * u / 7.5, 555, () => {
+    concourse(t, { day, minutes: lerp(420, 442, sweep) });
+    crowd(tau, { n: 46, seed: 5, density: lerp(1, 0.3, sweep), smear, tint: '#22150c', haze: '#6b4a2a', alpha: 1, yMin: 800, yMax: 872 });
+    const look = t < 9 ? 1 : Math.sin(t * 1.1) > 0 ? 1 : -1;
+    standing(HER_X, FEET, 250, { ...HER86, dir: look, arm: t > 10 && t < 11.4 ? 'watch' : 'down', breathe: t * 2, bag: '#3a1c14' });
+    crowd(tau * 0.9, { n: 9, seed: 9, density: lerp(0.9, 0.15, sweep), smear, tint: '#160c06', yMin: 960, yMax: 1020, hMin: 300, hMax: 340, alpha: 1, shine: 0 });
+    hallLight(t, { day });
+  });
+  scrim('left', 0.84);
+  slam(t, '1986', 150, 420, 5.3, 8.0, { size: 170, color: WARMINK, spacing: -4 });
+  say(t, 'Under the clock, at seven.', 150, 510, 6.1, 8.0, { ...line1, size: 64 });
+  say(t, 'Their first date.', 150, 578, 7.2, 8.0, { ...line2, color: WARMINK });
+  const a = life(t, 8.7, 12.4, 0.5);   // the evening going by
+  if (a > 0) shadowed(() => text(clockTxt(Math.floor(lerp(420, 442, sweep))), 150, 440, { size: 190, weight: 800, color: WARMINK, alpha: a, spacing: -5 }));
+  say(t, 'She waited.', 150, 520, 9.6, 12, { ...line1, size: 64 });
+  oldFilm(t);
+}
+/** A train ridden alongside: travelled distance, speed and how hard it is braking, for a run at v0 from t0 that
+ *  brakes to a stand between b0 and b1. */
+function ride(t, t0, b0, b1, v0) {
+  if (t < b0) return { pos: v0 * (t - t0), v: v0, brake: 0 };
+  const T = b1 - b0, d = Math.min(t, b1) - b0;
+  return { pos: v0 * (b0 - t0) + v0 * (d - d * d / (2 * T)), v: v0 * (1 - d / T), brake: Math.sin(Math.PI * d / T) };
+}
+const jolt = (t, at) => (t > at ? 18 * Math.exp(-(t - at) * 5) * Math.cos((t - at) * 17) : 0);
+function train(t, r, v0, y, o, stopAt) {
+  const lit = stopAt != null && t > stopAt ? o.dim * flicker(t) : 1;
+  [-760, 250, 1260].forEach((x, i) => subwayCar(x, y, 1000, { ...o, lit, seed: i + 1 }));
+  if (r.brake > 0.02) [-620, -520, 0, 100, 390, 490, 1010, 1110, 1400, 1500].forEach(x => sparks(t + x, x + 2, y + 86, r.brake * (0.5 + 0.5 * hash(x + Math.floor(t * 20)))));
+}
+function sTunnel86(t) {
+  const r = ride(t, 12.5, 13.3, 14.5, 2700), rm = (r.v / 2700) * 3;
+  ctx.save(); ctx.translate(jolt(t, 14.5) + noise1(t * 23, 1) * rm, noise1(t * 29, 2) * rm);
+  camera(1.04 + 0.03 * (t - 12.5) / 3, 960, 560, () => { tunnel(t, r.pos, r.v, { y: 770, old: true }); train(t, r, 2700, 770, { era: 'red', riders: 10, bullet: null, dim: 0.6 }, 14.5); });
+  ctx.restore();
+  scrim('bottom', 0.85);
+  say(t, 'He was ten minutes away.', 150, 940, 12.8, 14.1, { ...line1, size: 64 });
+  say(t, 'Then the train stopped.', 150, 940, 14.5, null, { ...line1, size: 64 });
+  oldFilm(t);
+}
+/** Close on one window of the car, and whoever stands at it. */
+function windowShot(t, { era, who, lit = 1, k = 1, signal = 0, drift = 0, dx = 0 }) {
+  const wx = 990, wy = 205, ww = 780, wh = 610;
+  camera(k, 1240 + dx, 520, () => {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    if (era === 'red') { g.addColorStop(0, '#4a100d'); g.addColorStop(0.3, '#8c241d'); g.addColorStop(1, '#3d0e0b'); } else { g.addColorStop(0, '#4d5666'); g.addColorStop(0.22, '#b3bdca'); g.addColorStop(0.7, '#7c8797'); g.addColorStop(1, '#353c49'); }
+    ctx.fillStyle = g; ctx.fillRect(-300, -200, W + 1100, H + 400);
+    if (era === 'steel') { ctx.strokeStyle = 'rgba(30,38,52,0.4)'; ctx.lineWidth = 3; for (let y = 850; y < 1100; y += 26) { ctx.beginPath(); ctx.moveTo(-300, y); ctx.lineTo(W + 800, y); ctx.stroke(); } }
+    else { ctx.fillStyle = 'rgba(0,0,0,0.25)'; for (let x = -280; x < W + 300; x += 90) { ctx.beginPath(); ctx.arc(x, 150, 5, 0, Math.PI * 2); ctx.arc(x, 880, 5, 0, Math.PI * 2); ctx.fill(); } ctx.fillStyle = 'rgba(255,220,180,0.08)'; ctx.fillRect(-300, 900, W + 600, 14); }
+    ctx.fillStyle = '#08090f'; ctx.beginPath(); ctx.roundRect(wx - 22, wy - 22, ww + 44, wh + 44, 54); ctx.fill();
+    ctx.save(); ctx.beginPath(); ctx.roundRect(wx, wy, ww, wh, 34); ctx.clip();
+    // the inside of the car: its light, the windows on the far side, a pole
+    const warm = era === 'red' ? '255,196,120' : '255,228,176';
+    ctx.fillStyle = '#120d0a'; ctx.fillRect(wx, wy, ww, wh);
+    const ig = ctx.createLinearGradient(0, wy, 0, wy + wh); ig.addColorStop(0, `rgba(${warm},${0.95 * lit})`); ig.addColorStop(1, `rgba(${warm},${0.55 * lit})`); ctx.fillStyle = ig; ctx.fillRect(wx, wy, ww, wh);
+    [wx + 70 - drift, wx + 430 - drift].forEach(x => { ctx.fillStyle = '#0a0b14'; ctx.beginPath(); ctx.roundRect(x, wy + 120, 300, 230, 18); ctx.fill(); if (signal > 0) glowAt(x + 240, wy + 230, 200, '255,60,48', 0.5 * signal); });
+    ctx.fillStyle = `rgba(255,250,235,${lit})`; ctx.fillRect(wx, wy + 36, ww, 16);
+    ctx.fillStyle = 'rgba(40,36,34,0.6)'; ctx.fillRect(wx, wy + 392, ww, 12);
+    ctx.strokeStyle = 'rgba(210,214,222,0.85)'; ctx.lineWidth = 12; ctx.beginPath(); ctx.moveTo(wx + 640, wy); ctx.lineTo(wx + 640, wy + wh); ctx.stroke();
+    bust(wx + 330, wy + 470, 1.75, who);
+    if (lit < 0.8) { ctx.fillStyle = `rgba(8,6,12,${0.45 * (1 - lit)})`; ctx.fillRect(wx, wy, ww, wh); }
+    // the glass
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    [[120, 90], [260, 34], [560, 60]].forEach(([dx, w]) => poly([[wx + dx, wy], [wx + dx + w, wy], [wx + dx + w - 220, wy + wh], [wx + dx - 220, wy + wh]], 'rgba(255,255,255,0.05)'));
+    if (signal > 0) { const sg = ctx.createLinearGradient(wx + ww, 0, wx, 0); sg.addColorStop(0, `rgba(255,50,40,${0.4 * signal})`); sg.addColorStop(1, 'rgba(255,50,40,0)'); ctx.fillStyle = sg; ctx.fillRect(wx, wy, ww, wh); }
+    ctx.restore(); ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(wx - 10, wy - 10, ww + 20, wh + 20, 44); ctx.stroke();
+    if (signal > 0) glowAt(W + 100, 420, 900, '255,50,40', 0.3 * signal);
+  });
+}
+function sWindow86(t) {
+  const u = t - 15.625, lit = 0.62 * flicker(t, 5);
+  windowShot(t, { era: 'red', lit, k: 1 + 0.07 * u / 4.4, who: { coat: CAMEL, skin: HIM86.skin, hair: '#22150e', nod: lerp(0.04, 0.2, easeInOut(seg(t, 16.8, 18.4))), worry: seg(t, 15.8, 18) } });
+  scrim('left', 0.82);
+  slam(t, 'Forty minutes.', 130, 500, 15.7, 19.6, { size: 104, color: WARMINK, spacing: -2.5 });
+  say(t, 'No signal.', 130, 590, 17.0, 19.6, { ...line1, size: 56 });
+  say(t, 'No way to tell her.', 130, 658, 18.1, 19.6, { ...line1, size: 56 });
+  oldFilm(t);
+}
+function sLate(t) {
+  const u = t - 20, w = clamp(t - 21.2, 0, 2.1), herX = HER_X - w * 32, runK = easeOut(seg(t, 22.5, 24.8)), hisX = lerp(W + 320, herX + 250, runK);
+  const punch = t > 22.5 ? 0.03 * Math.exp(-(t - 22.5) * 4) : 0;
+  camera(1.04 + 0.05 * u / 5 + punch, 1010, 600, () => {
+    concourse(t, { day: 0.04, minutes: 460 });
+    crowd(t, { n: 46, seed: 5, density: 0.1, tint: '#150d0a', haze: '#2a1c18', alpha: 1, yMin: 800, yMax: 872 });
+    standing(herX, FEET, 250, { ...HER86, dir: t < 21 ? 1 : t < 23.4 ? -1 : 1, walk: w > 0 && w < 2.1 ? stride(w * 32, 250, 0.55) : null, stride: 0.55, nod: t < 23.4 ? 0.26 : -0.05, bag: '#3a1c14', breathe: t * 2 });
+    if (t > 22.4) standing(hisX, FEET, 262, { ...HIM86, dir: -1, walk: runK < 0.985 ? stride(W + 320 - hisX, 262, 1.5) : null, stride: 1.5, lean: 0.24 * (1 - runK), arm: runK < 0.985 ? 'pump' : 'down', tails: 1 - runK, breathe: t * 7 });
+    hallLight(t, { day: 0.04 });
+  });
+  scrim('left', 0.84);
+  slam(t, '7:40', 150, 420, 20.3, 24.5, { size: 170, color: WARMINK, spacing: -4 });
+  say(t, 'She turned to go.', 150, 510, 21.2, 22.7, { ...line1, size: 60 });
+  say(t, 'One more minute,', 150, 510, 23.2, 24.5, { ...line1, size: 60 });
+  say(t, 'and he would have lost her.', 150, 578, 23.7, 24.5, { ...line1, size: 60 });
+  oldFilm(t);
+}
+/** The two of them, meeting: walking the last steps, then in each other's arms. `near` 0..1 closes the gap, `hold` 0..1 is the embrace. */
+function together(x, h, her, him, near, hold, t) {
+  if (near >= 1) return embrace(x, FEET, h, her, him, hold, t);
+  const gap = lerp(250, 0.24 * h, near), hx = x - gap / 2, mx = x + gap / 2;
+  standing(mx, FEET, h * 1.05, { ...him, dir: -1, walk: near > 0 ? stride(250 - gap, h, 0.7) : null, stride: 0.7, breathe: t * 3 });
+  standing(hx, FEET, h, { ...her, dir: 1, breathe: t * 3 + 1 });
+}
+function sPromise(t) {
+  const u = t - 25, near = easeInOut(seg(t, 25.1, 26.7)), hold = seg(t, 26.7, 27.5), cx = HER_X - 67 + 125;
+  camera(lerp(1.4, 1.75, easeInOut(u / 5)), lerp(cx - 120, cx - 60, near), 700, () => {
+    concourse(t, { day: 0.04, minutes: 461 });
+    glowAt(cx, 760, 620, '255,196,120', 0.34 * hold);
+    together(cx, 250, HER86, HIM86, near, hold, t);
+    hallLight(t, { day: 0.04 });
+  });
+  scrim('left', 0.7);
+  say(t, 'He made her a promise.', 130, 800, 25.4, 29.5, { ...line1, size: 58 });
+  slam(t, 'Never again.', 130, 930, 27.2, 29.5, { size: 128, color: WARMINK, spacing: -3 });
+  oldFilm(t);
+}
+
+// ---------- 30-40: the city that never stops talking ----------
+const NETK = 0.76, NETDX = 325;
+const netXY = (l, f) => { const [x, y] = netAt(l, f); return [960 + (x - 960) * NETK + NETDX, 540 + (y - 540) * NETK]; };
+const TRAINS = NETWORK.flatMap((l, i) => { const r = rng(i + 50), n = Math.round(l.len / 105); return Array.from({ length: n }, (_, k) => ({ l, f0: r(), v: (k % 2 ? 1 : -1) * (0.02 + r() * 0.012), ph: Math.floor(r() * 4) })); });
+const trainXY = (tr, t) => netXY(tr.l, ((tr.f0 + tr.v * t) % 1 + 1) % 1);
+const STOPS = ['14 ST', '42 ST', 'JAY ST', 'W 4 ST', '125 ST', '59 ST', 'CANAL ST', 'FULTON ST', '86 ST', '96 ST', 'ATLANTIC AV', 'QUEENS PLAZA', '34 ST', 'BEDFORD AV', 'COURT SQ', 'UNION SQ'];
+const FRAGS = (() => { const r = rng(404); return Array.from({ length: 170 }, () => ({ tr: Math.floor(r() * TRAINS.length), st: STOPS[Math.floor(r() * STOPS.length)], off: r() * 4, per: 2.2 + r() * 1.8, sec: Math.floor(r() * 118) * 30 })); })();
+/** The subway as light over the city: lines drawn in, a train a light, each one calling out on the beat, the people
+ *  waiting along them, and what the trains say rising off them. */
+function talkingCity(t, { draw = 1, a = 1, frags = 1, hot = null, others = 1 } = {}) {
+  ctx.save(); ctx.translate(960 + NETDX, 540); ctx.scale(NETK, NETK); ctx.translate(-960, -540);
+  NETWORK.forEach(l => { ctx.save(); ctx.setLineDash([l.len * draw, l.len * 2]); glowStroke(l.path, L[l.n], hot === l.n ? 9 : 5, hot === l.n ? 26 : 14, a * (hot && hot !== l.n ? others : 0.8)); ctx.restore(); });
+  ctx.restore();
+  NETWORK.forEach((l, i) => {   // people waiting, a warm dot at every stop
+    const n = Math.round(l.len / 62);
+    for (let k = 1; k < n; k++) { if (k / n > draw) break; const [x, y] = netXY(l, k / n), tw = 0.45 + 0.55 * Math.abs(Math.sin(t * 1.3 + k * 2.1 + i)); ctx.fillStyle = `rgba(${NY.win},${a * tw * 0.75 * (hot && hot !== l.n ? others : 1)})`; ctx.beginPath(); ctx.arc(x, y, 2.6, 0, Math.PI * 2); ctx.fill(); }
+  });
+  TRAINS.forEach(tr => {
+    const dim = hot && hot !== tr.l.n ? others : 1, [x, y] = trainXY(tr, t), bp = (((t / B) + tr.ph) / 4) % 1;
+    if (draw < 1 && ((tr.f0 + tr.v * t) % 1 + 1) % 1 > draw) return;
+    ctx.strokeStyle = `rgba(190,215,255,${a * dim * 0.7 * (1 - bp)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 5 + bp * 46, 0, Math.PI * 2); ctx.stroke();
+    glowAt(x, y, 26, '200,220,255', 0.55 * a * dim); ctx.fillStyle = `rgba(255,255,255,${a * dim})`; ctx.beginPath(); ctx.arc(x, y, 4.2, 0, Math.PI * 2); ctx.fill();
+  });
+  const n = Math.round(FRAGS.length * clamp(frags));
+  for (let i = 0; i < n; i++) {   // what they are saying: line, stop, time, again and again
+    const f = FRAGS[i], p = ((t + f.off) / f.per) % 1, tr = TRAINS[f.tr], [x, y] = trainXY(tr, t - p * f.per), s = f.sec + Math.floor((t + f.off) / f.per) * 30;
+    text(`${tr.l.n} · ${f.st} · 6:${String(30 + Math.floor(s / 60) % 30).padStart(2, '0')}:${s % 60 ? '30' : '00'}`, x + 12, y - 8 - p * 130, { size: 15, weight: 700, mono: true, color: '#cfe0ff', alpha: a * Math.sin(Math.PI * p) * 0.62 });
+  }
+}
+const commas = n => String(n).replace(/\B(?=(\d{3})+$)/g, ',');
+function sCity(t) {
+  const u = t - 30, draw = easeInOut(seg(t, 30.2, 33.4));
+  camera(1.02 + 0.04 * u / 10, 960, 560, () => skyline(t, { drift: 300 + u * 12, wake: 1, lights: 1, dim: lerp(0.3, 0.52, seg(t, 30, 33)) }));
+  talkingCity(t, { draw, frags: seg(t, 32, 36.6) });
+  if (t > 36.4) { const k = 1 - seg(t, 36.4, 37.3); ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = `rgba(120,160,255,${0.22 * k})`; ctx.fillRect(0, 0, W, H); ctx.restore(); }
+  scrim('left', 0.86);
+  say(t, 'Forty years later.', 150, 500, 30.3, 32.3, { size: 96, weight: 700, spacing: -2 });
+  say(t, 'Now the city never', 150, 440, 32.7, 36.0, { ...line1, size: 72 });
+  say(t, 'stops talking.', 150, 520, 32.9, 36.0, { ...line1, size: 72 });
+  say(t, 'Every train. Every station.', 150, 598, 34.1, 36.0, line2);
+  say(t, 'Every 30 seconds.', 150, 656, 35.0, 36.0, line2);
+  slam(t, '1.7 million', 150, 470, 36.4, 39.5, { size: 150, spacing: -4 });
+  say(t, 'signals a day.', 150, 556, 36.6, 39.5, { ...line1, size: 72 });
+  say(t, 'Every one is somebody', 150, 650, 37.7, 39.5, line2);
+  say(t, 'on the way to someone.', 150, 708, 37.9, 39.5, line2);
+  const ca = life(t, 30.9, 39.6, 0.4);   // the count of the day so far
+  if (ca > 0) shadowed(() => {
+    text('SIGNALS TODAY', 152, 236, { size: 17, weight: 700, color: ENG.label, spacing: 3, display: false, alpha: ca });
+    text(commas(Math.round(1700000 * Math.pow(seg(t, 30.9, 36.4), 1.6))), 150, 290, { size: 46, weight: 700, mono: true, color: C.ice, alpha: ca });
+  });
+}
+
+// ---------- 40-62.5: tonight ----------
+function sStreet(t) {
+  const u = t - 40, x = 700 + u * 96;
+  camera(1.05 + 0.04 * u / 3.75, 968 + u * 6, 580, () => {
+    street(t, { ground: 850 });
+    steam(560, 850, t, 1.1, 0.9);
+    subwayEntrance(1420, 850, t);
+    standing(x, 850, 290, { ...HIM, dir: 1, walk: stride(x, 290, 0.62), stride: 0.62, lean: 0.07, cane: true, bouquet: true, arm: 'down' }, 0.22);
+    taxi(lerp(-500, 2500, seg(t, 40.2, 42.6)), 990, 1.25);
+  });
+  rain(t, 1, 320, 0.24);
+  scrim('left', 0.74);
+  say(t, 'Tonight is forty years.', 150, 330, 40.4, 43.3, line1);
+  say(t, "He can't run like he used to.", 150, 398, 41.9, 43.3, line2);
+}
+/** A local station going by behind the train: tile, a band of mosaic, the name, columns, people waiting. `blur` (px) smears it. */
+function stationWall(x0, name, blur = 0, len = 2700, y = 770) {
+  const n = blur > 10 ? 14 : 1;
+  for (let i = 0; i < n; i++) {
+    ctx.save(); ctx.globalAlpha *= 1 / (i + 1); ctx.translate(i * blur / n, 0);
+    const g = ctx.createLinearGradient(0, 150, 0, y + 20); g.addColorStop(0, '#9fa598'); g.addColorStop(0.25, '#e3e6d8'); g.addColorStop(1, '#8b9186'); ctx.fillStyle = g; ctx.fillRect(x0, 150, len, y - 130);
+    ctx.fillStyle = '#1f5e4c'; ctx.fillRect(x0, 236, len, 30); ctx.fillStyle = '#d7b45a'; ctx.fillRect(x0, 232, len, 4); ctx.fillRect(x0, 266, len, 4);
+    ctx.fillStyle = '#4a4e52'; ctx.fillRect(x0, y - 24, len, 64); ctx.fillStyle = NY.taxi; ctx.fillRect(x0, y - 24, len, 7);
+    for (let x = x0 + 112; x < x0 + len - 300; x += 660) {
+      ctx.fillStyle = '#10244a'; ctx.beginPath(); ctx.roundRect(x, 300, 256, 92, 6); ctx.fill(); ctx.strokeStyle = '#d7b45a'; ctx.lineWidth = 4; ctx.stroke();
+      text(name, x + 128, 348, { size: 44, weight: 700, color: '#fff', align: 'center', base: 'middle', display: false });
+      if (blur < 60) [90, 400, 470].forEach((dx, j) => figure(x + dx, y - 22, 170 + j * 8, { coat: '#22263a', legs: '#151726', skin: '#22263a', dir: j % 2 ? 1 : -1, hat: j === 1 ? '#22263a' : false }));
+    }
+    for (let x = x0 + 60; x < x0 + len; x += 330) { ctx.fillStyle = '#143a2c'; ctx.fillRect(x, 150, 30, y - 130); ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(x, 150, 7, y - 130); }
+    ctx.restore();
+  }
+}
+function sTunnel(t) {
+  const r = ride(t, 43.75, 44.9, 46.15, 2700), end = ride(99, 43.75, 44.9, 46.15, 2700).pos, rm = (r.v / 2700) * 3;
+  ctx.save(); ctx.translate(jolt(t, 46.15) + noise1(t * 23, 1) * rm, noise1(t * 29, 2) * rm);
+  camera(1.04 + 0.03 * (t - 43.75) / 3, 960, 560, () => {
+    tunnel(t, r.pos, r.v, { y: 770 });
+    stationWall(260 + end - r.pos, '14 St', r.v * 0.035, 2400);
+    signal(1700 + end - r.pos, 520, '255,50,40', 1);
+    train(t, r, 2700, 770, { era: 'steel', riders: 11, bullet: '6', dim: 0.8 }, 46.15);
+  });
+  ctx.restore();
+  scrim('bottom', 0.85);
+  say(t, 'Twenty minutes to seven.', 150, 940, 44.0, 45.4, { ...line1, size: 64 });
+  say(t, 'The train stops.', 150, 940, 46.1, null, { ...line1, size: 64 });
+}
+function sWindow(t) {
+  const u = t - 46.875, pulse = 0.7 + 0.3 * Math.sin(t * 5);
+  windowShot(t, { era: 'steel', dx: 110, lit: 0.8 * flicker(t, 7), signal: pulse, k: 1 + 0.06 * u / 1.9, who: { coat: CAMEL, skin: HIM.skin, hair: '#d3d6df', hat: '#2b2334', scarf: '#7a2a2a', nod: 0.1, worry: 1 } });
+  scrim('left', 0.82);
+  slam(t, 'Again.', 130, 560, 46.95, null, { size: 150, color: C.red, spacing: -4 });
+}
+/** Words that the city's signals fly together to make. */
+let _pts = null;
+function signalWords(t, s, x, y, size, at, dur) {
+  if (!_pts) {
+    const c = document.createElement('canvas'); c.width = 1100; c.height = Math.ceil(size * 1.3);
+    const g = c.getContext('2d'); g.font = font(size, 800); g.textBaseline = 'top'; g.letterSpacing = '-4px'; g.fillStyle = '#fff'; g.fillText(s, 0, size * 0.08);
+    const d = g.getImageData(0, 0, c.width, c.height).data, r = rng(606); _pts = [];
+    for (let py = 0; py < c.height; py += 5) for (let px = 0; px < c.width; px += 5) if (d[(py * c.width + px) * 4 + 3] > 128) _pts.push({ x: px, y: py, tr: Math.floor(r() * TRAINS.length), d: r() * 0.55, j: r() });
+  }
+  if (t < at) return;
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  _pts.forEach(p => {
+    const k = easeInOut(seg(t, at + p.d * dur, at + (p.d + 0.45) * dur)); if (k <= 0) return;
+    const [sx, sy] = trainXY(TRAINS[p.tr], at), tx = x + p.x, ty = y + p.y, bend = Math.sin(Math.PI * k) * (p.j - 0.5) * 240;
+    const px = lerp(sx, tx, k) + bend * 0.3, py = lerp(sy, ty, k) + bend, hot = 1 - k;
+    ctx.fillStyle = `rgba(${Math.round(lerp(255, 190, hot))},${Math.round(lerp(204, 215, hot))},${Math.round(lerp(51, 255, hot))},${0.35 + 0.65 * k})`;
+    ctx.fillRect(px - 2, py - 2, 4, 4);
+  });
+  ctx.restore();
+}
+function sAnswer(t) {
+  const u = t - 48.75, six = NETWORK[8], mine = netXY(six, 0.82);
+  ctx.fillStyle = '#04050d'; ctx.fillRect(0, 0, W, H);
+  camera(1.02 + 0.04 * u / 5, 960, 560, () => skyline(t, { drift: 380 + u * 10, wake: 1, lights: 1, dim: 0.74 }));
+  talkingCity(t, { hot: '6', others: 0.42, frags: 0.6 });
+  // his train, held; and every train ahead of it on the line answering in turn
+  for (let i = 0; i < 6; i++) {
+    const at = 49.4 + i * 0.3125, [x, y] = netXY(six, 0.7 - i * 0.12), k = seg(t, at, at + 1.1);
+    if (t < at) continue;
+    ctx.strokeStyle = `rgba(255,204,51,${1 - k})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, 6 + k * 70, 0, Math.PI * 2); ctx.stroke();
+    glowAt(x, y, 60, '255,204,51', 0.8 * (1 - k * 0.6)); ctx.fillStyle = HELD; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+  }
+  const beat = 0.6 + 0.4 * Math.sin(t * Math.PI * 2 / B);
+  glowAt(mine[0], mine[1], 110, '255,74,61', 0.75 * beat); ctx.fillStyle = C.red; ctx.beginPath(); ctx.arc(mine[0], mine[1], 10, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(mine[0], mine[1], 17, 0, Math.PI * 2); ctx.stroke();
+  shadowed(() => text('HIS TRAIN', mine[0] + 34, mine[1] + 7, { size: 20, weight: 700, color: C.ink, spacing: 3, display: false, alpha: seg(t, 48.9, 49.3) }));
+  scrim('left', 0.88);
+  say(t, 'But tonight, the city is talking.', 150, 330, 49.0, 53.3, { ...line1, size: 64 });
+  say(t, 'Every train ahead, reporting in.', 150, 398, 50.2, 53.3, line2);
+  say(t, 'HELD AHEAD · ABOUT', 152, 500, 51.2, 53.3, { size: 20, weight: 700, color: HELD, spacing: 4, display: false });
+  if (t < 53.5) signalWords(t, '9 minutes', 146, 520, 150, 51.0, 1.9);
+}
+function hangSign(x, y, b, s, color, a = 1) {
+  ctx.save(); ctx.globalAlpha *= a;
+  ctx.fillStyle = '#0a0b12'; ctx.fillRect(x - 3, y - 80, 6, 80); ctx.beginPath(); ctx.roundRect(x - 150, y, 300, 76, 8); ctx.fill();
+  bullet(x - 106, y + 38, 25, b); text(s, x - 66, y + 39, { size: 28, weight: 700, color, base: 'middle', display: false });
+  ctx.restore();
+}
+function sPlatform(t) {
+  const u = t - 53.75, cross = easeInOut(seg(t, 55.0, 58.4)), X = lerp(-590, 560, cross), z = 1.35;
+  camera(1.02 + 0.05 * u / 5, 960, 520, () => {
+    islandPlatform(t, { left: { lit: 0.55 * flicker(t, 9), door: 1, tint: '190,205,235', body: '#566070' }, right: { lit: 1, door: 1, tint: '255,222,164' }, between: () => {
+      const [fx, fy] = px3(X, 430, z), h = 560 / z;
+      standing(fx, fy, h, { ...HIM, dir: 1, walk: cross > 0 && cross < 1 ? stride(X + 590, h * 2.2, 0.7) : null, stride: 0.7, lean: 0.06, cane: true, bouquet: true }, 0.2);
+    } });
+    hangSign(300, 340, '6', 'Held', C.red); hangSign(1620, 340, '4', 'Express', C.ok);
+  });
+  // what the city tells him
+  const ca = life(t, 54.6, 58.6, 0.4), cy = 110 - (1 - easeOut(seg(t, 54.6, 55.1))) * 60;
+  if (ca > 0) {
+    ctx.save(); ctx.globalAlpha = ca; ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 40; ctx.fillStyle = 'rgba(16,22,44,0.94)'; rrect(610, cy, 700, 132, 30); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = C.cardLine; ctx.lineWidth = 2; rrect(610, cy, 700, 132, 30); ctx.stroke();
+    iconTile(676, cy + 66, 76, 1, { stem: 1, right: 1, left: 1, dot: 1 });
+    text('Cross the platform', 736, cy + 58, { size: 34, weight: 700 });
+    text('The 4 express gets you there by 6:56', 736, cy + 98, { size: 25, weight: 500, color: C.ice, display: false });
+    ctx.restore();
+  }
+  scrim('bottom', 0.8);
+  say(t, 'And it knows another way.', 150, 880, 54.0, 58.3, { ...line1, size: 56 });
+  slam(t, 'He will not be late.', 150, 968, 56.9, 58.3, { size: 84, color: WARMINK, spacing: -2 });
+}
+function sExpress(t) {
+  const u = t - 58.75, v = 4200, pos = v * u, rm = 2.6;
+  ctx.save(); ctx.translate(noise1(t * 23, 1) * rm, noise1(t * 29, 2) * rm);
+  camera(1.04 + 0.05 * u / 3.75, 960, 560, () => {
+    tunnel(t, pos, v, { y: 770 });
+    ['23 St', '28 St', '33 St'].forEach((nm, i) => stationWall(2300 + i * 5000 - pos, nm, 120, 1400));
+    [-760, 250, 1260].forEach((x, i) => subwayCar(x, 770, 1000, { era: 'steel', riders: 11, bullet: '4', seed: i + 4 }));
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = 'rgba(255,240,210,0.16)'; ctx.lineWidth = 2;   // the wind of it
+    const r = rng(Math.floor(t * 30)); for (let i = 0; i < 26; i++) { const y = 400 + r() * 470, x = r() * W, l = 200 + r() * 500; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - l, y); ctx.stroke(); }
+    ctx.restore();
+  });
+  ctx.restore();
+  scrim('bottom', 0.85);
+  // the stops he is not making
+  const names = ['14 St', '23 St', '28 St', '33 St', 'Grand Central'], x0 = 500, x1 = 1420, y = 950, prog = seg(t, 58.9, 62.3);
+  shadowed(() => {
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.strokeStyle = L[4]; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(lerp(x0, x1, prog), y); ctx.stroke();
+    names.forEach((nm, i) => { const x = lerp(x0, x1, i / 4), done = prog >= i / 4 - 0.01, ends = i === 0 || i === 4; ctx.fillStyle = done ? '#fff' : 'rgba(255,255,255,0.4)'; ctx.beginPath(); ctx.arc(x, y, ends ? 11 : 6, 0, Math.PI * 2); ctx.fill(); text(nm, x, y - 26, { size: ends ? 26 : 20, weight: ends ? 700 : 500, color: ends ? C.ink : C.dim, align: 'center', display: false }); });
+    glowAt(lerp(x0, x1, prog), y, 40, '255,255,255', 0.6);
+  });
+}
+function hud(t) {
+  const a = life(t, 40.7, 62.3, 0.4);
+  if (a <= 0) return;
+  const TOD = [[40, 1110], [43.75, 1117], [46.15, 1118], [53.75, 1119], [58.75, 1121], [62.5, 1135]];
+  let m = TOD[0][1]; for (let i = 1; i < TOD.length; i++) if (t >= TOD[i - 1][0]) m = lerp(TOD[i - 1][1], TOD[i][1], seg(t, TOD[i - 1][0], TOD[i][0]));
+  const eta = t < 47.1 ? 1132 : t < 54.9 ? roll(t, 47.1, 0.9, 1132, 1145) : 1136, late = eta > 1140, col = late ? C.red : C.ok;
+  const hit = Math.max(t > 48 ? Math.exp(-(t - 48) * 3) : 0, t > 54.9 ? Math.exp(-(t - 54.9) * 3) : 0), x = W - 520, y = 128;
+  ctx.save(); ctx.globalAlpha = a * 0.55; ctx.fillStyle = '#03050a'; rrect(x - 30, y - 24, 420, 196, 24); ctx.fill(); ctx.restore();
+  shadowed(() => {
+    ctx.globalAlpha *= a;
+    text(`${clockTxt(Math.floor(m))} PM`, x, y + 16, { size: 30, weight: 700, mono: true, color: C.ink });
+    text('UNDER THE CLOCK AT', x, y + 56, { size: 17, weight: 700, color: ENG.label, spacing: 3, display: false });
+    text(clockTxt(eta), x, y + 144, { size: 92 + hit * 14, weight: 800, color: col, spacing: -2 });
+    text(late ? 'LATE' : 'ON TIME', x + 250, y + 144, { size: 20, weight: 700, color: col, spacing: 3, display: false });
+  });
+}
+
+// ---------- 62.5-82.5: under the clock ----------
+function sWaiting(t) {
+  const u = t - 62.5, sweep = seg(t, 62.9, 68.5), tau = t + 10 * sweep;
+  camera(1 + 0.05 * u / 6.25, 960 + 40 * u / 6.25, 555, () => {
+    concourse(t, { night: true, minutes: lerp(416, 420, easeInOut(sweep)) });
+    crowd(tau, { n: 46, seed: 14, density: 0.85, smear: 0.5 * Math.sin(Math.PI * sweep), tint: '#0b0c26', haze: '#2a2d62', alpha: 1, yMin: 800, yMax: 872 });
+    standing(1290, FEET, 262, { ...HIM, dir: Math.sin(t * 0.8) > -0.3 ? -1 : 1, arm: 'hold', bouquet: true, cane: true, breathe: t * 2 }, 0.24);
+    crowd(tau * 0.9, { n: 9, seed: 19, density: 0.7, smear: 0.5 * Math.sin(Math.PI * sweep), tint: '#070818', yMin: 960, yMax: 1020, hMin: 300, hMax: 340, alpha: 1, shine: 0 });
+    hallLight(t, { night: true });
+  });
+  scrim('left', 0.84);
+  slam(t, '6:56', 150, 420, 62.9, 68.3, { size: 170, color: C.ok, spacing: -4 });
+  say(t, 'Tonight, he is the one waiting.', 150, 510, 64.2, 68.3, { ...line1, size: 58 });
+}
+/** The crowd's clock in the last scene: it slows almost to a stand when they see each other. */
+const hush = t => (t < 69.6 ? t : t < 71.6 ? 69.6 + (t - 69.6) - 0.88 * (t - 69.6) ** 2 / 4 : 69.6 + 2 - 0.88 + 0.12 * (t - 71.6));
+function sReunion(t) {
+  const M = 1180, hold = seg(t, 73.1, 74.0), q = easeInOut(seg(t, 69.6, 71.6)), meet = t >= 73.1, go = easeInOut(seg(t, 70.2, 75.8));
+  const herX = lerp(640, M - 30, seg(t, 68.75, 73.1)), hisX = lerp(1290, M + 30, easeInOut(seg(t, 70.8, 73.1)));
+  const up = t > 76.25 ? easeInOut(seg(t, 76.25, 79.6)) : 0;
+  camera(lerp(lerp(1.05, 1.7, go), 1, up), lerp(lerp(1010, M, go), 960, up), lerp(lerp(560, 715, go), -500, up), () => {
+    concourse(t, { night: true, minutes: 420, glow: 1 + 0.5 * hold });
+    crowd(hush(t), { n: 46, seed: 14, density: 0.85, tint: '#0b0c26', haze: '#2a2d62', yMin: 800, yMax: 872, alpha: lerp(1, 0.3, q), gap: [M - 220, M + 220] });
+    glowAt(M, 740, 700, '255,200,130', 0.4 * easeOut(hold));
+    if (meet) {
+      embrace(M, FEET, 250, HER, HIM, hold, t, 0.24);
+      ctx.save(); ctx.translate(M - 46, FEET - 160); ctx.rotate(-0.5); ctx.scale(easeOut(hold), easeOut(hold)); figureBouquet(); ctx.restore();   // the flowers, behind her back in his hand
+    } else {
+      standing(hisX, FEET, 262, { ...HIM, dir: -1, walk: t > 70.8 ? stride(1290 - hisX, 262, 0.6) : null, stride: 0.6, arm: 'hold', bouquet: true, cane: true, breathe: t * 2.6 }, 0.24);
+      standing(herX, FEET, 250, { ...HER, dir: 1, walk: stride(herX, 250, 0.62), stride: 0.62, breathe: t * 2.6 + 1 }, 0.24);
+    }
+    crowd(hush(t) * 0.9, { n: 9, seed: 19, density: 0.7 * (1 - q), tint: '#070818', yMin: 960, yMax: 1020, hMin: 300, hMax: 340, alpha: 1, shine: 0 });
+    hallLight(t, { night: true });
+    if (hold > 0) { const r = rng(73); for (let i = 0; i < 60; i++) { const px = M + (r() - 0.5) * 700, py = 860 - ((r() * 500 + (t - 73) * (20 + r() * 40)) % 520); ctx.fillStyle = `rgba(255,224,160,${hold * 0.6 * Math.abs(Math.sin(t * 1.5 + i))})`; ctx.beginPath(); ctx.arc(px, py, 1.2 + r() * 2, 0, Math.PI * 2); ctx.fill(); } }
+  });
+  if (t < 76.6) { scrim('bottom', 0.7 * seg(t, 73.2, 74)); slam(t, 'He kept his promise.', W / 2, 950, 73.7, 76.0, { size: 84, color: WARMINK, spacing: -2, align: 'center' }); }
+  // the ceiling of stars becomes the map of the city, and the map the place the mark is drawn
+  if (up > 0) {
+    const c = easeInOut(seg(t, 78.6, 81.4));
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    NETWORK.forEach((l, i) => {
+      ctx.save(); ctx.setLineDash([l.len * easeInOut(seg(t, 78.6 + i * 0.08, 80.6 + i * 0.08)), l.len * 2]); glowStroke(l.path, '#ffe19a', 2.5, 12, 0.85 * (1 - seg(t, 81.6, 83)));
+      ctx.restore();
+      l.P.forEach(([x, y], j) => { const s = seg(t, 78.4 + (i + j) * 0.06, 79 + (i + j) * 0.06) * (1 - seg(t, 81.6, 83)); if (s > 0) { glowAt(x, y, 26, '255,225,154', 0.7 * s); ctx.fillStyle = `rgba(255,240,200,${s})`; ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); } });
+    });
+    ctx.restore();
+    const dark = seg(t, 81.2, 82.8); if (dark > 0) { ctx.fillStyle = `rgba(5,7,13,${dark})`; ctx.fillRect(0, 0, W, H); }
+    dataField(t, easeOut(seg(t, 81.2, 84)));
+    const wa = life(t, 77.3, 81.9, 0.6), well = ctx.createRadialGradient(W / 2, 530, 60, W / 2, 530, 760);   // a quiet place in the sky for the words
+    well.addColorStop(0, `rgba(4,22,26,${0.72 * wa})`); well.addColorStop(1, 'rgba(4,22,26,0)'); ctx.fillStyle = well; ctx.fillRect(0, 0, W, H);
+    const ta = { align: 'center', size: 62, weight: 700, spacing: -1 };
+    say(t, '1.7 million signals a day,', W / 2, 500, 77.5, 81.6, ta);
+    say(t, 'so two people can find each other.', W / 2, 580, 79.0, 81.6, { ...ta, color: WARMINK });
+  }
+}
+/** The flowers, once they are hers. */
+function figureBouquet() {
+  poly([[-5, 22], [7, 22], [22, -14], [-18, -14]], '#e9e2d0');
+  [[0, -24], [-14, -18], [14, -20], [-5, -36], [10, -34], [22, -28], [-20, -30]].forEach(([dx, dy], i) => { ctx.fillStyle = i % 3 === 2 ? '#ff6b5e' : NY.red; ctx.beginPath(); ctx.arc(dx, dy, 9, 0, Math.PI * 2); ctx.fill(); });
+}
+
+function flashes(t) {
+  let a = 0;
+  CUTS.forEach(c => { if (t >= c && t < c + 0.14) a = Math.max(a, 0.22 * (1 - (t - c) / 0.14)); });
+  [[30, 0.35, 1.0, 1], [73.2, 0.5, 1.4, 0.4]].forEach(([c, pre, post, g]) => { a = Math.max(a, g * (t < c ? easeIn(seg(t, c - pre, c)) : 1 - easeOut(seg(t, c, c + post)))); });
+  [[22.5, 0.45], [27.2, 0.4], [46.15, 0.4], [56.9, 0.3]].forEach(([c, g]) => { if (t >= c) a = Math.max(a, g * (1 - seg(t, c, c + 0.4))); });
+  if (a > 0) { ctx.fillStyle = `rgba(255,244,224,${a})`; ctx.fillRect(0, 0, W, H); }
+}
+const SCENES = [[0, sSkyline], [5, sHall86], [12.5, sTunnel86], [15.625, sWindow86], [20, sLate], [25, sPromise], [30, sCity], [40, sStreet], [43.75, sTunnel], [46.875, sWindow],
+  [48.75, sAnswer], [53.75, sPlatform], [58.75, sExpress], [62.5, sWaiting], [68.75, sReunion]];
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none'; ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  let scene = SCENES[0][1]; SCENES.forEach(([at, fn]) => { if (t >= at) scene = fn; });
+  ctx.save(); scene(t); ctx.restore();
+  hud(t);
+  if (t < 5 || t >= 30) grain(t, 0.12);
+  endCard(t, END, 'Be there when it matters.', 'COMING SOON FOR IPHONE');
+  flashes(t);
+  vignette(0.5);
+  bars();
+  blackFades(t, DURATION);
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

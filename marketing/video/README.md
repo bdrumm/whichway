@@ -70,3 +70,33 @@ python3 scores.py clock-live clock-live.wav
 ffmpeg -i clock-live_silent.mp4 -i clock-live.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
   -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-under-the-clock-live.mp4
 ```
+
+## Under the Clock, illustrated New York cut
+
+`clock-nyc.html` (90 s) tells the same story with every scene drawn in code, no footage: the skyline in rain, the
+1986 concourse in time-lapse, a Redbird braking in the tunnel, the brownstone street, the island platform, the
+reunion under the constellation ceiling. It leads with the couple and the scale of the city's data ("1.7 million
+signals a day, so two people can find each other") and has no charts or percentages; the only readout is the time he
+will be under the clock. `nyc.js` is the illustration kit (skyline, concourse, subway cars, street, platform in
+perspective, figures, crowds), `cine.js` the shared titles, grain and letterbox (also used by `clock-live.html`).
+The score is the `clock-nyc` spec: every effect is made of notes from the chord under it (`Score.fx2`), no noise.
+
+```bash
+python3 scores.py clock-nyc clock-nyc.wav
+./render_parts.sh clock-nyc.html clock-nyc_silent.mp4 4
+ffmpeg -i clock-nyc_silent.mp4 -i clock-nyc.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
+  -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-under-the-clock-nyc.mp4
+```
+
+## Sound samples
+
+The logo sound has five candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,
+`swell`, `heart`), each timed to the icon drawing its stem, fork, dot and name. `sounds.html` plays them one after
+another over the end card with a letter on screen, and with `?effects` names each score-born effect as it plays.
+
+```bash
+for s in fork rails chime swell heart; do python3 scores.py logo-$s logo-$s.wav; done   # then join in A to E order
+FILM=sounds.html node render.mjs logo-sounds_silent.mp4 30
+python3 scores.py effects effects.wav
+FILM='sounds.html?effects' node render.mjs sound-effects_silent.mp4 30
+```

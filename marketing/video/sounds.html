@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: sound samples</title>
+<style>html, body { margin: 0; background: #000; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script src="engine.js"></script>
+<script>
+// Sound samples to choose from, with names on screen (scores.py makes the sound). Open plainly for the logo sounds:
+// the end card five times, once per sound (logo-fork, -rails, -chime, -swell, -heart). Open with ?effects for the
+// score-born effects one at a time (scores.py effects).
+const EFFECTS = location.search.includes('effects') || window.SAMPLES === 'effects';
+const TAKE = 6.5;
+const LOGOS = [
+  ['A', 'Fork', 'One warm note splits in two. One way fades, the other rises and lands.'],
+  ['B', 'Rails', 'A train over the rail joints, then a plucked chord.'],
+  ['C', 'Chime', 'A platform chime made kind, with the echo of a big hall.'],
+  ['D', 'Swell', 'No attack at all. One bowed note opens into a wide chord.'],
+  ['E', 'Heartbeat', 'Two heartbeats, then one clear bell.'],
+];
+const FX = [
+  [0, 'Cut', 'A low struck octave with a glass glint, on a scene change.'],
+  [3, 'Swell', 'The next chord rising into a cut.'],
+  [7, 'Train', 'Rail joints on the root note. Braking, the chord runs down.'],
+  [11, 'Clock', 'The station clock, ticking in key.'],
+  [14.5, 'Heartbeat', 'On the root note, while he sits in the stopped train.'],
+  [18.5, 'The city talking', 'A shower of glass notes: every train reporting in.'],
+  [24, 'Trains answering', 'The trains ahead reply one by one, up the scale.'],
+  [27.5, 'Rain', 'High plucked drops in place of noise.'],
+  [31.5, 'Doors', 'A two-note door chime.'],
+  [34.5, 'Reunion', 'A run up the scale into the embrace.'],
+  [38.5, 'Notification', 'The logo sound made small, when the app speaks.'],
+  [42],
+];
+const DURATION = EFFECTS ? 42 : LOGOS.length * TAKE;
+function nameTag(letter, name, line, a, count) {
+  ctx.save(); ctx.globalAlpha = a;
+  ctx.fillStyle = C.blue; rrect(110, 96, 92, 92, 22); ctx.fill();
+  text(letter, 156, 144, { size: 54, weight: 800, align: 'center', base: 'middle' });
+  text(name, 232, 138, { size: 56, weight: 700, spacing: -1 });
+  text(line, 234, 182, { size: 26, weight: 500, color: C.dim, display: false });
+  text(count, W - 110, 138, { size: 22, weight: 600, color: C.faint, align: 'right', spacing: 3, display: false });
+  ctx.restore();
+}
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  background(t, 0.2);
+  if (!EFFECTS) {
+    const i = Math.min(LOGOS.length - 1, Math.floor(t / TAKE)), tl = t - i * TAKE, a = life(tl, 0, TAKE, 0.35);
+    endCardData(tl, 0.3, 'Be there when it matters.', null);
+    nameTag(...LOGOS[i], a, `LOGO SOUND ${i + 1} OF ${LOGOS.length}`);
+    const black = 1 - a; if (black > 0) { ctx.fillStyle = `rgba(0,0,0,${black})`; ctx.fillRect(0, 0, W, H); }
+    return;
+  }
+  dust(t, 0.5);
+  let i = 0; while (i < FX.length - 2 && t >= FX[i + 1][0]) i++;
+  const [at, name, line] = FX[i], end = FX[i + 1][0], a = life(t, at, end, 0.3);
+  ctx.save(); ctx.globalAlpha = a;
+  text(String(i + 1).padStart(2, '0'), W / 2, 420, { size: 34, weight: 700, color: C.sky, align: 'center', spacing: 6, display: false });
+  text(name, W / 2, 540, { size: 120, weight: 800, align: 'center', spacing: -3 });
+  text(line, W / 2, 620, { size: 36, weight: 500, color: C.ice, align: 'center', display: false });
+  ctx.fillStyle = 'rgba(255,255,255,0.14)'; rrect(W / 2 - 300, 720, 600, 6, 3); ctx.fill();
+  ctx.fillStyle = C.sky; rrect(W / 2 - 300, 720, 600 * seg(t, at, end), 6, 3); ctx.fill();
+  text(`SOUND EFFECT ${i + 1} OF ${FX.length - 1}`, W / 2, 800, { size: 20, weight: 600, color: C.faint, align: 'center', spacing: 3, display: false });
+  ctx.restore();
+  blackFades(t, DURATION);
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>
