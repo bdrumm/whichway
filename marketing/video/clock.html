@@ -1,0 +1,329 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: Under the Clock</title>
+<style>html, body { margin: 0; background: #05070d; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script src="engine.js"></script>
+<script>
+// "Under the Clock": the math first, then the minute it is for. Arrivals fall through a Galton board until the
+// answer to "when?" has a shape; the shape becomes the city, every train carrying its own curve. Then 1986: a first
+// date under the station clock, his train stuck for forty minutes, a promise. Forty years on the 6 holds again, the
+// engine weighs the hold and the express across the platform, and tonight he is the one waiting. 72 s.
+const DURATION = 72;
+const BRIGHT = ['#ff6319', '#fccc0a', '#ee352e', '#3ddc97', '#b933ad', '#6cbe45', '#5b9bff', '#c9ccd1'];
+
+// ---------- 1: the Galton board ----------
+const G = { cx: 1340, top: 190, dx: 52, dy: 38, rows: 11, base: 950, unit: 4.1, step: 0.13, n: 320 };
+const BALLS = (() => {
+  const r = rng(41), out = [];
+  for (let i = 0; i < G.n; i++) {
+    const ks = [0]; for (let s = 0; s < G.rows; s++) ks.push(ks[s] + (r() < 0.5 ? 0 : 1));
+    out.push({ at: 0.9 + 8.3 * Math.pow(i / G.n, 0.55), ks, color: BRIGHT[i % BRIGHT.length], bin: ks[G.rows] });
+  }
+  return out;
+})();
+const G_FALL = G.rows * G.step, G_DROP = 0.32;
+const gx = (k, row) => G.cx + (k - row / 2) * G.dx;
+const G_SD = Math.sqrt(G.rows) / 2 * G.dx, G_PEAK = 0.2256 * G.n * G.unit * 1.04;
+function galton(t, a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  text('EVERY ARRIVAL, ONE DOT', G.cx - 312, 120, { size: 18, weight: 700, color: ENG.label, spacing: 3, display: false });
+  // pegs
+  for (let row = 0; row < G.rows; row++) for (let i = 0; i <= row; i++) {
+    ctx.fillStyle = 'rgba(156,196,255,0.5)'; ctx.beginPath(); ctx.arc(gx(i, row), G.top + row * G.dy, 3.6, 0, Math.PI * 2); ctx.fill();
+  }
+  // what has landed, and what is falling
+  const counts = new Array(G.rows + 1).fill(0);
+  const fade = 1 - 0.75 * easeInOut(seg(t, 9.6, 11.2));   // the columns give way to the curve
+  BALLS.forEach(b => {
+    const u = (t - b.at) / G.step;
+    if (u < 0) return;
+    if (t >= b.at + G_FALL + G_DROP) { counts[b.bin]++; return; }
+    let x, y;
+    if (u < G.rows) {
+      const row = Math.floor(u), f = u - row;
+      x = lerp(gx(b.ks[row], row), gx(b.ks[row + 1], row + 1), easeInOut(f));
+      y = G.top + (u - 1) * G.dy - Math.sin(f * Math.PI) * 9;
+    } else {
+      const f = (t - b.at - G_FALL) / G_DROP;
+      x = gx(b.bin, G.rows); y = lerp(G.top + (G.rows - 1) * G.dy, G.base - 8, f * f);
+    }
+    ctx.fillStyle = b.color; ctx.shadowColor = b.color; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(x, y, 6.5, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.shadowBlur = 0;
+  counts.forEach((c, k) => {
+    if (!c) return;
+    const h = c * G.unit, x = gx(k, G.rows) - G.dx / 2 + 5;
+    const g = ctx.createLinearGradient(0, G.base - h, 0, G.base); g.addColorStop(0, `rgba(156,196,255,${0.85 * fade})`); g.addColorStop(1, `rgba(46,124,255,${0.25 * fade})`);
+    ctx.beginPath(); ctx.roundRect(x, G.base - h, G.dx - 10, h, [6, 6, 0, 0]); ctx.fillStyle = g; ctx.fill();
+  });
+  ctx.fillStyle = ENG.axis; ctx.fillRect(G.cx - 330, G.base, 660, 2);
+  text('sooner', G.cx - 330, G.base + 34, { size: 17, weight: 600, color: ENG.label, spacing: 2, display: false });
+  text('later', G.cx + 330, G.base + 34, { size: 17, weight: 600, color: ENG.label, spacing: 2, align: 'right', display: false });
+  // the shape they make
+  const d = easeInOut(seg(t, 9.4, 11.2));
+  if (d > 0) {
+    const x0 = G.cx - 330, x1 = lerp(x0, G.cx + 330, d), Y = x => G.base - gauss(x, G.cx, G_SD) * G_PEAK;
+    const win = easeOut(seg(t, 10.9, 11.7));
+    if (win > 0) {   // where eight in ten land
+      const lo = G.cx - 1.28 * G_SD, hi = G.cx + 1.28 * G_SD, w = new Path2D(); w.moveTo(lo, G.base);
+      for (let x = lo; x <= hi; x += 3) w.lineTo(x, Y(x)); w.lineTo(hi, G.base); w.closePath();
+      const g = ctx.createLinearGradient(0, G.base - G_PEAK, 0, G.base); g.addColorStop(0, `rgba(255,216,154,${0.42 * win})`); g.addColorStop(1, `rgba(255,216,154,${0.04 * win})`);
+      ctx.fillStyle = g; ctx.fill(w);
+      text('8 in 10 land here', G.cx, G.base + 34, { size: 19, weight: 700, color: WARM, align: 'center', alpha: win, display: false });
+    }
+    const p = new Path2D(); p.moveTo(x0, Y(x0));
+    for (let x = x0; x <= x1; x += 3) p.lineTo(x, Y(x));
+    glowStroke(p, WARM, 5, 22, 1);
+  }
+  ctx.restore();
+}
+
+// ---------- 2: the city, every train with its own curve ----------
+const MINE = { line: 8, k: 2 };   // the one train the film follows out of the crowd (the 6)
+function city(t, a) {
+  if (a <= 0) return;
+  const draw = easeInOut(seg(t, 12.6, 15.6)), pick = easeInOut(seg(t, 18.6, 20.6));
+  ctx.save(); ctx.globalAlpha *= a;
+  ctx.save(); ctx.translate(W, H / 2); ctx.scale(0.76, 0.76); ctx.translate(-W + 50, -H / 2);   // set to the right of the words
+  NETWORK.forEach((l, i) => {
+    ctx.save(); ctx.setLineDash([l.len * draw, l.len * 2]);
+    glowStroke(l.path, L[l.n], 5, 12, 0.6 * (1 - 0.5 * pick)); ctx.restore();
+    // stations: the nodes of the graph, each one breathing
+    l.P.forEach(([x, y], s) => {
+      if (draw < l.lens[s] / l.len) return;
+      const beat = 0.5 + 0.5 * Math.sin(t * 2.2 + i * 1.3 + s);
+      ctx.strokeStyle = `rgba(244,246,251,${(0.25 + 0.3 * beat) * (1 - 0.5 * pick)})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 7 + beat * 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = `rgba(244,246,251,${0.9 * (1 - 0.5 * pick)})`; ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+    });
+    const r = rng(i + 50), n = Math.round(l.len / 170);
+    for (let k = 0; k < n; k++) {
+      const f = ((r() + (k % 2 ? 1 : -1) * t * (0.02 + r() * 0.01)) % 1 + 1) % 1, [x, y] = netAt(l, f);
+      if (f > draw) continue;
+      const mine = i === MINE.line && k === MINE.k, lit = mine ? 1 : 1 - 0.7 * pick;
+      // the train, and above it the shape of when it gets where it is going
+      const sd = (9 + 7 * (0.5 + 0.5 * noise1(t * 0.5 + k * 3.1, i))) * (mine ? lerp(1, 2.4, pick) : 1), hgt = (mine ? lerp(26, 70, pick) : 26);
+      const p = new Path2D();
+      for (let q = -3; q <= 3.01; q += 0.25) { const px = x + q * sd, py = y - 14 - gauss(q, 0, 1) * hgt; q === -3 ? p.moveTo(px, py) : p.lineTo(px, py); }
+      ctx.save(); ctx.globalAlpha *= lit;
+      glowStroke(p, mine ? WARM : C.ice, mine ? lerp(2, 4, pick) : 2, mine ? 16 : 6, mine ? 1 : 0.7);
+      ctx.fillStyle = '#fff'; ctx.shadowColor = '#fff'; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.arc(x, y, mine ? lerp(4.5, 8, pick) : 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+  });
+  ctx.restore();
+  // room for the words
+  const g = ctx.createLinearGradient(0, 0, 1000, 0); g.addColorStop(0, 'rgba(5,7,13,0.96)'); g.addColorStop(0.6, 'rgba(5,7,13,0.8)'); g.addColorStop(1, 'rgba(5,7,13,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 1000, H);
+  ctx.restore();
+}
+
+// ---------- 3 and 5: under the clock ----------
+const HALL = { x: 1420, floor: 900 };
+function faceClock(x, y, r, minutes) {   // minutes past noon/midnight
+  ctx.save(); ctx.translate(x, y);
+  ctx.shadowColor = 'rgba(255,220,150,0.9)'; ctx.shadowBlur = 60;
+  ctx.fillStyle = '#fff3d6'; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#b98a3c'; ctx.lineWidth = r * 0.1; ctx.stroke();
+  ctx.strokeStyle = '#2a2140'; ctx.lineCap = 'round';
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * Math.PI * 2; ctx.lineWidth = i % 3 ? 2 : 4;
+    ctx.beginPath(); ctx.moveTo(Math.sin(a) * r * 0.74, -Math.cos(a) * r * 0.74); ctx.lineTo(Math.sin(a) * r * 0.86, -Math.cos(a) * r * 0.86); ctx.stroke();
+  }
+  const hA = (minutes / 720) * Math.PI * 2, mA = (minutes / 60) * Math.PI * 2;
+  ctx.lineWidth = r * 0.1; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.sin(hA) * r * 0.46, -Math.cos(hA) * r * 0.46); ctx.stroke();
+  ctx.lineWidth = r * 0.065; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.sin(mA) * r * 0.72, -Math.cos(mA) * r * 0.72); ctx.stroke();
+  ctx.fillStyle = '#2a2140'; ctx.beginPath(); ctx.arc(0, 0, r * 0.08, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+/** The concourse: tall windows with light falling through them, the kiosk, and the clock on top of it. */
+function hall(t, a, minutes, night) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  const wall = night ? '#161a36' : '#3b2a1e', glass = night ? [150, 180, 255] : [255, 214, 150];
+  const wg = ctx.createLinearGradient(700, 0, 1250, 0); wg.addColorStop(0, wall + '00'); wg.addColorStop(1, wall + '8c');
+  ctx.fillStyle = wg; ctx.fillRect(-400, -300, W + 800, HALL.floor + 300);
+  [-270, 0, 270].forEach((dx, i) => {
+    const x = HALL.x + dx;
+    const g = ctx.createLinearGradient(0, 150, 0, 620); g.addColorStop(0, `rgba(${glass},${night ? 0.3 : 0.55})`); g.addColorStop(1, `rgba(${glass},0.08)`);
+    ctx.beginPath(); ctx.roundRect(x - 80, 150, 160, 470, [80, 80, 0, 0]); ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = wall; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(x, 150); ctx.lineTo(x, 620); ctx.moveTo(x - 80, 330); ctx.lineTo(x + 80, 330); ctx.moveTo(x - 80, 480); ctx.lineTo(x + 80, 480); ctx.stroke();
+    // the light they let in
+    const b = ctx.createLinearGradient(x, 300, x - 320, HALL.floor); b.addColorStop(0, `rgba(${glass},${night ? 0.08 : 0.16})`); b.addColorStop(1, `rgba(${glass},0)`);
+    ctx.beginPath(); ctx.moveTo(x - 80, 200); ctx.lineTo(x + 80, 200); ctx.lineTo(x - 220, HALL.floor); ctx.lineTo(x - 480, HALL.floor); ctx.closePath(); ctx.fillStyle = b; ctx.fill();
+  });
+  // the kiosk and its clock
+  ctx.fillStyle = night ? '#0e1126' : '#241812';
+  rrect(HALL.x - 84, 742, 168, 158, 14); ctx.fill();
+  rrect(HALL.x - 100, 726, 200, 26, 10); ctx.fill();
+  ctx.fillRect(HALL.x - 8, 690, 16, 40);
+  faceClock(HALL.x, 630, 68, minutes);
+  ctx.fillStyle = night ? '#0a0c1a' : '#1c130e'; ctx.fillRect(-600, HALL.floor, W + 1200, H - HALL.floor + 300);
+  ctx.restore();
+}
+function bouquet(x, y, s = 1) {
+  ctx.save(); ctx.lineCap = 'round';
+  ctx.strokeStyle = '#6cbe45'; ctx.lineWidth = 4 * s; ctx.beginPath(); ctx.moveTo(x, y + 20 * s); ctx.lineTo(x + 4 * s, y - 6 * s); ctx.stroke();
+  [[0, -12, '#ff6f91'], [-9, -4, '#ffd166'], [10, -5, '#ff8fa3'], [2, -22, '#fff0b3']].forEach(([dx, dy, c]) => {
+    ctx.fillStyle = c; ctx.shadowColor = c; ctx.shadowBlur = 10; ctx.beginPath(); ctx.arc(x + dx * s, y + dy * s, 7 * s, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.restore();
+}
+/** Other people's meetings: they find each other and go, while one person stays. */
+function meetings(t, t0, a, tint) {
+  const r = rng(23);
+  ctx.save(); ctx.globalAlpha *= a;
+  for (let i = 0; i < 5; i++) {
+    const at = t0 + 0.6 + i * 1.5 + r() * 0.4, side = i % 2 ? 1 : -1, x = HALL.x + side * (190 + r() * 240);
+    const meet = easeInOut(seg(t, at, at + 1.3)), leave = Math.max(0, t - at - 1.8) * 170;
+    if (t > at - 1.6) person(x + side * leave, HALL.floor, 1.02, tint);
+    if (t > at) person(lerp(x + side * 420, x + side * 36, meet) + side * leave, HALL.floor, 1.0, tint);
+  }
+  ctx.restore();
+}
+
+/** A slow push in on the two of them. */
+function push(k) { ctx.translate(HALL.x - 60, 860); ctx.scale(k, k); ctx.translate(-HALL.x + 60, -860); }
+
+function sky(t) {
+  background(t, 0);
+  const sepia = life(t, 22, 35.6, 1), night = life(t, 54, 65.6, 1);
+  if (sepia > 0) {
+    const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#2a1c14'); g.addColorStop(1, '#b0763c');
+    ctx.save(); ctx.globalAlpha = sepia; ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+  }
+  if (night > 0) {
+    const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#141a3c'); g.addColorStop(1, '#c98a4c');
+    ctx.save(); ctx.globalAlpha = night; ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+  }
+}
+
+function render(t) {
+  ctx.save(); ctx.clearRect(0, 0, W, H);
+  sky(t);
+  dust(t, 0.3);
+
+  // 1: every train is a question; ask it enough times and the answer has a shape
+  galton(t, life(t, 0, 12.8, 0.7));
+  riseText(t, 'Every train', 140, 440, 0.8, 5.6, { size: 84, weight: 800 });
+  riseText(t, 'is a question.', 140, 536, 1.3, 5.6, { size: 84, weight: 800 });
+  riseText(t, 'When?', 140, 640, 3, 5.6, { size: 84, weight: 800, color: C.ice });
+  riseText(t, 'Ask it a million times,', 140, 440, 6.2, 12.2, { size: 66, weight: 800 });
+  riseText(t, 'and the answer', 140, 524, 8.6, 12.2, { size: 66, weight: 800, color: WARM });
+  riseText(t, 'has a shape.', 140, 604, 9, 12.2, { size: 66, weight: 800, color: WARM });
+
+  // 2: a city of them
+  city(t, life(t, 12.4, 22.2, 0.8));
+  riseText(t, 'One city.', 140, 440, 13.2, 17.4, { size: 76, weight: 800 });
+  riseText(t, 'Thousands of trains,', 140, 524, 14.2, 17.4, { size: 56, weight: 700, color: C.ice });
+  riseText(t, 'each with its own curve.', 140, 592, 14.5, 17.4, { size: 56, weight: 700, color: C.ice });
+  riseText(t, 'WhichWay reads them all,', 140, 440, 17.8, 21.8, { size: 60, weight: 800 });
+  riseText(t, 'every 30 seconds,', 140, 516, 18.3, 21.8, { size: 60, weight: 800 });
+  riseText(t, 'to answer for one.', 140, 600, 19.4, 21.8, { size: 60, weight: 800, color: WARM });
+
+  // 3: 1986, the first date
+  const c3 = life(t, 22.4, 35.4, 0.8);
+  if (c3 > 0) {
+    ctx.save(); push(lerp(1, 1.14, easeInOut(seg(t, 22.4, 35.4))));
+    hall(t, c3, 7 * 60 + 40 * easeInOut(seg(t, 25.4, 30.6)), false);
+    meetings(t, 22.6, c3, 'rgba(255,236,210,0.6)');
+    ctx.save(); ctx.globalAlpha = c3;
+    const run = easeOut(seg(t, 31, 32.8));
+    const look = t < 32 ? Math.sin(t * 1.3) * 7 : -6;
+    person(HALL.x - 150 + look, HALL.floor, 1.05, '#ffe7c2');                // her
+    if (run > 0) person(lerp(-60, HALL.x - 222, run), HALL.floor - Math.abs(Math.sin(t * 16)) * 10 * (1 - run), 1.1, '#fff');   // him, running
+    ctx.restore(); ctx.restore();
+    riseText(t, '1986. Under the clock,', 140, 290, 23, 27.2, { size: 66, weight: 800 });
+    riseText(t, 'at seven.', 140, 370, 23.4, 27.2, { size: 66, weight: 800 });
+    riseText(t, 'Their first date.', 140, 458, 24.8, 27.2, { size: 54, weight: 700, color: WARM });
+    riseText(t, 'His train sat in a tunnel', 140, 290, 27.6, 31.4, { size: 60, weight: 800 });
+    riseText(t, 'for forty minutes.', 140, 366, 28.2, 31.4, { size: 60, weight: 800, color: HELD });
+    riseText(t, 'She waited.', 140, 300, 31.8, 35, { size: 80, weight: 800, color: WARM, blur: true });
+    riseText(t, 'He promised her: never again.', 140, 386, 33, 35, { size: 50, weight: 700 });
+  }
+
+  // 4: forty years later, the 6 holds, and the engine weighs it
+  riseText(t, 'Forty years later.', W / 2, 520, 35.6, 38, { size: 68, weight: 700, align: 'center', color: C.ice, blur: true });
+  riseText(t, 'Same clock. Seven o’clock.', W / 2, 600, 36.2, 38, { size: 40, weight: 600, align: 'center', color: C.dim, display: false });
+  const box = { x: 1000, y: 300, w: 800, h: 420 };
+  const m1 = life(t, 38, 43.6, 0.6);
+  if (m1 > 0) {
+    ctx.save(); ctx.globalAlpha = m1;
+    engineMarey(t, box, { stops: ['Astor Pl', 'Union Sq', '23 St', '33 St', 'Grand Central'], color: L[6], at: 38.2, mine: 3, heldAt: 1, hold: 0.62, now0: 0.2, now1: 0.46, nowAt: [38.8, 43] });
+    engineFrame(box, 1, 'EVERY 6 TRAIN, AS THE FEED SEES IT');
+    ctx.restore();
+  }
+  riseText(t, '6:38. His train holds', 180, 440, 38.6, 43.2, { size: 60, weight: 800 });
+  riseText(t, 'at Union Square.', 180, 516, 39, 43.2, { size: 60, weight: 800 });
+  riseText(t, 'Again.', 180, 604, 40.6, 43.2, { size: 60, weight: 800, color: HELD });
+  const m2 = life(t, 43.4, 48.6, 0.6);
+  if (m2 > 0) { ctx.save(); ctx.globalAlpha = m2; holdCurve(t, { x: 1000, y: 340, w: 800, h: 360 }, { at: 43.6, mu: 9, p90: 16, heldFor: [1.2, 2] }); ctx.restore(); }
+  riseText(t, 'How long this time?', 180, 440, 43.8, 48.2, { size: 60, weight: 800 });
+  riseText(t, 'About 9 more minutes.', 180, 516, 45.2, 48.2, { size: 60, weight: 800, color: HELD });
+  riseText(t, 'Learned from every hold on this stretch.', 184, 600, 46.2, 48.2, { size: 28, weight: 500, color: C.dim, display: false });
+  const m3 = life(t, 48.4, 54.6, 0.6);
+  if (m3 > 0) {
+    ctx.save(); ctx.globalAlpha = m3;
+    routeOdds(t, { x: 1000, y: 380, w: 800, h: 320 }, { at: 48.6, from: mins(6, 45), to: mins(7, 15), deadline: mins(7, 0), deadlineLabel: 'under the clock', pickAt: 51.4,
+      routes: [{ label: 'Stay on the 6', mu: mins(7, 4), sd: 3, color: HELD_C, bullet: '6' }, { label: 'The 4, across the platform', mu: mins(6, 54), sd: 3, color: C.ok, bullet: '4' }] });
+    ctx.restore();
+  }
+  riseText(t, 'Stay: 9% by seven.', 180, 440, 49, 54.2, { size: 60, weight: 800, color: HELD });
+  riseText(t, 'Cross the platform: 98%.', 180, 516, 50.4, 54.2, { size: 60, weight: 800, color: C.ok });
+  riseText(t, 'Every route weighed against every train in the live feed.', 184, 600, 51.6, 54.2, { size: 28, weight: 500, color: C.dim, display: false });
+  // him, through all of it, flowers in hand; then across the platform
+  const him = life(t, 38.4, 54.4, 0.6);
+  if (him > 0) {
+    ctx.save(); ctx.globalAlpha = him;
+    const cross = easeInOut(seg(t, 52, 54)), x = lerp(250, 640, cross), bob = cross > 0 && cross < 1 ? Math.abs(Math.sin(t * 12)) * 5 : 0;
+    ctx.fillStyle = 'rgba(156,196,255,0.25)'; ctx.fillRect(180, 902, 560, 2);
+    ctx.fillStyle = 'rgba(255,204,51,0.5)'; ctx.fillRect(180, 908, 200, 3);
+    ctx.fillStyle = 'rgba(61,220,151,0.6)'; ctx.fillRect(540, 908, 200, 3);
+    person(x, 900 - bob, 1.1, '#fff'); bouquet(x + 26, 868 - bob, 1.1);
+    ctx.restore();
+  }
+
+  // 5: tonight
+  const c5 = life(t, 54.4, 65.4, 0.8);
+  if (c5 > 0) {
+    ctx.save(); push(lerp(1, 1.45, easeInOut(seg(t, 56, 65.4))));
+    hall(t, c5, 6 * 60 + 56 + 4 * easeInOut(seg(t, 57.4, 60.2)), true);
+    ctx.save(); ctx.globalAlpha = c5;
+    const walk = easeOut(seg(t, 54.8, 57)), come = easeInOut(seg(t, 59, 61)), meet = seg(t, 61, 61.9);
+    if (meet > 0) {
+      const gg = ctx.createRadialGradient(HALL.x - 150, 850, 0, HALL.x - 150, 850, 320 * easeOut(meet));
+      gg.addColorStop(0, `rgba(255,214,140,${0.6 * meet})`); gg.addColorStop(1, 'rgba(255,214,140,0)');
+      ctx.fillStyle = gg; ctx.fillRect(HALL.x - 520, 500, 740, 580);
+    }
+    const hx = lerp(-60, HALL.x - 176, walk), sx = lerp(W + 60, HALL.x - 124, come);
+    person(hx, HALL.floor, 1.1, '#fff');
+    bouquet(lerp(hx + 26, hx + 24, meet), 868 - 14 * easeOut(meet), 1.1);
+    person(sx, HALL.floor, 1.05, '#ffe7c2');
+    ctx.restore(); ctx.restore();
+    riseText(t, '6:56.', 140, 290, 55.8, 60.2, { size: 84, weight: 800, color: C.ok });
+    riseText(t, 'Tonight, he is the one waiting.', 140, 372, 56.8, 60.2, { size: 52, weight: 700 });
+    riseText(t, 'He kept his promise.', 140, 300, 61.2, 64.8, { size: 80, weight: 800, color: WARM, blur: true });
+    riseText(t, 'All that math,', 140, 392, 62.4, 64.8, { size: 52, weight: 700 });
+    riseText(t, 'for the minutes that matter.', 140, 456, 62.7, 64.8, { size: 52, weight: 700 });
+  }
+
+  endCardData(t, 65.2, 'Know before it matters.', 'COMING SOON FOR IPHONE');
+  vignette(0.5);
+  blackFades(t, DURATION);
+  ctx.restore();
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

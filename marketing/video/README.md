@@ -35,3 +35,18 @@ local and express race to a cross-platform change (`expressLocal`), and the movi
 (`endCardData`). `maya-engine.html` and `curtain-engine.html` are the Maya and Curtain films told with them, and
 their scores (`maya-engine`, `curtain-engine`) end on the signature chime: three FM bells timed to the icon
 drawing its stem, branch and dot.
+
+## Under the Clock
+
+`clock.html` (72 s) leads with the math and ends on the minute it is for. Arrivals fall through a Galton board
+(`galton`) until the answer to "when?" is a curve with its 8-in-10 window; the curve becomes the city (`city`), every
+train carrying its own distribution, and one train is picked out of the crowd. Then 1986, a first date under the
+station clock (`hall`), his train stuck for forty minutes and a promise; forty years on the 6 holds again and the
+engine graphics weigh it (`engineMarey`, `holdCurve`, `routeOdds`: stay 9% by seven, cross the platform 98%), and
+tonight he is the one waiting. The score is the `clock` spec in `scores.py`, ending on the chime.
+
+```bash
+python3 scores.py clock clock.wav
+./render_parts.sh clock.html clock_silent.mp4 4
+ffmpeg -i clock_silent.mp4 -i clock.wav -c:v copy -c:a aac -b:a 256k -shortest whichway-under-the-clock.mp4
+```

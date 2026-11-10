@@ -85,6 +85,20 @@ SPECS = {
         mute=[(37.8, 48.0)],  # the theatre goes quiet until Leo's line
     ),
 }
+# Under the Clock: single notes falling like the dots on the board, a pulse when the city draws itself, a hush for
+# 1986, sparse and uneasy while the 6 holds, a lift when he crosses the platform and a swell when she arrives;
+# D - A/C# - Bm - G at 80 bpm, ending on the signature chime
+SPECS['clock'] = dict(
+    dur=72, beat=0.75, bar=3.0, hit=65.2, bells=[], chime=62,
+    chords=[[38, 54, 57, 62, 66], [37, 52, 57, 61, 64], [35, 54, 59, 62, 66], [31, 55, 59, 62, 67]],
+    hit_notes=[26, 38, 50, 57, 62, 66, 69, 74, 78],
+    pad=[(0, 0.35), (9.4, 0.7), (12.6, 0.9), (22.2, 0.55), (31.8, 0.8), (35.6, 0.5), (48.6, 0.7), (51.4, 0.95),
+         (58, 0.9), (61, 1.25), (65, 1.1)],
+    arp=dict(start=0.9, sub=[(0, 1), (6.2, 2), (12.6, 4), (22.2, 1), (31.8, 2), (35.6, 1), (51.4, 2), (54.4, 2), (61, 4)],
+             vel=[(0.9, 0.5), (9, 0.75), (12.6, 0.9), (22.2, 0.45), (33, 0.6), (38, 0.4), (51.4, 0.8), (61, 1.0)], soft=True),
+    kick=(12.6, 0.5), hats=None, bass=(12.6, 0.7), riser=2.4,
+    mute=[(22.2, 51.4), (54.4, 61.0)],  # the pulse stops for 1986 and the hold, returns as he crosses, and again when she arrives
+)
 # engine cuts: the same scores, ending on the signature chime instead of the plucked bells
 SPECS['maya-engine'] = dict(SPECS['maya'], chime=61)
 SPECS['curtain-engine'] = dict(SPECS['curtain'], chime=65)
