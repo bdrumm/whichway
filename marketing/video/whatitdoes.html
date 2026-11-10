@@ -1,0 +1,200 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhichWay: What It Does</title>
+<style>html, body { margin: 0; background: #000; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script src="pickup-kit.js"></script>
+<script src="engine.js"></script>
+<script src="cine.js"></script>
+<script src="nyc.js"></script>
+<script>
+// "What It Does": the plain one. No story, almost no pictures: six numbered lines, each saying one thing the app does,
+// each with one small diagram that moves, then all six together and the one tap that corrects it. Every line is a
+// function the app has (the wording of the cards is the app's own). 49.5 s on a 96 bpm grid: a beat is 0.625 s, a bar
+// 2.5 s, every line gets two bars. The score is `whatitdoes`.
+const DURATION = 49.5, END = 42.5, B = 0.625;
+const DX = 1190, DW = 610;   // the diagram's column
+const ITEMS = [
+  { at: 5, head: ['Knows which train', 'you’re on.'], sub: ['It reads how the phone moves and checks', 'it against the live feed. No check-in.'], short: 'Knows which train you’re on', draw: dMotion },
+  { at: 10, head: ['Ranks every', 'way there.'], sub: ['By when you would arrive,', 'as the trains are actually running.'], short: 'Ranks every way there', draw: dRoutes },
+  { at: 15, head: ['Shows your time', 'to spare at a change.'], sub: ['To the second, and when the next', 'one comes if you miss it.'], short: 'Shows your time to spare at each change', draw: dSpare },
+  { at: 20, head: ['Says what a', 'hold will do.'], sub: ['Ends as usual, drags on, or clears now:', 'an arrival time for each.'], short: 'Says what a hold will do', draw: dHold },
+  { at: 25, head: ['Counts down to', 'the doors opening.'], sub: ['Not to the train arriving.', 'To the moment you can step on.'], short: 'Counts down to the doors opening', draw: dDoors },
+  { at: 30, head: ['Tells you before', 'you leave.'], sub: ['A heads-up ahead of your usual trips,', 'if you switch it on.'], short: 'Tells you before you leave', draw: dNotify },
+];
+const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function panel(x, y, w, h, a = 1, hot = false) {
+  ctx.save(); ctx.globalAlpha *= a; rrect(x, y, w, h, 22); ctx.fillStyle = 'rgba(20,30,58,0.86)'; ctx.fill();
+  ctx.strokeStyle = hot ? C.blue : C.cardLine; ctx.lineWidth = hot ? 4 : 2; ctx.stroke(); ctx.restore();
+}
+const cap = (s, x, y, a = 1, color = C.dim, align = 'left') => text(s, x, y, { size: 20, weight: 700, color, spacing: 3, display: false, alpha: a, align });
+
+// ---------- 1: the phone's motion, read as walking, waiting, riding ----------
+function dMotion(t, u) {
+  const y = 450, k = easeInOut(seg(u, 0.4, 3.0)), n = 360;
+  ctx.strokeStyle = 'rgba(156,196,255,0.25)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(DX, y); ctx.lineTo(DX + DW, y); ctx.stroke();
+  ctx.strokeStyle = C.sky; ctx.lineWidth = 3.5; ctx.lineJoin = 'round'; ctx.beginPath();
+  for (let i = 0; i <= n * k; i++) {
+    const f = i / n, d = f < 0.36 ? 52 * Math.sin(f * 96) * (0.75 + 0.25 * noise1(f * 30, 3)) : f < 0.6 ? 3 * noise1(f * 240, 5) : 13 * noise1(f * 110, 7) + 5 * Math.sin(f * 420);
+    i ? ctx.lineTo(DX + DW * f, y - d) : ctx.moveTo(DX + DW * f, y - d);
+  }
+  ctx.stroke();
+  [0.36, 0.6].forEach(f => { if (k > f) { ctx.strokeStyle = 'rgba(244,246,251,0.28)'; ctx.lineWidth = 2; ctx.setLineDash([6, 8]); ctx.beginPath(); ctx.moveTo(DX + DW * f, y - 80); ctx.lineTo(DX + DW * f, y + 80); ctx.stroke(); ctx.setLineDash([]); } });
+  [['WALKING', 0.18], ['WAITING', 0.48], ['RIDING', 0.8]].forEach(([s, f]) => cap(s, DX + DW * f, y + 118, seg(k, f - 0.1, f), C.dim, 'center'));
+  const a = easeOut(seg(u, 3.0, 3.5));
+  panel(DX, 640 + (1 - a) * 20, DW, 126, a);
+  bullet(DX + 70, 703 + (1 - a) * 20, 38, 'F', a);
+  text('On the F', DX + 132, 698 + (1 - a) * 20, { size: 46, weight: 700, alpha: a });
+  text('boarded 9:42 · the feed agrees', DX + 134, 738 + (1 - a) * 20, { size: 24, weight: 500, color: C.ice, display: false, alpha: a });
+}
+// ---------- 2: three ways there, re-ranked as one of them gets faster ----------
+function dRoutes(t, u) {
+  const sw = easeInOut(seg(u, 2.0, 2.7)), rows = [
+    { b: ['F'], arr: '10:01', min: '31 min', y0: 0, y1: 1 },
+    { b: ['F', 'Q'], arr: sw < 0.5 ? '10:03' : '9:58', min: sw < 0.5 ? '33 min' : '28 min', y0: 1, y1: 0, win: true },
+    { b: ['E', '6'], arr: '10:09', min: '39 min', y0: 2, y1: 2 },
+  ];
+  rows.forEach((r, i) => {
+    const a = easeOut(seg(u, 0.4 + i * 0.18, 0.9 + i * 0.18)), y = 330 + lerp(r.y0, r.y1, sw) * 150, hot = r.win && sw > 0.5;
+    panel(DX, y, DW, 126, a, hot);
+    r.b.forEach((b, j) => { bullet(DX + 62 + j * 96, y + 63, 32, b, a); if (j) text('›', DX + 62 + j * 96 - 48, y + 76, { size: 40, weight: 500, color: C.dim, align: 'center', alpha: a }); });
+    text(r.arr, DX + DW - 30, y + 66, { size: 54, weight: 700, mono: true, align: 'right', alpha: a, color: hot ? C.ok : C.ink });
+    text('arrive · ' + r.min, DX + DW - 32, y + 100, { size: 22, weight: 500, color: C.ice, display: false, align: 'right', alpha: a });
+  });
+}
+// ---------- 3: the change, and how long there is to make it ----------
+function dSpare(t, u) {
+  const a = easeOut(seg(u, 0.4, 0.9)), left = 130 - Math.max(0, u - 0.9), y = 330;
+  panel(DX, y, DW, 150, a);
+  text(mmss(left), DX + 34, y + 72, { size: 68, weight: 700, mono: true, alpha: a });
+  text('to make the', DX + 222, y + 46, { size: 26, weight: 500, color: C.ice, display: false, alpha: a });
+  bullet(DX + 244, y + 84, 24, '4', a); text('at Nevins St', DX + 280, y + 94, { size: 34, weight: 700, alpha: a });
+  text('off 9:42 · 1:30 walk · 4 9:45 · next 4 9:51, +6:00', DX + 36, y + 128, { size: 21, weight: 500, color: C.dim, display: false, alpha: a });
+  // the same thing as a line: off the train, the walk, the minutes in hand
+  const ty = 620, x0 = DX + 14, x1 = DX + DW - 14, xm = lerp(x0, x1, 0.41), k = easeInOut(seg(u, 1.1, 2.6));
+  ctx.lineCap = 'round'; ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(244,246,251,0.4)'; ctx.setLineDash([2, 14]); ctx.beginPath(); ctx.moveTo(x0, ty); ctx.lineTo(lerp(x0, xm, seg(k, 0, 0.41)), ty); ctx.stroke(); ctx.setLineDash([]);
+  if (k > 0.41) { ctx.strokeStyle = C.ok; ctx.beginPath(); ctx.moveTo(xm, ty); ctx.lineTo(lerp(xm, x1, seg(k, 0.41, 1)), ty); ctx.stroke(); }
+  [[x0, 'OFF 9:42', 0, 'left'], [xm, 'PLATFORM', 0.41, 'center'], [x1, 'THE 4 LEAVES', 1, 'right']].forEach(([x, s, f, al]) => {
+    const on = seg(k, f - 0.05, f + 0.02) || (f === 0 ? seg(u, 1.0, 1.2) : 0);
+    ctx.fillStyle = f === 1 ? L[4] : C.ink; ctx.globalAlpha = on; ctx.beginPath(); ctx.arc(x, ty, 11, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    cap(s, x, ty - 34, on, C.dim, al);
+  });
+  text('2:10 in hand', (xm + x1) / 2, ty + 56, { size: 30, weight: 700, color: C.ok, align: 'center', alpha: seg(u, 2.5, 2.9) });
+  text('1:30 walk', (x0 + xm) / 2, ty + 56, { size: 26, weight: 500, color: C.dim, align: 'center', display: false, alpha: seg(u, 1.6, 2.0) });
+}
+// ---------- 4: a held train, and the three ways it can go ----------
+function dHold(t, u) {
+  const y = 330, pulse = 0.6 + 0.4 * Math.sin(t * Math.PI * 2 / B);
+  ctx.strokeStyle = L.F; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.globalAlpha = seg(u, 0.3, 0.7); ctx.beginPath(); ctx.moveTo(DX + 10, y); ctx.lineTo(DX + DW - 10, y); ctx.stroke(); ctx.globalAlpha = 1;
+  [0.12, 0.34, 0.78, 0.95].forEach(f => { ctx.fillStyle = '#fff'; ctx.globalAlpha = seg(u, 0.4, 0.8); ctx.beginPath(); ctx.arc(DX + DW * f, y, 8, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; });
+  const hx = DX + DW * 0.56, ha = seg(u, 0.7, 1.0);
+  glowAt(hx, y, 80, '255,204,51', 0.7 * pulse * ha); ctx.fillStyle = HELD; ctx.globalAlpha = ha; ctx.beginPath(); ctx.arc(hx, y, 15, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  cap('HELD', hx, y - 36, ha, HELD, 'center');
+  [['Ends as usual', '9:58', C.ink, 1.2], ['Drags on', '10:07', C.late, 1.8], ['Clears now', '9:54', C.ok, 2.4]].forEach(([s, arr, col, at], i) => {
+    const a = easeOut(seg(u, at, at + 0.45)), ry = 410 + i * 122;
+    panel(DX, ry + (1 - a) * 16, DW, 104, a);
+    text(s, DX + 34, ry + 65 + (1 - a) * 16, { size: 38, weight: 700, alpha: a });
+    text(arr, DX + DW - 30, ry + 68 + (1 - a) * 16, { size: 50, weight: 700, mono: true, align: 'right', color: col, alpha: a });
+  });
+}
+// ---------- 5: the count to the doors, not to the train ----------
+function dDoors(t, u) {
+  const left = Math.max(0, Math.ceil(3.8 - u - 1e-6)), open = easeInOut(seg(u, 3.8, 4.3)), a = easeOut(seg(u, 0.3, 0.7));
+  cap('DOORS OPEN IN', DX + 4, 330, a, C.ice);
+  text(`0:0${Math.min(3, left)}`, DX - 4, 470, { size: 150, weight: 700, mono: true, alpha: a, color: left === 0 ? C.ok : C.ink });
+  // the doors
+  const cx = DX + DW - 110, cy = 400, dw = 74, dh = 180;
+  ctx.save(); ctx.globalAlpha = a;
+  ctx.fillStyle = `rgba(255,226,170,${0.95 * open})`; ctx.fillRect(cx - dw, cy - dh / 2, dw * 2, dh);
+  [-1, 1].forEach(s => { ctx.fillStyle = '#a9b3c1'; const x = cx + (s < 0 ? -dw : 0) + s * open * dw * 0.92; ctx.fillRect(x, cy - dh / 2, dw - 2, dh); ctx.fillStyle = '#0b0c14'; ctx.beginPath(); ctx.roundRect(x + 14, cy - dh / 2 + 22, dw - 30, 70, 6); ctx.fill(); });
+  ctx.strokeStyle = '#5d6878'; ctx.lineWidth = 6; ctx.strokeRect(cx - dw - 3, cy - dh / 2 - 3, dw * 2 + 6, dh + 6);
+  ctx.restore();
+  // where the count is aimed
+  const ty = 650, x0 = DX + 14, x1 = DX + DW - 14, xa = lerp(x0, x1, 0.52), k = easeInOut(seg(u, 0.8, 2.2));
+  ctx.strokeStyle = 'rgba(244,246,251,0.3)'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x0, ty); ctx.lineTo(lerp(x0, x1, k), ty); ctx.stroke();
+  const p = seg(k, 0.5, 0.55), q = seg(k, 0.95, 1);
+  ctx.fillStyle = C.dim; ctx.globalAlpha = p; ctx.beginPath(); ctx.arc(xa, ty, 10, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  cap('TRAIN ARRIVES', xa, ty - 32, p, C.dim, 'center');
+  ctx.fillStyle = C.ok; ctx.globalAlpha = q; ctx.beginPath(); ctx.arc(x1, ty, 13, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  cap('DOORS OPEN', x1 + 10, ty - 32, q, C.ok, 'right');
+  text('the count is to here', x1 + 10, ty + 52, { size: 26, weight: 600, color: C.ok, align: 'right', display: false, alpha: seg(u, 2.3, 2.7) });
+}
+// ---------- 6: the notification before a usual trip ----------
+function dNotify(t, u) {
+  const a = life(t, 30.6, 34.7, 0.4), y = 420 - (1 - easeOut(seg(u, 0.6, 1.1))) * 60, x = DX, w = DW;
+  text('8:02', x + w / 2, 350, { size: 120, weight: 300, align: 'center', alpha: easeOut(seg(u, 0.2, 0.7)) * 0.9, color: C.ice });
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a; ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 40; ctx.fillStyle = 'rgba(16,22,44,0.96)'; rrect(x, y, w, 204, 34); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = C.cardLine; ctx.lineWidth = 2; rrect(x, y, w, 204, 34); ctx.stroke();
+  iconTile(x + 70, y + 84, 84, 1, { stem: 1, right: 1, left: 1, dot: 1 });
+  text('Work to 34 St', x + 134, y + 62, { size: 34, weight: 700 });
+  ['You usually leave around 8:10.', 'F, change to the Q at Lexington Av-63 St,', 'about 24 min.'].forEach((l, i) => text(l, x + 134, y + 102 + i * 32, { size: 23, weight: 500, color: C.ice, display: false }));
+  ctx.restore();
+}
+
+// ---------- the lines ----------
+function item(t, it, n) {
+  const u = t - it.at, a = life(t, it.at + 0.05, it.at + 5.0, 0.35);
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a;
+  const dy = (1 - easeOut(seg(u, 0.05, 0.6))) * 26;
+  text(String(n), 146, 360 + dy, { size: 150, weight: 800, color: C.blue, spacing: -4 });
+  ctx.fillStyle = C.blue; ctx.fillRect(150, 392 + dy, 96 * easeOut(seg(u, 0.2, 0.8)), 6);
+  it.head.forEach((s, i) => riseText(t, s, 150, 500 + i * 96, it.at + 0.15 + i * 0.12, null, { size: 86, weight: 800, spacing: -2.5 }));
+  it.sub.forEach((s, i) => riseText(t, s, 152, 712 + i * 52, it.at + 0.7 + i * 0.1, null, { size: 38, weight: 500, color: C.ice, display: false }));
+  ctx.save(); ctx.translate(1468, 540); ctx.scale(1.18, 1.18); ctx.translate(-DX - DW / 2, -540); it.draw(t, u); ctx.restore();   // the diagram, in its column
+  ctx.restore();
+}
+function rail(t) {   // where we are in the six
+  const a = life(t, 4.8, 35.0, 0.3); if (a <= 0) return;
+  ITEMS.forEach((it, i) => {
+    const on = t >= it.at && t < it.at + 5, done = t >= it.at + 5, x = 152 + i * 66;
+    ctx.globalAlpha = a; ctx.fillStyle = on ? C.blue : done ? 'rgba(244,246,251,0.5)' : 'rgba(244,246,251,0.16)';
+    rrect(x, 968, on ? 52 : 40, 8, 4); ctx.fill(); ctx.globalAlpha = 1;
+  });
+}
+function sIntro(t) {
+  const a = 1 - easeIn(seg(t, 4.3, 4.9));
+  ctx.save(); ctx.globalAlpha = a;
+  iconTile(214, 372, 108, lerp(0.7, 1, expoOut(seg(t, 0.3, 1.3))) * (t > 0.3 ? 1 : 0), { stem: seg(t, 0.5, 1.1), right: seg(t, 0.8, 1.5), left: seg(t, 0.9, 1.6), dot: seg(t, 1.3, 1.7) });
+  riseText(t, 'WhichWay', 290, 392, 0.9, null, { size: 60, weight: 800, spacing: -1.5 });
+  slam(t, 'What it does.', 150, 620, 1.25, null, { size: 170, spacing: -6 });
+  riseText(t, 'Six lines. No story.', 156, 720, 2.5, null, { size: 44, weight: 500, color: C.ice, display: false });
+  ctx.restore();
+}
+function sAll(t) {
+  const a = 1 - easeIn(seg(t, 41.7, 42.3));
+  ctx.save(); ctx.globalAlpha = a;
+  ITEMS.forEach((it, i) => {
+    const at = 35.15 + i * 0.3125, y = 232 + i * 92;
+    riseText(t, String(i + 1), 232, y, at, null, { size: 58, weight: 800, color: C.blue, align: 'center' });
+    riseText(t, it.short, 300, y - 2, at + 0.05, null, { size: 52, weight: 700, spacing: -1 });
+  });
+  ctx.fillStyle = C.cardLine; ctx.fillRect(210, 780, 1500 * easeOut(seg(t, 37.5, 38.3)), 2);
+  riseText(t, 'And if it ever gets it wrong, one tap.', 210, 862, 37.7, null, { size: 44, weight: 500, color: C.ice, display: false });
+  const ca = easeOut(seg(t, 38.5, 39.0)), w = chip(210, 902, 'Changed to the Q', C.sky, ca, 30) || 0;
+  chip(210 + w + 22, 902, 'Not on the train', C.sky, easeOut(seg(t, 38.75, 39.25)), 30);
+  ctx.restore();
+}
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none'; ctx.globalCompositeOperation = 'source-over';
+  background(t, 0.25 + 0.15 * Math.sin(t * 0.4)); dust(t, 0.35);
+  if (t < 5) sIntro(t);
+  ITEMS.forEach((it, i) => item(t, it, i + 1));
+  rail(t);
+  if (t >= 35 && t < END) sAll(t);
+  if (t >= END - 0.5) { const a = seg(t, END - 0.5, END + 0.1); ctx.fillStyle = `rgba(5,7,13,${a})`; ctx.fillRect(0, 0, W, H); endCardData(t, END, 'It does the watching. You do the riding.', 'COMING SOON FOR IPHONE'); }
+  grain(t, 0.07);
+  vignette(0.45);
+  blackFades(t, DURATION);
+}
+boot(DURATION, render);
+</script>
+</body>
+</html>

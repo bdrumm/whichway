@@ -223,6 +223,18 @@ SPECS['threethirty'] = dict(
     swells=[(41.2, 42.0), (44.2, 45.0), (58.6, 60.0)], doors=[44.3], rides=[(45.0, 47.0, 48.0)],
     gliss=[(17.75, 0.3, 0.35), (47.3, 0.7, 0.9)],
 )
+# What It Does: the plain demo, so the score stays out of the way. D major at 96 bpm, a felt piano in eighths over a
+# soft pulse, one low struck note as each of the six lines lands; a clock counts the last three seconds to the doors
+# and they chime; the notification sounds when the notification is on screen, and again as the logo
+SPECS['whatitdoes'] = dict(
+    dur=49.5, beat=0.625, bar=2.5, hit=42.5, bells=[], logo=62, logo_style='notify', riser=None,
+    chords=SPECS['clock']['chords'], hit_notes=SPECS['clock']['hit_notes'],
+    pad=[(0, 0.5), (5, 0.7), (35, 0.9), (42.5, 1.0)],
+    arp=dict(start=5.0, sub=[(0, 2), (35, 1)], vel=[(5, 0.6), (25, 0.7), (34.9, 0.7), (35, 0.5), (42, 0.4)], soft=True),
+    kick=(5.0, 0.45), hats=None, bass=(5.0, 0.7), mute=[(35, 42.5)],
+    blooms=[(1.25, 0.8), (5, 0.5), (10, 0.5), (15, 0.5), (20, 0.5), (25, 0.5), (30, 0.5), (35, 0.8)],
+    clock=[(25.8, 28.7, 1.0, 1.1)], doors=[28.8], notify=[30.6], gliss=[(34.4, 0.6, 0.6)], swells=[(41.3, 42.5)],
+)
 # the logo sounds on their own, for choosing between and for reuse: python3 scores.py logo-fork out.wav (see Score.logo)
 LOGOS = ('fork', 'rails', 'chime', 'swell', 'heart', 'clock', 'notify')
 for _style in LOGOS:

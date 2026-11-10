@@ -134,6 +134,22 @@ ffmpeg -i threethirty_silent.mp4 -i threethirty.wav -c:v libx264 -preset slow -c
   -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-every-day-at-3-30.mp4
 ```
 
+## What It Does
+
+`whatitdoes.html` (49.5 s) is the plain one: no story and almost no pictures. Six numbered lines, each one thing the
+app does, each with one small diagram that moves (`ITEMS`: the line, what is under it, and the function that draws its
+diagram), then all six together and the one tap that corrects it. Every line is a function the app has, and the cards
+use the app's own wording (the hold choices, the time to make a change, the notification before a usual trip), so
+check the app before changing a line. The score is the `whatitdoes` spec: a felt piano over a soft pulse, a struck
+note as each line lands, the notification where the notification is on screen.
+
+```bash
+python3 scores.py whatitdoes whatitdoes.wav
+./render_parts.sh whatitdoes.html whatitdoes_silent.mp4 4
+ffmpeg -i whatitdoes_silent.mp4 -i whatitdoes.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
+  -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-what-it-does.mp4
+```
+
 ## Sound samples
 
 The logo sound has seven candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,
