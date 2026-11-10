@@ -73,6 +73,15 @@ struct RideSession {
     /// Set when the rider rode on past the stop the route had them leave the train at.
     private(set) var stayedOn: StayedOn?
     private var stayedOnChecked: Set<Int> = []
+    /// The walk-off at the change told from the route's timing alone (the train left it, nothing pushed the phone): kept
+    /// until the train in hand reaches the stops beyond, so a stay-on felt by then can undo it (`checkOffByTiming`).
+    private var offByTiming: (leg: Int, trainId: String, key: String, pastIdx: Int, atStopTs: Double)?
+    /// A walk-off told after the fact (at `offTs`, told at `toldTs`): the detector stood down only then, so a pull-away it
+    /// feels soon after may be a connection the rider was already on (`handleEvents`).
+    private var lateOff: (leg: Int, offTs: Double, toldTs: Double)?
+    /// Legs whose departure was moved back to a connection that had already left (`lateOff`), with that moment: the first
+    /// push felt after it still has to fit that train, not another one leaving the platform (`checkMovedBack`).
+    private var movedBack: [Int: Double] = [:]
     /// The change short of the route's own on offer right now (the planner sets it from the train in hand), with when
     /// the rider would have stepped off there: the trip bar and the Live Activity show it as one tap.
     private(set) var earlyChange: (change: EarlyChange, alightTs: Double)?
@@ -122,6 +131,12 @@ struct RideSession {
     /// little before (the feed's time is an estimate), and up to the doors closing after.
     var quickChangeBeforeSec = 45.0
     var quickChangeAfterSec = 75.0
+    /// A walk-off told this long after the moment it is put at was told late (`lateOff`).
+    var lateOffSec = 20.0
+    /// A pull-away felt this soon after a late walk-off was the phone already moving with a train when it was told.
+    var lateOffDepartureSec = 45.0
+    /// The least time from stepping off to a connection pulling away with the rider on it (a step onto a train standing there).
+    var stepOnSec = 5.0
     /// Position of a stop on a line (line key, stop index), from the published geometry; set by the planner.
     var stopCoordinate: ((String, Int) -> (lat: Double, lon: Double)?)?
     /// The changes the rider could have made off the train in hand toward the destination (the planner's
@@ -199,6 +214,7 @@ struct RideSession {
         log.reset(); transferLog.reset(); prevLog.reset(); logLeg = -1; candidates = [:]; beliefs = []; seenEvents = 0; handSet = []; dismissed = []
         departureBeliefs = [:]; departedTs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
         stayedOn = nil; stayedOnChecked = []; locationRides = []; earlyChange = nil; changedEarly = nil; lastNow = now
+        offByTiming = nil; lateOff = nil; movedBack = [:]
     }
 
     /// One summarised second of motion.
@@ -268,6 +284,10 @@ struct RideSession {
     /// there, and the route goes on from the change; where the pushes began with the route's own connection pulling
     /// away, the rider is on it. Platform shaking no longer counts as riding on (Nov 9 at Jay St: three minutes on
     /// the platform, read as still on the F, and the route moved to W 4 St under the rider).
+    ///
+    /// The route's timing decides it as soon as it can: once the feed has the train leaving the stop and nothing has
+    /// pushed the phone since it got there, the rider is off now, not when the train reaches the stop beyond (Nov 10 at
+    /// Jay St: the countdown ran out and the phone kept the rider on the F for minutes, then dated the A from then).
     private mutating func checkStayedOn(now: Double) {
         guard let t = tracker, t.phase == .riding, t.sensing else { return }
         let leg = t.timeline.legsRidden
@@ -277,22 +297,110 @@ struct RideSession {
         guard let atStop = (c.stopTs[past] ?? c.alightTs).map({ $0 - lag }),
               let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, atStop > dep else { return }
         let later = c.stopTs.filter { $0.key > past }.sorted { $0.key < $1.key }.map { $0.value - lag }
-        let connections = leg + 1 < legs.count ? transferLog.pullAways() : []
-        switch continuity.pastStop(atStopTs: atStop, laterStopTs: later, pushTimes: t.pushRuns, connectionPullAways: connections, now: now) {
+        let hasNext = leg + 1 < legs.count
+        let connections = hasNext ? transferLog.pullAways() : []
+        let left = hasNext ? transferLog.pullAwaySpans() : []
+        // when it left the stop, by the feed: after the last poll that had it standing there, else its moment there and a dwell
+        let leaves = c.stoodAt[past].map { $0.to + pollGapSec } ?? atStop + PlatformTiming.dwellSec
+        switch continuity.pastStop(atStopTs: atStop, laterStopTs: later, pushTimes: t.pushRuns, connectionPullAways: connections, connectionLeft: left,
+                                   trainLeavesTs: leaves, now: now) {
         case .waiting:
             return
         case .stayedOn:
             stayedOnChecked.insert(leg)
             stayedOn = StayedOn(leg: leg, key: c.key, trainId: c.trainId, pastIdx: past, ts: now)
         case let .steppedOff(at):
-            tracker?.alightStanding(at: at)
-            handleEvents()
-            case let .tookConnection(offAt, pullAwayTs):
+            // told before the train reached the stop beyond: the timing's call, which a stay-on felt by then can still undo
+            let byTiming = !later.contains { $0 > atStop && $0 + continuity.settleSec <= now }
+            alightLate(at: at, now: now)
+            if byTiming, hasNext { offByTiming = (leg, c.trainId, c.key, past, atStop) }
+        case let .tookConnection(offAt, pullAwayTs):
             tracker?.alightStanding(at: offAt)
             handleEvents()
             tracker?.beginRiding(now: now, departedTs: pullAwayTs)
             handleEvents()
-            }
+        }
+    }
+
+    /// The ride closes at `at`, a walk-off no sensor felt, told now (`checkStayedOn`, `checkSamePlatformChange`). Told
+    /// well after the moment it is put at, the next pull-away the detector feels may be the train the rider is already on.
+    private mutating func alightLate(at: Double, now: Double) {
+        let leg = currentLeg
+        tracker?.alightStanding(at: at)
+        handleEvents()
+        if now - at >= lateOffSec { lateOff = (leg, at, now) }
+    }
+
+    /// After a walk-off told from the timing alone: while the rider is between trains (or on a connection nothing has
+    /// backed yet), the train in hand is still followed, and if it is felt running on to the stops beyond, the rider
+    /// stayed on: the walk-off is struck, the ride resumes, and the planner hears of the stay-on as before. A connection
+    /// the feed backs, or one the rider named, settles it the other way.
+    private mutating func checkOffByTiming(now: Double) {
+        guard let u = offByTiming else { return }
+        guard let t = tracker, t.phase == .riding, t.timeline.legsRidden == u.leg + 1, !handSet.contains(u.leg + 1) else { offByTiming = nil; return }
+        let next = u.leg + 1
+        // a connection the feed saw leave as the ride began is the plan's change made: the route's prior, when the pushes
+        // since could be either train's (the F running on to York St, the A to High St, side by side). The ride's own pushes
+        // back nothing here, and a ride claimed only after pushes no connection explains came from the train in hand
+        // running on (the detector, stood down, takes its shaking for a pull-away, and an A may be at Jay St just then).
+        let firstPush = t.pushRuns.first { $0 >= u.atStopTs + continuity.afterArrivalSec }
+        if t.onTrain, let dep = t.ride(next)?.departedTs, firstPush.map({ dep <= $0 + continuity.connectionWindowSec }) ?? true,
+           movedBack[next] != nil || platformLog(next)?.judgePullAway(at: dep, now: now) == .backed {
+            offByTiming = nil; return
+        }
+        guard let lg = platformLog(u.leg), let c = lg.entry(u.trainId) else { return }
+        let lag = PlatformTiming.recordedLag(route: c.route)
+        let later = c.stopTs.filter { $0.key > u.pastIdx }.sorted { $0.key < $1.key }.map { $0.value - lag }
+        let conn = platformLog(next)
+        let vv = continuity.pastStop(atStopTs: u.atStopTs, laterStopTs: later, pushTimes: t.pushRuns, connectionPullAways: conn?.pullAways() ?? [],
+                                   connectionLeft: conn?.pullAwaySpans() ?? [], now: now)
+        switch vv {
+        case .waiting:
+            return
+        case .steppedOff, .tookConnection:
+            offByTiming = nil
+        case .stayedOn:
+            offByTiming = nil
+            resumeRide(leg: u.leg)
+            stayedOnChecked.insert(u.leg)
+            stayedOn = StayedOn(leg: u.leg, key: u.key, trainId: u.trainId, pastIdx: u.pastIdx, ts: now)
+        }
+    }
+
+    /// The ride on leg `leg` goes on (`TripTracker.resumeRide`): the next leg's start is taken back, and the logs follow
+    /// the leg in hand again.
+    private mutating func resumeRide(leg: Int) {
+        tracker?.resumeRide()
+        let next = leg + 1
+        beliefs.removeAll { $0.leg == next }
+        departureBeliefs[next] = nil; candidates[next] = nil; departedTs[next] = nil
+        departureChecked.remove(next); motionUnconfirmed.remove(next); dismissed.remove(next); locationRides.remove(next)
+        if logLeg == next { transferLog = log; log = prevLog; prevLog = DepartureLog(); logLeg = leg }
+        lastAlight = nil; lateOff = nil; movedBack[next] = nil
+        seenEvents = tracker?.timeline.events.count ?? 0
+    }
+
+    /// A departure moved back to a connection that had left before the late walk-off was told (`handleEvents`) is a guess
+    /// the next push tests: on that train, the push is its braking into the next stop; still on the platform, it is the
+    /// rider's own train pulling away from there, which the feed shows as a train of the leg leaving then. That one is the
+    /// ride, from that push.
+    private mutating func checkMovedBack(now: Double) {
+        guard let t = tracker, t.phase == .riding, t.onTrain else { movedBack = [:]; return }
+        let leg = t.timeline.legsRidden
+        guard let moved = movedBack[leg] else { movedBack = [:]; return }
+        guard !handSet.contains(leg), let dep = t.ride(leg)?.departedTs, dep == moved else { movedBack[leg] = nil; return }
+        guard let p = t.pushRuns.first(where: { $0 > moved + continuity.afterArrivalSec && $0 <= now }), let lg = platformLog(leg) else { return }
+        let pulls = lg.pullAways(), left = lg.pullAwaySpans()
+        // the feed may not show the train gone yet: wait a poll or two after the push before ruling
+        if !continuity.isConnection(p, pullAways: pulls, left: left) {
+            if now - p < 2 * pollGapSec { return }
+            movedBack[leg] = nil
+            return
+        }
+        movedBack[leg] = nil
+        guard abs(p - moved) > continuity.connectionWindowSec else { return }
+        tracker?.moveDeparture(to: p)
+        departureMoved(ride: leg)
     }
 
     /// A location fix. Soon after a walk-off, the fix says which station the rider is at: its distance to each
@@ -345,9 +453,11 @@ struct RideSession {
         rereadUnmatched()
         rideEvidence(now: now)
         judgePendingBoarding(now: now)        // the ride's own motion first: a ride felt running on is not the feed's to take back
+        checkMovedBack(now: now)
         checkDepartureMade(now: now)
         checkSamePlatformChange(now: now)
         checkStayedOn(now: now)
+        checkOffByTiming(now: now)
     }
 
     /// On to leg `leg`: the log that followed its lines at the transfer platform during the last leg takes over, and the
@@ -478,7 +588,7 @@ struct RideSession {
         handSet = up(handSet); dismissed = up(dismissed); departureChecked = up(departureChecked); locationApplied = up(locationApplied)
         stayedOnChecked = up(stayedOnChecked); locationRides = up(locationRides)
         if let la = lastAlight { lastAlight = la.leg == k ? nil : (la.leg > k ? (la.leg - 1, la.ts) : la) }
-        offPlanAlighting = nil; stayedOn = nil
+        offPlanAlighting = nil; stayedOn = nil; offByTiming = nil; lateOff = nil; movedBack = [:]
         let leg = t.timeline.legsRidden
         if logLeg == leg + 1 {
             transferLog = log; log = prevLog; prevLog = DepartureLog(); logLeg = leg
@@ -587,8 +697,7 @@ struct RideSession {
         guard leg + 1 < legs.count, legs[leg + 1].walkSec <= 0, let since = t.standingSince, now - since >= samePlatformStandSec,
               let b = belief(leg: leg), let best = b.bestTrain, let cand = candidates[leg]?.first(where: { $0.trainId == best }),
               let alightIdx = cand.alightIdx, let progress = log.progressIdx(of: best), progress > alightIdx else { return }
-        tracker?.alightStanding(at: since)
-        handleEvents()
+        alightLate(at: since, now: now)
     }
 
     /// The tracker's new events: a departure starts a belief for the leg from the trains that were at the
@@ -618,11 +727,25 @@ struct RideSession {
                     seenEvents = tracker?.timeline.events.count ?? 0
                     return
                 }
+                // the walk-off was told late (the train in hand had to leave the change first) and the detector, standing down
+                // only then, feels the phone moving at once: the rider stepped onto a connection in between, and the first
+                // that left after they got off is theirs, not one leaving about now (Nov 10 at Jay St: the A a minute behind
+                // the F, boarded, and the phone's A was the one after it)
+                var depTs = e.ts
+                if let lo = lateOff, lo.leg == leg - 1, !handSet.contains(leg), !t.departedByLocation {
+                    lateOff = nil
+                    if e.ts - lo.toldTs <= lateOffDepartureSec, let lg = platformLog(leg),
+                       let first = continuity.firstConnection(after: lo.offTs + stepOnSec, by: e.ts, pullAways: lg.pullAways()), first < e.ts {
+                        tracker?.moveDeparture(to: first)
+                        depTs = tracker?.timeline.events.last?.ts ?? e.ts
+                        movedBack[leg] = depTs
+                    }
+                }
                 if t.departedByLocation { locationRides.insert(leg) } else if !handSet.contains(leg) { motionUnconfirmed.insert(leg) }
                 // no felt pull-away puts the rider on a train by itself: the feed's trains at the platform back it, show
                 // that none could have made it (withdrawn now, not 100 s on), or leave it waiting, shown as boarding
                 if !handSet.contains(leg), !t.departedByLocation, let lg = platformLog(leg),
-                   tracker?.applyPullAwayVerdict(lg.judgePullAway(at: e.ts, now: lastNow ?? e.ts)) == true {
+                   tracker?.applyPullAwayVerdict(lg.judgePullAway(at: depTs, now: lastNow ?? depTs)) == true {
                     seenEvents = tracker?.timeline.events.count ?? 0
                                 return
                 }
@@ -631,14 +754,14 @@ struct RideSession {
                 // pull-away seconds after the walk-off (Oct 28 at Jay St: the A, read against the F platform's log at 4 Av-9 St,
                 // where a G had just passed, and the A leg called the G)
                 if leg != logLeg { advanceLogs(to: leg) }
-                let cands = legCandidates(log, leg: leg, departedTs: e.ts)
+                let cands = legCandidates(log, leg: leg, departedTs: depTs)
                 candidates[leg] = cands
-                departedTs[leg] = e.ts
+                departedTs[leg] = depTs
                 guard !handSet.contains(leg) else { continue }
                 // what this rider has ridden on this very trip, else the line they usually board at this platform
                 // (after the line just ridden, at a change) at about this hour
-                let share = plan.chosenKey.flatMap { k in linePrior?(plan, leg, k, t.timeline, e.ts) }
-                let b = inference.fromDeparture(cands, departedTs: e.ts, leg: leg, chosenKey: plan.chosenKey, learnedShare: share, lineFit: plan.lineFit)
+                let share = plan.chosenKey.flatMap { k in linePrior?(plan, leg, k, t.timeline, depTs) }
+                let b = inference.fromDeparture(cands, departedTs: depTs, leg: leg, chosenKey: plan.chosenKey, learnedShare: share, lineFit: plan.lineFit)
                 // a departure felt with no train in the feed to match it: the plan stands, as a guess
                 if b.byTrain.isEmpty, let fallback = LineBelief.fromPlan(leg: leg, chosenKey: plan.chosenKey, chosenTrainId: plan.chosenTrainId, evidence: "plan") {
                     store(fallback)

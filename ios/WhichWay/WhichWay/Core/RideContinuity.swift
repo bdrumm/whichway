@@ -9,6 +9,10 @@ import Foundation
 //   1. The route in hand is the prior at its own stops. Once the train has gone past the stop the route leaves it at,
 //      the rider got off there unless the phone felt the train run on. Staying on is a claim that needs evidence;
 //      getting off as planned needs none (a step across the platform is invisible to the sensors).
+//      The route's own timing is part of that prior: once the train has left the stop the route leaves it at (by the
+//      feed) and no push has been felt since it got there, the rider is off there now, not one stop later (Nov 10 at
+//      Jay St: the call waited for the F to reach York St, the rider was on the A by then, and the A was dated from
+//      that late moment and taken for the one behind). A stay-on the phone feels later still undoes it.
 //   2. A ride only moves the rider forward. "Not on a train", said after the train has run on from where it was
 //      boarded with the phone on it, puts the rider at the stop the pushes ended at, never back at the boarding
 //      platform (Nov 9: put back at 4 Av-9 St twelve minutes and four stops after leaving it, and the next pull-away
@@ -65,26 +69,55 @@ struct RideContinuity {
 
     /// A push this near a connection's pull-away from the change platform is that connection's.
     var connectionWindowSec = 30.0
+    /// Off at the change by the route's timing: no push from `afterArrivalSec` after the train reached the stop for at
+    /// least this long, and until `leftGraceSec` after the feed has it leaving there.
+    var offQuietSec = 45.0
+    var leftGraceSec = 20.0
+    /// A span between two polls in which a connection left the platform counts only when the polls were this close.
+    var maxLeftSpanSec = 120.0
+
+    /// A push at `p` is a connection pulling away from the change platform: near the feed's time for one, or inside the
+    /// span between the last poll that still listed it at the platform and the first that had it gone.
+    func isConnection(_ p: Double, pullAways: [Double], left: [PollSpan]) -> Bool {
+        pullAways.contains { abs($0 - p) <= connectionWindowSec }
+            || left.contains { $0.to - $0.from <= maxLeftSpanSec && p >= $0.from - connectionWindowSec / 2 && p <= $0.to + connectionWindowSec / 2 }
+    }
 
     /// `atStopTs`: the moment the train in hand reached the stop the route leaves it at (at the platform, not the
     /// feed's time). `laterStopTs`: its moments at the stops beyond, in order, as far as the feed has told.
     /// `pushTimes`: when each sustained push the phone felt began (`TripTracker.pushRuns`). `connectionPullAways`:
-    /// when each train of the next leg's lines pulled away from the change platform, by the feed.
-    func pastStop(atStopTs: Double, laterStopTs: [Double], pushTimes: [Double], connectionPullAways: [Double] = [], now: Double) -> PastStopVerdict {
-        let reached = laterStopTs.sorted().filter { $0 > atStopTs && $0 + settleSec <= now }
-        guard let first = reached.first else { return .waiting }
+    /// when each train of the next leg's lines pulled away from the change platform, by the feed; `connectionLeft`: the
+    /// poll spans in which each left. `trainLeavesTs`: when the train in hand left the stop, by the feed (nil: wait for
+    /// the stop beyond, as before the timing rule).
+    func pastStop(atStopTs: Double, laterStopTs: [Double], pushTimes: [Double], connectionPullAways: [Double] = [], connectionLeft: [PollSpan] = [],
+                  trainLeavesTs: Double? = nil, now: Double) -> PastStopVerdict {
         let from = atStopTs + afterArrivalSec
-        let toFirst = pushTimes.filter { $0 >= from && $0 <= first + afterNextSec }
+        let since = pushTimes.filter { $0 >= from && $0 <= now }
         // the route's own connection leaving as the pushes begin: the plan explains them, so the plan stands
-        if let p = toFirst.first, connectionPullAways.contains(where: { abs($0 - p) <= connectionWindowSec }) {
+        if let p = since.first, isConnection(p, pullAways: connectionPullAways, left: connectionLeft) {
             return .tookConnection(offAt: atStopTs, pullAwayTs: p)
         }
+        let reached = laterStopTs.sorted().filter { $0 > atStopTs && $0 + settleSec <= now }
+        guard let first = reached.first else {
+            // the route's timing: the train has left the change and nothing has pushed the phone since it got there, so
+            // the rider stood on the platform as it went (or stepped onto a train that has not moved yet)
+            if since.isEmpty, let leaves = trainLeavesTs, now >= max(atStopTs + offQuietSec, leaves + leftGraceSec) { return .steppedOff(at: atStopTs) }
+            return .waiting
+        }
+        let toFirst = pushTimes.filter { $0 >= from && $0 <= first + afterNextSec }
         if toFirst.count >= pushesForRunning { return .stayedOn }
         if toFirst.isEmpty { return .steppedOff(at: atStopTs) }
         // one push: the feed's time for the stop may run early and the push be the braking into it; one more stop tells
         guard reached.count >= 2 else { return .waiting }
         let toSecond = pushTimes.filter { $0 >= from && $0 <= reached[1] + afterNextSec }
         return toSecond.count > pushesForRunning ? .stayedOn : .steppedOff(at: atStopTs)
+    }
+
+    /// The first train of the connection that left the change platform after `afterTs` and by `byTs` (its pull-away by
+    /// the feed): the one a rider who got off at `afterTs` and was moving with a train by `byTs` stepped onto. The
+    /// route's timing again: the rider takes the first connection that comes, not the one the phone first noticed.
+    func firstConnection(after afterTs: Double, by byTs: Double, pullAways: [Double]) -> Double? {
+        pullAways.sorted().first { $0 >= afterTs && $0 <= byTs }
     }
 
     /// A ride over `stops` station stops is felt as at least this many pushes: one per run between stops (a phone held

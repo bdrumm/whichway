@@ -744,6 +744,47 @@ struct TripTracker {
         timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [last.ts]
     }
 
+    /// The pull-away in hand was the rider's train leaving at another moment than the detector felt: earlier, when the
+    /// walk-off before it was only told after the fact (an unfelt step-off at the change, called once the train in hand
+    /// had left) and the phone was already moving with the connection; or later, when the push that began the ride was
+    /// another train leaving the platform. The departure moves to `ts`, never before that walk-off.
+    mutating func moveDeparture(to ts: Double) {
+        guard phase == .riding, let i = timeline.events.indices.last, timeline.events[i].kind == .departed else { return }
+        var dep = ts
+        if i >= 1, timeline.events[i - 1].kind == .alighted { dep = max(dep, timeline.events[i - 1].ts) }
+        guard dep != timeline.events[i].ts else { return }
+        let ride = rideCount - 1
+        timeline.events[i].ts = dep
+        stopTimes = stopTimes.filter { $0 >= dep }
+        timeline.stopSpans.removeAll { $0.ride == ride && $0.start < dep }
+        refineUntil = nil
+        detector.assumeRiding(since: dep)
+        motionState = detector.state
+    }
+
+    /// The walk-off on the record last was not one: it was told from the route's timing at the change (the train left and
+    /// no push was felt), and the train has since been felt running on with the phone. The walk-off is struck, and so is a
+    /// pull-away felt after it (that train running on, not a connection); the rider is on the train of the ride before.
+    mutating func resumeRide() {
+        guard phase == .riding else { return }
+        if let last = timeline.events.last, last.kind == .departed, timeline.events.dropLast().last?.kind == .alighted {
+            timeline.events.removeLast()
+            if !walkAtDeparture.isEmpty { walkAtDeparture.removeLast() }
+            timeline.withdrawnDepartures = (timeline.withdrawnDepartures ?? []) + [last.ts]
+            let ride = rideCount
+            timeline.stopSpans.removeAll { $0.ride == ride }
+        }
+        guard timeline.events.last?.kind == .alighted else { return }
+        timeline.events.removeLast()
+        if !timeline.rideStops.isEmpty { timeline.rideStops.removeLast() }
+        if let i = timeline.stopSpans.indices.last, timeline.stopSpans[i].ride == rideCount - 1 { timeline.stopSpans[i].alighting = false }
+        let ridden = timeline.legsRidden
+        timeline.boarded.removeAll { $0.leg > ridden }
+        afterAlight = false; alightedAll = false; boardingPending = false; refineUntil = nil
+        stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
+        if let dep = timeline.events.last?.ts { detector.assumeRiding(since: dep); motionState = detector.state }
+    }
+
     /// Rides on the record so far (felt, named or assumed pull-aways).
     private var rideCount: Int { timeline.events.filter { $0.kind == .departed }.count }
 
