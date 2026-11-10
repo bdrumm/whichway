@@ -554,6 +554,13 @@ struct TripTracker {
         timeline.forecastArriveTs = arriveTs
     }
 
+    /// The train the forecast froze on left without the rider (at the platform, the sensors on, no pull-away felt:
+    /// `RouteLapseWatch`): the forecast follows the planner's next train again, and that one is never assumed ridden.
+    mutating func letForecastGo() {
+        guard phase == .atStation, let b = timeline.forecastBoardTs else { return }
+        declinedBoardTs = b
+    }
+
     /// The train the forecast named has gone from the feed a little before its predicted platform moment (the feed
     /// moves a train on as it leaves, and its ETA for the stop ran a few seconds optimistic: Oct 9, gone at 3:00:49
     /// against 3:01:05). At the station, that is the train leaving now: the forecast freezes here and the assumed

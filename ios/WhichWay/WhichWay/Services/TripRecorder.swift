@@ -111,6 +111,9 @@ final class TripRecorder {
         session.updateForecast(boardTs: boardTs, arriveTs: arriveTs, now: now)
     }
 
+    func letForecastGo() { session.letForecastGo() }
+    func declinedTrain(_ trainId: String) -> Bool { session.declinedTrain(trainId) }
+
     @discardableResult
     func forecastTrainDeparted(now: Double) -> Bool { session.forecastTrainDeparted(now: now) }
 

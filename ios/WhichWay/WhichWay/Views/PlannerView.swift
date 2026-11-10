@@ -27,6 +27,11 @@ struct PlannerView: View {
     @State private var boardingTimer: Task<Void, Never>? = nil
     /// The headline itinerary's boarding time at the last refresh; once it has passed, the next refresh reselects.
     @State private var shownBoardTs: Double? = nil
+    /// The train the route in hand counts on for the leg boarded next; when it goes without the rider the routes are
+    /// weighed again from where they are (`RouteLapseWatch`).
+    @State private var lapseWatch = RouteLapseWatch()
+    /// The last time the routes were weighed again on the way: what the trip bar says, and the route to go back to.
+    @State private var lapseShown: (text: String, fromId: String, ts: Double)? = nil
     /// A held train's effect on the headline route, when it makes a difference.
     @State private var outlook: HoldOutlook? = nil
     /// Ended by hand: GPS does not start it again for this trip.
@@ -780,15 +785,14 @@ struct PlannerView: View {
     private func refreshLive() {
         guard let sched = data.schedule else { return }
         let now = data.now
-        // the countdown on screen reached zero since the last refresh (timer, poll, or coming back to this tab)
-        let departed = shownBoardTs.map { $0 <= now } ?? false
         let reach = reachTs
         for i in paths.indices {
             paths[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: paths[i], now: now, maxN: 1, reachTs: reach).first
         }
         listOrder.update(ranked: ranked.map(\.id), hasTrains: paths.contains { $0.live != nil })
-        // a departed train hands over to the best route, or to the next train on this route once it is in progress
-        if departed, !routeStarted, let best = ranked.first?.id { selectedPath = best }
+        // the train the chosen route counts on went without the rider (gone, out of reach, or dropped from the feed, with no
+        // boarding felt): the routes are ranked again and the best way from here is chosen; before a route starts as on it
+        checkLapse(now: now)
         shownBoardTs = headline?.live?.boardTs
         outlook = holdOutlook(sched)
         if outlook == nil, data.scenario != "baseline" { data.setScenario("baseline") }
@@ -825,7 +829,9 @@ struct PlannerView: View {
         for i in p.legs.indices where i >= leg {
             if i == leg, trip.onTrain { continue }
             let atPlatform = i == leg && (trip.phase == .atStation || (i > 0 && trip.phase == .riding))
-            if atPlatform, let kept = plannedTrains[i], frozenLegs.contains(i) || now >= PlatformTiming.atPlatform(kept.boardTs, route: kept.route) { continue }
+            // a train the rider said they let go (after it was presumed boarded) is not kept: the plan follows the next one
+            if atPlatform, let kept = plannedTrains[i], !trip.declinedTrain(kept.trainId),
+               frozenLegs.contains(i) || now >= PlatformTiming.atPlatform(kept.boardTs, route: kept.route) { continue }
             if let c = plannedCandidate(it, option: p, leg: i) { plannedTrains[i] = c }
         }
         var named: [Int: (key: String, trainId: String)] = [:]
@@ -1032,6 +1038,7 @@ struct PlannerView: View {
                 .font(.caption.weight(.semibold)).buttonStyle(.borderedProminent).controlSize(.small)
                 .accessibilityLabel("I changed to the \(ec.change.text)")
             }
+            lapseLine
             if let pr = trip.prompt {
                 boardingPrompt(pr)
             } else if trip.onTrain, trip.currentLegKeys.count > 1 {
@@ -1600,7 +1607,7 @@ struct PlannerView: View {
     /// The trip goes on by `alt` from here: it joins the list if it was one of the planner's further options, the
     /// trains still to board follow it (the train in hand is kept), and the trip, the card and the Live Activity
     /// follow it. The faster-route banner's Switch and a lane tapped on the home both come here.
-    private func takeRoute(_ alt: PathOption) {
+    private func takeRoute(_ alt: PathOption, refresh: Bool = true) {
         if !paths.contains(where: { $0.id == alt.id }) {
             extraPaths.append(alt); paths.append(alt)
             data.setWanted(Set(paths.flatMap { $0.legs.flatMap { $0.keys } }), for: "planner")
@@ -1612,7 +1619,80 @@ struct PlannerView: View {
         showReroute = false
         withAnimation(.easeInOut(duration: 0.3)) { reroute = nil }
         switchRoute(to: alt)
-        refreshLive()
+        if refresh { refreshLive() }
+    }
+
+    // MARK: - the chosen route lapsing
+
+    /// Every refresh: the train the route in hand counts on for the leg boarded next (the first leg's train on the way
+    /// and at the platform, the connection at the change) against what the phone knows of the rider. When it went without
+    /// them, `reassess`.
+    private func checkLapse(now: Double) {
+        guard let p = headline, trip.phase != .arrived else { lapseWatch.reset(); return }
+        let leg = routeStarted ? trip.currentLeg : 0
+        var place: BoardingWatch.Place = .noRoute
+        var boarding = trip.onTrain || trip.boardingPending
+        var first = p.live?.legs.first.map { (trainId: $0.train.id, boardTs: $0.boardTs) }
+        switch trip.phase {
+        case nil: place = .noRoute
+        case .approaching?: place = .approaching
+        case .atStation?: place = .atPlatform
+        case .riding?:
+            // between trains at the change: the connection on the ride's own itinerary
+            place = .atPlatform
+            if leg == 0 { boarding = true }
+            first = rideItinerary?.legs.first.map { (trainId: $0.train.id, boardTs: $0.boardTs) }
+        case .arrived?: return
+        }
+        let watch = BoardingWatch(place: place, boarding: boarding, sensing: trip.sensing)
+        guard let lapse = lapseWatch.check(routeId: p.id, leg: leg, first: first, watch: watch, now: now) else { return }
+        reassess(after: lapse, from: p, now: now)
+    }
+
+    /// The train counted on went without the rider: the routes are ranked afresh (none hidden), and the best way from
+    /// where the rider is becomes the route in hand. At the origin, the best as ranked (the trains in reach, the usual way
+    /// unless another is a margin sooner); at the change, the way on from there that gets them in first. The plan and the
+    /// forecast let the train go, so the next one is the one watched. The rider can take any route again, the one left
+    /// included ("Back to" on the trip bar, or the list).
+    private func reassess(after lapse: RouteLapse, from p: PathOption, now: Double) {
+        listOrder.reset()
+        listOrder.update(ranked: ranked.map(\.id), hasTrains: paths.contains { $0.live != nil })
+        guard routeStarted else {
+            if let best = ranked.first?.id, best != selectedPath { selectedPath = best }
+            return
+        }
+        let leg = trip.currentLeg
+        frozenLegs.remove(leg)
+        plannedTrains[leg] = nil
+        forecastTrainId = nil
+        trip.letForecastGo()
+        var best: PathOption? = nil
+        if leg == 0 {
+            best = ranked.first
+        } else if let sched = data.schedule, let index = data.index, let pos = riderPosition {
+            let more = (rerouteMore ?? []).filter { o in !paths.contains { $0.id == o.id } }
+            best = bestWayOn(current: p, options: paths + more, at: pos, boards: data.predictedBoards, schedule: sched,
+                             station: { index.stationOf($0) }, now: now)
+        }
+        let text = lapseNote(lapse, from: p.label, to: best?.label)
+        trip.noteReroute(RerouteNote(ts: now, label: (best ?? p).label, step: text, arriveTs: (best ?? p).live?.arriveTs ?? 0, savedSec: 0))
+        lapseShown = (text: text.prefix(1).uppercased() + String(text.dropFirst()), fromId: p.id, ts: now)
+        if let b = best, b.id != p.id { takeRoute(b, refresh: false) } else { updateActivity() }
+    }
+
+    /// The trip bar's word on the last re-weighing, for ten minutes, with the way back to the route left.
+    @ViewBuilder private var lapseLine: some View {
+        if let l = lapseShown, data.now - l.ts < 600, routeStarted {
+            HStack(spacing: 8) {
+                Label(l.text, systemImage: "arrow.triangle.2.circlepath").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Spacer(minLength: 4)
+                if l.fromId != headline?.id, let back = paths.first(where: { $0.id == l.fromId }) {
+                    Button("Back to \(back.label)") { lapseShown = nil; takeRoute(back) }
+                        .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
+                        .accessibilityLabel("Go back to \(back.label)")
+                }
+            }
+        }
     }
 
     // MARK: - the home's lanes
@@ -1798,7 +1878,7 @@ struct PlannerView: View {
         let obs = (Telemetry.shared.optIn && p != nil) ? observationBase(p!, startedBy: by) : nil
         let plans = legPlans(p)
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
-        extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]; forecastTrainId = nil; frozenLegs = []
+        extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]; forecastTrainId = nil; frozenLegs = []; lapseWatch.reset(); lapseShown = nil
         clearReroute()
         trip.stopCoordinate = { [weak data] key, idx in data?.geometry?.lines[key]?.coord(idx) }
         trip.changesOnTheWay = { changesOnTheWayNow() }
@@ -1858,7 +1938,7 @@ struct PlannerView: View {
         data.setWanted([], for: "trip")
         data.setWanted([], for: "onTrain")
         loc.stopTracking()
-        rideItinerary = nil; plannedTrains = [:]; forecastTrainId = nil; frozenLegs = []
+        rideItinerary = nil; plannedTrains = [:]; forecastTrainId = nil; frozenLegs = []; lapseWatch.reset(); lapseShown = nil
         clearReroute()
         TripActivityService.shared.end()
         let tl = trip.end(by: by, api: Telemetry.shared.uploadURL(fallback: data.apiBase), now: data.now)

@@ -108,6 +108,14 @@ struct RideSession {
     private var dismissed: Set<Int> = []
     private var departureChecked: Set<Int> = []
     private var locationRides: Set<Int> = []      // legs whose ride began from the phone's movement, not a felt pull-away
+    /// Legs whose ride the session presumed: the plan's train left the rider's platform by the feed and no pull-away was
+    /// felt (`presumeBoarding`). Kept with `locationRides` out of the felt pull-away's checks.
+    private var presumedRides: Set<Int> = []
+    /// Trains the rider said they were not on after the session presumed them boarded: never presumed again.
+    private var presumeDeclined: Set<String> = []
+    /// The plan's train is presumed boarded only when it left the platform no longer ago than this (a look-back over
+    /// the polls since, not a ride begun for a train long gone).
+    var presumeLookBackSec = 600.0
     /// The latest moment the session has been told of (a tick, a poll): "now" for the rider's taps.
     private(set) var lastNow: Double?
 
@@ -213,7 +221,7 @@ struct RideSession {
         self.legs = legs
         log.reset(); transferLog.reset(); prevLog.reset(); logLeg = -1; candidates = [:]; beliefs = []; seenEvents = 0; handSet = []; dismissed = []
         departureBeliefs = [:]; departedTs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
-        stayedOn = nil; stayedOnChecked = []; locationRides = []; earlyChange = nil; changedEarly = nil; lastNow = now
+        stayedOn = nil; stayedOnChecked = []; locationRides = []; presumedRides = []; presumeDeclined = []; earlyChange = nil; changedEarly = nil; lastNow = now
         offByTiming = nil; lateOff = nil; movedBack = [:]
     }
 
@@ -247,7 +255,8 @@ struct RideSession {
     private mutating func rereadUnmatched() {
         guard let t = tracker, t.phase == .riding else { return }
         let leg = t.timeline.legsRidden
-        guard leg < legs.count, let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, let b = belief(leg: leg),
+        // a ride presumed from the plan's train leaving stays the plan's train, shown as presumed, until the rider says
+        guard leg < legs.count, !presumedRides.contains(leg), let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, let b = belief(leg: leg),
               (b.evidence == ["plan"]) || (b.byHand && b.bestTrain == nil) else { return }
         let cands = legCandidates(log, leg: leg, departedTs: dep)
         guard !cands.isEmpty else { return }
@@ -411,7 +420,7 @@ struct RideSession {
         let next = leg + 1
         beliefs.removeAll { $0.leg == next }
         departureBeliefs[next] = nil; candidates[next] = nil; departedTs[next] = nil
-        departureChecked.remove(next); motionUnconfirmed.remove(next); dismissed.remove(next); locationRides.remove(next)
+        departureChecked.remove(next); motionUnconfirmed.remove(next); dismissed.remove(next); locationRides.remove(next); presumedRides.remove(next)
         if logLeg == next { transferLog = log; log = prevLog; prevLog = DepartureLog(); logLeg = leg }
         lastAlight = nil; lateOff = nil; movedBack[next] = nil
         seenEvents = tracker?.timeline.events.count ?? 0
@@ -463,6 +472,12 @@ struct RideSession {
         tracker?.updateForecast(boardTs: boardTs, arriveTs: arriveTs, now: now)
     }
 
+    /// The rider said they were not on this train after the session presumed them boarded: the plan lets it go.
+    func declinedTrain(_ trainId: String) -> Bool { presumeDeclined.contains(trainId) }
+
+    /// The forecast's train left without the rider: the forecast follows the next one (`TripTracker.letForecastGo`).
+    mutating func letForecastGo() { tracker?.letForecastGo() }
+
     /// The boarding time of the forecast the rider acted on, as the tracker holds it (frozen once that train left).
     var forecastBoardTs: Double? { tracker?.timeline.forecastBoardTs }
 
@@ -492,6 +507,7 @@ struct RideSession {
         judgePendingBoarding(now: now)        // the ride's own motion first: a ride felt running on is not the feed's to take back
         checkMovedBack(now: now)
         checkDepartureMade(now: now)
+        presumeBoarding(now: now)
         checkSamePlatformChange(now: now)
         checkStayedOn(now: now)
         checkOffByTiming(now: now)
@@ -562,6 +578,40 @@ struct RideSession {
         }
     }
 
+    /// The rider stood at the leg's platform (the origin's, within the station's radius; or the change's, off the train
+    /// before) when the plan's train left it, by the feed, and the sensors felt no pull-away: the rider is presumed on
+    /// that train (Nov 10 evening: the F boarded at the origin unfelt, a little later than its predicted time, and the
+    /// planner moved on to the next F as if the rider were still waiting). The chosen route is the assumption; the
+    /// boarding and the train's time need not line up, only the train must have left after the rider got there and
+    /// within `presumeLookBackSec`. A train the feed still lists at the platform has not left, however late (Oct 21 at 14
+    /// St), so nothing is presumed while it stands. The ride is shown as presumed (the plan's train, "presumably") and the
+    /// prompt asks; "Not on train" takes it back to the platform and that train is never presumed again.
+    private mutating func presumeBoarding(now: Double) {
+        guard var t = tracker, t.sensing, !t.onTrain, t.phase != .arrived else { return }
+        let leg = t.timeline.legsRidden
+        guard leg < legs.count, !handSet.contains(leg), let id = legs[leg].chosenTrainId, !presumeDeclined.contains(id),
+              let lg = platformLog(leg), let left = lg.leftPlatformTs(id) else { return }
+        let since: Double?
+        if leg == 0 {
+            guard t.phase == .atStation else { return }
+            since = t.timeline.arrivedStationTs
+        } else {
+            guard t.phase == .riding, let off = t.timeline.events.last, off.kind == .alighted else { return }
+            since = off.ts
+        }
+        guard let at = since, at <= left, now - left <= presumeLookBackSec else { return }
+        t.beginRiding(now: now, departedTs: left)
+        tracker = t
+        seenEvents = t.timeline.events.count
+        if logLeg != leg { advanceLogs(to: leg) }
+        let dep = t.ride(leg)?.departedTs ?? left
+        departedTs[leg] = dep
+        candidates[leg] = lg.entry(id, chosenTrainId: id).map { [$0] } ?? []
+        departureChecked.insert(leg)
+        presumedRides.insert(leg); locationRides.insert(leg)
+        if let b = LineBelief.fromPlan(leg: leg, chosenKey: legs[leg].chosenKey, chosenTrainId: id, evidence: "plan") { store(b) }
+    }
+
     /// The rider says they are on the train while a felt pull-away waits on the feed ("On it" on the Live Activity or in
     /// the app): the ride is shown, and the feed's departure check no longer takes it back.
     mutating func confirmBoarding() {
@@ -623,7 +673,7 @@ struct RideSession {
         candidates = up(candidates); departedTs = up(departedTs); departureBeliefs = up(departureBeliefs)
         beliefs = beliefs.filter { $0.leg != k }.map { var b = $0; if b.leg > k { b.leg -= 1 }; return b }
         handSet = up(handSet); dismissed = up(dismissed); departureChecked = up(departureChecked); locationApplied = up(locationApplied)
-        stayedOnChecked = up(stayedOnChecked); locationRides = up(locationRides)
+        stayedOnChecked = up(stayedOnChecked); locationRides = up(locationRides); presumedRides = up(presumedRides)
         if let la = lastAlight { lastAlight = la.leg == k ? nil : (la.leg > k ? (la.leg - 1, la.ts) : la) }
         offPlanAlighting = nil; stayedOn = nil; offByTiming = nil; lateOff = nil; movedBack = [:]
         let leg = t.timeline.legsRidden
@@ -903,6 +953,20 @@ struct RideSession {
     mutating func notOnTrain(now: Double? = nil) {
         let now = now ?? lastNow ?? Date().timeIntervalSince1970
         tracker?.noteNotOnTrain(at: now)
+        // a ride the session presumed from the plan's train leaving, with no train felt since: the rider let it go and is
+        // still at the platform, whatever that train has done since
+        if let t = tracker, t.onTrain, presumedRides.contains(currentLeg), let dep = departedTs[currentLeg],
+           !t.pushRuns.contains(where: { $0 > dep }) {
+            let leg = currentLeg
+            if let id = legs[leg].chosenTrainId { presumeDeclined.insert(id) }
+            presumedRides.remove(leg); locationRides.remove(leg); departureChecked.remove(leg)
+            tracker?.notOnTrain()
+            tracker?.letForecastGo()
+            if let i = beliefs.firstIndex(where: { $0.leg == leg }) { beliefs.remove(at: i) }
+            departureBeliefs[leg] = nil; candidates[leg] = nil; departedTs[leg] = nil
+            seenEvents = tracker?.timeline.events.count ?? 0
+            return
+        }
         if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed {
             let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs
             switch readNotOnTrain(train: trainInHand, departedTs: dep, changes: changesOnTheWay?() ?? [], now: now) {

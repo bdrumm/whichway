@@ -279,6 +279,18 @@ struct DepartureLog: Equatable {
             .sorted { $0.from < $1.from }
     }
 
+    /// When train `trainId` left the boarding platform, by the feed: seen gone past it (after the last poll that still
+    /// listed the stop, by the first that did not, and not before its time there), or gone from the feed altogether once
+    /// its time at the platform is `goneAfterSec` past (the feed drops a train as it leaves). Nil while the feed still
+    /// lists it at the platform, however late (Oct 21 at 14 St: the A stood there past its time), or never saw it.
+    func leftPlatformTs(_ trainId: String, goneAfterSec: Double = 90) -> Double? {
+        guard let e = entries[trainId] else { return nil }
+        let pull = PlatformTiming.pullsAway(e.boardTs, route: e.route)
+        if let p = e.passedTs { return min(max(pull, e.listedTs ?? pull), p) }
+        if e.lastSeenTs < lastPollTs, lastPollTs >= pull + goneAfterSec { return min(max(pull, e.lastSeenTs), lastPollTs) }
+        return nil
+    }
+
     /// One train the log follows, as a candidate, whatever its time at the platform was: the plan's own train
     /// when the sensors never named one.
     func entry(_ trainId: String, chosenTrainId: String? = nil) -> BoardingCandidate? {
