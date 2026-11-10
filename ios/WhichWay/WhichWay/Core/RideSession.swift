@@ -463,6 +463,9 @@ struct RideSession {
         tracker?.updateForecast(boardTs: boardTs, arriveTs: arriveTs, now: now)
     }
 
+    /// The forecast's train left without the rider: the forecast follows the next one (`TripTracker.letForecastGo`).
+    mutating func letForecastGo() { tracker?.letForecastGo() }
+
     /// The boarding time of the forecast the rider acted on, as the tracker holds it (frozen once that train left).
     var forecastBoardTs: Double? { tracker?.timeline.forecastBoardTs }
 
