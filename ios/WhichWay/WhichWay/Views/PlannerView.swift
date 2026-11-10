@@ -1893,6 +1893,7 @@ struct PlannerView: View {
         case "arrived": lastEndNote = "Ended \(at): reached \(destName)"
         case "alighted", "walked": lastEndNote = "Ended \(at): you got off the train"
         case "timeout": lastEndNote = "Ended \(at): long past the expected arrival"
+        case "stale": lastEndNote = "Ended \(at): no train felt for a while"
         default: lastEndNote = nil
         }
     }

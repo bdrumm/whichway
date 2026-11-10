@@ -31,7 +31,7 @@ struct TripTimeline: Codable, Equatable {
     var forecastArriveTs: Double?
     var liveArriveTs: Double?             // keeps following the planner, for ending the trip
     var endedTs: Double?
-    var endedBy: String?                  // arrived | alighted | walked | timeout | hand | changed | off
+    var endedBy: String?                  // arrived | alighted | walked | stale | timeout | hand | changed
     var rideStops: [Int] = []             // station stops felt on each ride, the alighting stop included
     var boarded: [BoardedLeg] = []        // the train and line each leg was ridden on, as far as the phone could tell
     var withdrawnDepartures: [Double]? = nil   // pull-aways felt that no train made (the platform shaking), withdrawn
@@ -123,6 +123,17 @@ struct TripTracker {
     var preciseAfterAlightSec = 300.0     // fixes this long after a walk-off say which stop it was (the recorder's window)
     var preciseBeforeArrivalSec = 420.0   // and from this long before the expected arrival, the destination check reads them
     var maxTripSec = 3 * 3600.0           // a route still on this long after it began is one nobody ended: over
+    // The end clock. Every automatic ending but the three-hour cap was measured against `liveArriveTs`, and the planner
+    // works that out from now: a connection still to catch (the leg's next train after now, or after the first leg's
+    // arrival once that has passed) is always a few minutes off, so the arrival slid on with the clock and the trip never
+    // ended (Nov 9 evening: "still on the train" long after the ride). The clock may now slide only so far, and the
+    // signs that a ride is over (off a train with no train since, a long walk, no train felt at all) end it by themselves.
+    var maxOverrunSec = 2700.0            // the end clock never runs more than this past the arrival in hand when the ride began
+    var trainNearSec = 600.0              // a sustained push this recent: on a moving train, the capped clock waits (to the cap)
+    var connectionGiveUpSec = 1800.0      // off a train this long, no train since and no push felt: the trip is over
+    var quietEndSec = 900.0               // past the expected arrival, no push felt this long on a ride: over
+    var longWalkSec = 420                 // walking this long without a stop on a ride: nobody walks that long inside a station
+    var maxWaitSec = 3600.0               // at the station (or on the way) this long with no ride: the rider went another way
 
     private(set) var phase: TripPhase
     private(set) var timeline: TripTimeline
@@ -138,6 +149,9 @@ struct TripTracker {
     private var hasMotion = false
     private var firstMotionTs: Double?
     private var quietRun = 0
+    /// The arrival the trip expected when the ride in hand began (the live one then, or the first one set while riding):
+    /// the end clock is held within `maxOverrunSec` of it. Cleared when the rider is put back on the platform.
+    private(set) var arriveAnchor: Double?
     /// Station stops felt on the ride in progress (the train standing still, then moving again).
     private(set) var stopsFelt = 0
     /// When each station stop of the ride in progress began (the stop in hand included), for the line inference.
@@ -292,15 +306,21 @@ struct TripTracker {
     /// Within 250 m of the destination station, on a fix no older than ten minutes, once the expected arrival is
     /// within five minutes (or, riding with no forecast at all, at once): the trip is over. The phone sitting
     /// still at the destination sends no new fix, so the clock asks too.
+    ///
+    /// Off the train (a walk-off felt, or never on one but the ride began) within the radius, the trip is over whatever the
+    /// clock says: the clock is only there to tell the destination from a train passing under it, and nobody off a train
+    /// at the destination station is still on the way to it.
     private mutating func checkDestination(now: Double) {
         guard phase != .arrived, let d = lastDest, now - d.ts <= 600 else { return }
         if d.toDest <= destRadiusM {
-            if let pa = timeline.liveArriveTs {
+            if phase == .riding, !onTrain {
+                finish(now, by: "arrived")
+            } else if let pa = endClockTs {
                 if now >= pa - 300 { finish(now, by: "arrived") }
             } else if phase == .riding {
                 finish(now, by: "arrived")
             }
-        } else if d.toDest <= destFarRadiusM, let pa = timeline.liveArriveTs, now >= pa + 120, phase == .riding || phase == .atStation {
+        } else if d.toDest <= destFarRadiusM, let pa = endClockTs, now >= pa + 120, phase == .riding || phase == .atStation {
             // well past the expected arrival and within a short walk of the destination: the rider has come and gone
             finish(now, by: "arrived")
         }
@@ -386,6 +406,7 @@ struct TripTracker {
                     if timeline.platformTs == nil { timeline.platformTs = e.ts }
                     phase = .riding
                 }
+                anchorRide()
             case .alighted:
                 afterAlight = true
                 boardingPending = false
@@ -415,7 +436,10 @@ struct TripTracker {
             }
         }
         motionState = detector.state
-        if phase == .riding, walkRun >= walkOffSec, let pa = timeline.liveArriveTs, m.ts >= pa - 180 {
+        if phase == .riding, walkRun >= walkOffSec, let pa = endClockTs, m.ts >= pa - 180 {
+            finish(m.ts, by: "walked")
+        } else if phase == .riding, max(walkRun, looseWalkSecs) >= longWalkSec {
+            // seven minutes of steps with no stop: off the train and out of the station, wherever the plan had the rider
             finish(m.ts, by: "walked")
         }
     }
@@ -428,7 +452,8 @@ struct TripTracker {
     /// starts from the felt pull-away, however late the train leaves.
     mutating func tick(now: Double) {
         guard phase != .arrived else { return }
-        let pa = timeline.liveArriveTs
+        anchorRide()
+        let pa = endClockTs
         if alightedAll, pa == nil || now >= pa! - 120 { finish(now, by: "alighted"); return }
         // with the sensors on, the timetable alone never puts the rider on a train: the felt pull-away (or the phone moving
         // off at a train's pace) starts the ride, at the moment it was felt (Oct 21: the A stood at 14 St past its time and
@@ -439,7 +464,31 @@ struct TripTracker {
             if timeline.platformTs == nil { timeline.platformTs = pb }
         }
         checkDestination(now: now)
-        if phase != .arrived, let pa = pa, now >= pa + lateGraceSec { finish(now, by: "timeout") }
+        if phase != .arrived, let pa = pa, now >= pa + lateGraceSec {
+            // the live arrival held at the cap while a train is still felt moving: the rider is on one, so the cap waits
+            // (to the three-hour backstop); with the live arrival itself past, as before
+            let capped = pa < (timeline.liveArriveTs ?? pa)
+            if !capped || !trainFeltRecently(now: now) { finish(now, by: "timeout") }
+        }
+        if phase == .riding, hasMotion, let off = timeline.events.last, off.kind == .alighted, !timeline.rideAssumed,
+           now - off.ts >= connectionGiveUpSec, !(pushRuns.last.map { $0 > off.ts } ?? false) {
+            // off a train half an hour ago and no train since, not even a push the detector did not call: the change the plan
+            // had was not taken, or not felt, and the rider is not waiting for it any more (a step across the platform the
+            // sensors cannot see leaves the route a leg short, and the clock then slid with the connection)
+            finish(now, by: "stale")
+        }
+        if phase == .riding, onTrain, hasMotion, let a = arriveAnchor ?? timeline.liveArriveTs, now >= a,
+           now - lastTrainSign >= quietEndSec {
+            // past the arrival expected, and nothing like a train felt for a quarter of an hour: a ride pushes every two to
+            // four minutes; the phone is on a desk or in a pocket at the other end
+            finish(now, by: "stale")
+        }
+        if phase == .approaching || phase == .atStation, timeline.events.isEmpty,
+           now - (timeline.arrivedStationTs ?? timeline.startTs) >= maxWaitSec {
+            // an hour at the platform (or on the way to it) with no ride: the boarding forecast slides with the trains and
+            // its clock never comes
+            finish(now, by: "stale")
+        }
         // with no forecast, or one that keeps sliding to the next train while the rider never boards, the line above never
         // fires, and the route would keep the GPS and the motion sensors on until the phone was opened again
         if phase != .arrived, now - timeline.startTs >= maxTripSec { finish(now, by: "timeout") }
@@ -534,7 +583,7 @@ struct TripTracker {
             // a ride assumed from the timetable: the rider let that train go, so the forecast follows the next one again
             timeline.rideAssumed = false
             declinedBoardTs = timeline.forecastBoardTs
-            if timeline.events.last?.kind != .alighted { phase = .atStation }
+            if timeline.events.last?.kind != .alighted { phase = .atStation; arriveAnchor = nil }
             return
         }
         guard let last = timeline.events.last, last.kind == .departed else { return }
@@ -550,6 +599,7 @@ struct TripTracker {
             afterAlight = true
         } else {
             phase = .atStation
+            arriveAnchor = nil               // the ride that was not one set no clock; the next one does
         }
         if timeline.arrivedStationTs == nil { timeline.arrivedStationTs = last.ts }
         stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
@@ -628,6 +678,7 @@ struct TripTracker {
         detector.assumeRiding(since: dep)
         motionState = detector.state
         if firstMotionTs == nil { firstMotionTs = now - startGraceSec }
+        anchorRide()
     }
 
     /// The rider says they changed at a station of their own naming (the "On a train?" sheet, or the one-tap offer), onto
@@ -657,6 +708,32 @@ struct TripTracker {
     mutating func setLiveArrival(_ ts: Double) {
         guard phase != .arrived else { return }
         timeline.liveArriveTs = ts
+        anchorRide()
+    }
+
+    /// The arrival the trip ends by: the live one, held within `maxOverrunSec` of the one in hand when the ride began. A
+    /// connection worked out from now slides on with the clock; a train actually ridden does not run three quarters of an
+    /// hour past its arrival. Nil with no forecast at all.
+    var endClockTs: Double? {
+        guard let pa = timeline.liveArriveTs else { return nil }
+        guard phase == .riding, let a = arriveAnchor else { return pa }
+        return min(pa, a + maxOverrunSec)
+    }
+
+    /// On a ride with no anchor yet: the arrival in hand now is the one the ride began with.
+    private mutating func anchorRide() {
+        if phase == .riding, arriveAnchor == nil { arriveAnchor = timeline.liveArriveTs }
+    }
+
+    /// The last sign of a train: a sustained push, the ride's own pull-away or walk-off, or the ride assumed.
+    private var lastTrainSign: Double {
+        max(pushRuns.last ?? -.infinity, timeline.events.last?.ts ?? -.infinity)
+    }
+
+    /// A sustained push within `trainNearSec`: the phone is moving with a train.
+    private func trainFeltRecently(now: Double) -> Bool {
+        guard let p = pushRuns.last else { return false }
+        return now - p <= trainNearSec
     }
 
     /// A pull-away the feed says no train made (none left the platform then while others are still to come): the
@@ -751,7 +828,7 @@ struct TripTracker {
         case .alighted?:
             phase = .riding; afterAlight = true               // between trains at the change
         case nil:
-            phase = .atStation; afterAlight = false
+            phase = .atStation; afterAlight = false; arriveAnchor = nil
             if !timeline.platformObserved { timeline.platformTs = nil }
             stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
             if detector.state == .riding { detector.standDown(); motionState = detector.state }
@@ -767,6 +844,11 @@ struct TripTracker {
             timeline.beliefLog.append(BeliefNote(ts: now ?? timeline.events.last?.ts ?? timeline.startTs, leg: b.leg, key: b.key, trainId: b.trainId,
                                                  confidence: (b.confidence * 100).rounded() / 100, verdict: b.verdict.rawValue, evidence: b.evidence))
         }
+    }
+
+    /// The rider ends the route ("End route" in the app, "End" on the Live Activity): over now, by hand.
+    mutating func endByHand(now: Double) {
+        if phase != .arrived { finish(now, by: "hand") }
     }
 
     mutating func end(now: Double, by: String) -> TripTimeline {

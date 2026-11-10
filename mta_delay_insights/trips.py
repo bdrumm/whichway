@@ -741,6 +741,9 @@ def findings(s: dict, reviews: list[dict]) -> list[str]:
     n = max(1, s.get("n", 0))
     if eb.get("timeout", 0) / n >= 0.3:
         out.append(f"{eb['timeout']} of {n} trips ended by timeout rather than at the destination: the arrival clock or the alighting detection let the trip run on.")
+    if eb.get("stale", 0):
+        out.append(f"{eb['stale']} of {n} trips were closed only because no train was felt for a while (off a train half an hour "
+                   "with none since, a long walk, or no push for 15 minutes past the arrival): the phone did not see the ride end.")
     if eb.get("hand", 0) / n >= 0.3:
         out.append(f"{eb['hand']} of {n} trips were ended by hand.")
     d = s.get("detection", {})
