@@ -271,6 +271,14 @@ struct DepartureLog: Equatable {
             .map { PlatformTiming.pullsAway($0.boardTs, route: $0.route) }.sorted()
     }
 
+    /// The poll spans in which each such train left the platform: after the last poll that still listed it there and by
+    /// the first that had it gone (a train's published time at the platform can be a minute off the moment it left).
+    func pullAwaySpans(onLegOnly: Bool = true) -> [PollSpan] {
+        entries.values.filter { (!onLegOnly || ($0.onLeg && $0.samePlatform)) && ($0.progressIdx ?? $0.boardIdx) > $0.boardIdx }
+            .compactMap { e in e.listedTs.flatMap { l in e.passedTs.map { PollSpan(from: l, to: $0) } } }
+            .sorted { $0.from < $1.from }
+    }
+
     /// One train the log follows, as a candidate, whatever its time at the platform was: the plan's own train
     /// when the sensors never named one.
     func entry(_ trainId: String, chosenTrainId: String? = nil) -> BoardingCandidate? {
