@@ -27,6 +27,17 @@ enum PastStopVerdict: Equatable {
     case tookConnection(offAt: Double, pullAwayTs: Double)
 }
 
+/// What the phone's motion says of a felt pull-away nothing has backed yet (`TripTracker.boardingPending`).
+enum PendingRideVerdict: Equatable {
+    /// Too early to tell.
+    case open
+    /// The train ran on with the phone: pushes after the pull-away, as every ride between two stations has.
+    case rides
+    /// No push since the pull-away for longer than any real ride goes without one: the rider is still on the platform
+    /// (Nov 5 at 4 Av-9 St: a B's pull-away claimed, then nothing for six minutes until the rider's own train left).
+    case notARide
+}
+
 struct RideContinuity {
     /// Pushes count from this long after the train reached the stop: its braking into it is over by then.
     var afterArrivalSec = 15.0
@@ -36,6 +47,22 @@ struct RideContinuity {
     var settleSec = 20.0
     /// A train running from one stop to the next is felt as at least this many sustained pushes (away, and braking).
     var pushesForRunning = 2
+    /// A ride the phone is on is felt as pushes after its pull-away: across every stored ride the first came within
+    /// 155 s of it (one at 223 s, none later), and no ride went 275 s between two. A pending pull-away with none for
+    /// this long was not a ride.
+    var rideQuietSec = 270.0
+    /// And this many confirm one.
+    var pushesForRide = 2
+
+    /// A pull-away felt at `departedTs`, waiting to be backed: does the motion since say the phone is on that train?
+    /// Pushes count from `afterArrivalSec` after it (the pull-away's own push is the claim, not evidence for it).
+    func pendingRide(departedTs: Double, pushTimes: [Double], now: Double) -> PendingRideVerdict {
+        let since = pushTimes.filter { $0 > departedTs + afterArrivalSec && $0 <= now }
+        if since.count >= pushesForRide { return .rides }
+        if since.isEmpty, now - departedTs >= rideQuietSec { return .notARide }
+        return .open
+    }
+
     /// A push this near a connection's pull-away from the change platform is that connection's.
     var connectionWindowSec = 30.0
 

@@ -66,8 +66,6 @@ struct PlannerView: View {
     /// Legs whose plan's train froze because the feed dropped it just before its time (`forecastTrainDeparted`), ahead
     /// of the moment the time-based freeze in `followPlan` would have reached.
     @State private var frozenLegs: Set<Int> = []
-    /// The phone's belief in a line off the plan must be at least this sure before the route switches on its own.
-    private let autoSwitchConfidence = 0.75
     /// The rider's own word on the train they are on (and the line to take at the change).
     @State private var onTrainSheet = false
     /// A note on how the app is behaving, about the moment the rider tapped (`DevNoteSheet`); nil while none is open.
@@ -193,7 +191,10 @@ struct PlannerView: View {
         // off one train and onto the next: the card and the Live Activity follow at once, not at the next poll
         .onChange(of: trip.currentLeg) { _, _ in followRide(); loc.setPrecise(trip.needsPreciseFixes(now: data.now)) }
         .onChange(of: trip.onTrain) { _, _ in followRide() }
-        .onChange(of: trip.boardingPending) { _, _ in if routeStarted { updateActivity() } }
+        .onChange(of: trip.boardingPending) { _, _ in
+            if routeStarted { updateActivity() }
+            followBoarded()        // a claim backed: the route may follow the train now (`RideSession.lineToFollow`)
+        }
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
         .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
         .onChange(of: trip.changedEarly) { _, c in if let c { followEarlyChange(c) } }
@@ -1142,9 +1143,9 @@ struct PlannerView: View {
     private func followBoarded() {
         guard trip.phase == .riding, let sel = headline else { return }
         let leg = trip.currentLeg
-        guard let b = trip.belief(leg: leg), let key = b.bestKey, sel.legs.indices.contains(leg), !sel.legs[leg].keys.contains(key) else { updateFocus(); return }
-        guard b.byHand || (b.settled && b.confidence >= autoSwitchConfidence) else { updateFocus(); return }
-        if !b.byHand, data.now - lastSwitchTs < 60 { updateFocus(); return }
+        guard sel.legs.indices.contains(leg), let key = trip.lineToFollow(routeKeys: sel.legs[leg].keys, now: data.now, lastSwitchTs: lastSwitchTs) else {
+            updateFocus(); return
+        }
         guard let alt = routeRiding(key, leg: leg, like: sel) else { updateFocus(); return }
         lastSwitchTs = data.now
         switchRoute(to: alt)
@@ -1839,39 +1840,14 @@ struct PlannerView: View {
     /// The plan's legs for the line inference: each leg's lines and stop spans, the train and line the itinerary
     /// boards, and the other same-direction lines at the boarding platform.
     private func legPlans(_ p: PathOption?) -> [LegPlan] {
-        guard let p = p, let index = data.index else { return [] }
-        var plans: [LegPlan] = []
-        // the stations where a line to the destination calls and the leg's own lines do not: a line at the platform that
-        // reaches one is a sensible change
-        let destSt = index.stationOf(destId)
-        let lineStops = (data.schedule?.lines ?? [:]).mapValues { $0.stops }
-        for (i, leg) in p.legs.enumerated() {
-            let changeStations = sensibleChangeStations(lines: lineStops, dest: destSt, legKeys: leg.keys, station: index.stationOf)
-            let tc: TripCandidate? = (p.live?.legs.indices.contains(i) ?? false) ? p.live?.legs[i] : nil
-            let preferred = preferredKeys[i].flatMap { leg.keys.contains($0) ? $0 : nil }
-            var plan = LegPlan(keys: leg.keys, idx: leg.idx, chosenKey: preferred ?? tc?.key ?? leg.primaryKey,
-                               chosenTrainId: preferred == nil || preferred == tc?.key ? tc?.train.id : nil, origin: originId, dest: destId)
-            // 0 marks a change made standing (across the platform): the recorder then watches for the train moving on
-            plan.walkSec = i == 0 || p.transfer?.acrossPlatform == true ? 0 : (p.live?.walkSec ?? Double(p.transfer?.walkSec ?? 0))
-            let dir = String((plan.chosenKey ?? "").split(separator: "_").last ?? "")
-            if let st = index.stations[index.stationOf(leg.from)] {
-                for m in st.members where m.dir == dir && !leg.keys.contains(m.key) {
-                    plan.platformKeys[m.key] = m.idx
-                    if m.stop != leg.from { plan.otherPlatformKeys.insert(m.key) }
-                    if let line = data.schedule?.lines[m.key], m.idx + 1 < line.stops.count {
-                        let after = line.stops[(m.idx + 1)...].map { index.stationOf($0) }
-                        plan.lineFit[m.key] = platformLineFit(stationsAfter: Array(after), targets: [destSt, index.stationOf(leg.to)], changeStations: changeStations)
-                    }
-                }
-            }
-            // the rider's own lines boarding here at about this hour (`RouteHabits.linePrior`); 1 where habits say nothing
-            let boardAt = i == 0 ? originId : (p.transfer?.station ?? "")
-            if let habit = HabitStore.shared.linePrior(boardingAt: boardAt, leg: i, toward: destId, now: data.now) {
-                for (k, f) in habit.fit(leg.keys + Array(plan.platformKeys.keys)) { plan.lineFit[k, default: 1] *= f }
-            }
-            plans.append(plan)
+        guard let p = p, let index = data.index, let sched = data.schedule else { return [] }
+        var chosen: [Int: (key: String, trainId: String)] = [:]
+        for (i, tc) in (p.live?.legs ?? []).enumerated() { chosen[i] = (tc.key, tc.train.id) }
+        let now = data.now, dest = destId
+        return makeLegPlans(p, schedule: sched, index: index, originId: originId, destId: destId, chosen: chosen, preferred: preferredKeys,
+                            liveWalkSec: p.live?.walkSec) { boardAt, leg in
+            HabitStore.shared.linePrior(boardingAt: boardAt, leg: leg, toward: dest, now: now)
         }
-        return plans
     }
 
     /// The route ends, by hand or on its own; what it measured goes to the pace model and the telemetry.

@@ -61,6 +61,10 @@ final class TripRecorder {
 
     var currentBelief: LineBelief? { session.currentBelief }
     func belief(leg: Int) -> LineBelief? { session.belief(leg: leg) }
+    /// See `RideSession.lineToFollow`.
+    func lineToFollow(routeKeys: [String], now: Double, lastSwitchTs: Double) -> String? {
+        session.lineToFollow(routeKeys: routeKeys, now: now, lastSwitchTs: lastSwitchTs)
+    }
     var prompt: BoardingPrompt? { session.prompt }
     var needsTrainPick: Bool { session.needsTrainPick }
     var onTrain: Bool { session.onTrain }

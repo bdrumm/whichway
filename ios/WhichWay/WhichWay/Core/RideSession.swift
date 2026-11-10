@@ -86,6 +86,9 @@ struct RideSession {
     private var logLeg = -1
     private var candidates: [Int: [BoardingCandidate]] = [:]
     private var departedTs: [Int: Double] = [:]
+    /// Legs whose felt pull-away the motion has not confirmed yet (pushes after it, `RideContinuity.pendingRide`): read
+    /// against it at every poll, whatever the feed said, until it does or the ride is taken back.
+    private var motionUnconfirmed: Set<Int> = []
     private var departureBeliefs: [Int: LineBelief] = [:]   // per leg, the belief at the departure, before the ride's evidence
     private var lastAlight: (leg: Int, ts: Double)?
     private var locationApplied: Set<Int> = []
@@ -107,6 +110,8 @@ struct RideSession {
     }
     /// A felt pull-away is checked against the feed this long after: time for a train that left then to show as gone.
     var departureCheckSec = 100.0
+    /// The feed is polled about this often: a train it had standing at a stop stood there up to this long either side.
+    var pollGapSec = 30.0
     /// A ride this short with no station stop felt is the first one taken back when the phone has counted a ride too many.
     var phantomRideMaxSec = 180.0
     /// Standing this long at a station, with the believed train gone past it, on a same-platform change: off the train.
@@ -161,6 +166,17 @@ struct RideSession {
     var onTrain: Bool { tracker?.onTrain ?? false }
     /// On a train as the rider is shown it: a felt pull-away the feed has not backed yet shows as boarding, not riding.
     var onTrainShown: Bool { tracker?.onTrainShown ?? false }
+    /// The line the route should switch to on the leg in hand, if the train the rider is on is not one of the route's
+    /// lines there (`routeKeys`): the rider's own word at once; the phone's own guess only once it is sure (settled and
+    /// at least `confidence`), once the ride is backed (a pull-away still waiting on the feed or the motion is a claim:
+    /// Nov 5 at 4 Av-9 St switched to the G, then to the F via W 4 St, on a train the rider never boarded), and at most
+    /// once every `minGapSec`. Nil leaves the route as it is.
+    func lineToFollow(routeKeys: [String], now: Double, lastSwitchTs: Double, confidence: Double = 0.75, minGapSec: Double = 60) -> String? {
+        guard let t = tracker, t.phase == .riding, let b = belief(leg: currentLeg), let key = b.bestKey, !routeKeys.contains(key) else { return nil }
+        if b.byHand { return key }
+        guard t.onTrainShown, b.settled, b.confidence >= confidence, now - lastSwitchTs >= minGapSec else { return nil }
+        return key
+    }
     /// Ten-metre fixes wanted now (`TripTracker.needsPreciseFixes`); with no route in progress, the app's own default.
     func needsPreciseFixes(now: Double) -> Bool { tracker?.needsPreciseFixes(now: now) ?? true }
 
@@ -236,6 +252,9 @@ struct RideSession {
         let lag = PlatformTiming.recordedLag(route: c.route)
         let atStop = c.stopTs.contains { idx, feedTs in
             idx > c.boardIdx && walk.startTs >= feedTs - lag - quickChangeBeforeSec && walk.startTs <= feedTs - lag + quickChangeAfterSec
+        } || c.stoodAt.values.contains { span in
+            // or the feed had it standing at a stop then, between polls (a held train's time at the stop is when it leaves)
+            walk.startTs >= span.from - pollGapSec && walk.startTs <= span.to + pollGapSec
         }
         guard atStop else { return }
         tracker?.alightWalking(at: walk.startTs)
@@ -325,8 +344,8 @@ struct RideSession {
         if leg >= 1 { Self.observe(legs[leg - 1], boards: boards, into: &prevLog, now: now) }
         rereadUnmatched()
         rideEvidence(now: now)
+        judgePendingBoarding(now: now)        // the ride's own motion first: a ride felt running on is not the feed's to take back
         checkDepartureMade(now: now)
-        judgePendingBoarding(now: now)
         checkSamePlatformChange(now: now)
         checkStayedOn(now: now)
     }
@@ -402,6 +421,7 @@ struct RideSession {
         guard let t = tracker, t.boardingPending else { return }
         tracker?.backBoarding()
         departureChecked.insert(t.timeline.legsRidden)
+        motionUnconfirmed.remove(t.timeline.legsRidden)
     }
 
     /// The pull-away on the leg in hand was no train's: the rider is back at the platform and the next one counts afresh.
@@ -417,16 +437,25 @@ struct RideSession {
     /// as a train at the platform is seen to leave then, withdrawn as soon as the feed shows none could have. The
     /// departure check above still has the last word after `departureCheckSec`.
     private mutating func judgePendingBoarding(now: Double) {
-        guard let t = tracker, t.boardingPending, t.onTrain else { return }
+        guard let t = tracker, t.onTrain else { return }
         let leg = t.timeline.legsRidden
-        guard leg < legs.count, let dep = departedTs[leg], let lg = platformLog(leg) else { return }
+        guard leg < legs.count, let dep = departedTs[leg] ?? t.ride(leg)?.departedTs, !handSet.contains(leg) else { return }
+        guard t.boardingPending || motionUnconfirmed.contains(leg) else { return }
+        guard t.timeline.events.last.map({ $0.kind == .departed && abs($0.ts - dep) <= 90 }) ?? false else { return }
+        // The motion has its say whatever the feed: a train that pulls away with the phone on it is felt running on, and
+        // one that leaves without it is not, even when it is a train of the leg's lines (the rider let it go).
+        let motion = RideContinuity().pendingRide(departedTs: dep, pushTimes: t.pushRuns, now: now)
+        if motion == .notARide, motionUnconfirmed.contains(leg) || t.boardingPending { motionUnconfirmed.remove(leg); withdrawPullAway(leg: leg); return }
+        if motion == .rides { motionUnconfirmed.remove(leg); departureChecked.insert(leg) }   // a ride felt running on is one
+        guard t.boardingPending, let lg = platformLog(leg) else { return }
         let v = lg.judgePullAway(at: dep, now: now)
         if v == .noTrain { withdrawPullAway(leg: leg); return }
-        // backed by the feed (a train of the leg's lines left then), or by the ride itself: the stops felt on the way, the
-        // walk-off or a fix matching the train the phone believes in. Another line's train leaving the platform is not
-        // enough (Nov 5 at 4 Av-9 St: the G left three minutes before the rider's F), and neither is the feed falling quiet.
-        let rideSays = belief(leg: leg)?.evidence.contains { ["ride", "stops", "alighting", "location"].contains($0) } ?? false
-        if v == .backed || rideSays { tracker?.backBoarding() }
+        // Backed by the feed (a train of the leg's lines left then), by the ride itself (pushes after the pull-away), or
+        // by the walk-off or a fix matching the train. Another line's train leaving the platform is not enough (Nov 5 at
+        // 4 Av-9 St: the G left three minutes before the rider's F), nor the feed falling quiet, nor stops "felt" on a
+        // ride that has not been shown to move (they were the platform's shaking: Nov 5 evening called the B).
+        let placed = belief(leg: leg)?.evidence.contains { ["alighting", "location"].contains($0) } ?? false
+        if v == .backed || motion == .rides || placed { tracker?.backBoarding() }
     }
 
     /// Ride `k` was not one (see `TripTracker.withdrawRide`): what the phone made of it goes, every leg after it moves
@@ -589,7 +618,7 @@ struct RideSession {
                     seenEvents = tracker?.timeline.events.count ?? 0
                     return
                 }
-                if t.departedByLocation { locationRides.insert(leg) }
+                if t.departedByLocation { locationRides.insert(leg) } else if !handSet.contains(leg) { motionUnconfirmed.insert(leg) }
                 // no felt pull-away puts the rider on a train by itself: the feed's trains at the platform back it, show
                 // that none could have made it (withdrawn now, not 100 s on), or leave it waiting, shown as boarding
                 if !handSet.contains(leg), !t.departedByLocation, let lg = platformLog(leg),
@@ -598,6 +627,10 @@ struct RideSession {
                                 return
                 }
                 let plan = legs[leg]
+                // the leg's own platform log, even before the next poll moves the logs on: a step across the platform is a
+                // pull-away seconds after the walk-off (Oct 28 at Jay St: the A, read against the F platform's log at 4 Av-9 St,
+                // where a G had just passed, and the A leg called the G)
+                if leg != logLeg { advanceLogs(to: leg) }
                 let cands = legCandidates(log, leg: leg, departedTs: e.ts)
                 candidates[leg] = cands
                 departedTs[leg] = e.ts

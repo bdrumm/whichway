@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch map-dev serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures ios-seed lake lake-status lake-nightly lake-sql model-lake bundle bundle-publish
+.PHONY: help local venv gtfs site-synthetic site data-branch map-dev serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures ios-seed lake lake-status lake-nightly lake-sql model-lake bundle bundle-publish replay
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -62,6 +62,9 @@ bundle-publish: ## Push data/bundle to the models branch; the hourly site build 
 
 trips: ## Pull the phone's trips (when it is connected), merge them with the uploads, review them against the trains → data/trips/trip_review.md (IMPORT=file.json takes an export from the app)
 	$(PYTHON) -m pipeline.trip_review --pull $(if $(IMPORT),--import "$(IMPORT)") --db data/mta.sqlite --out data/trips
+
+replay: ## Replay every stored trip with a motion trace through the phone's current decisions (RideSession) against the store's trains → data/trips/replay/replay_report.md (run make trips first)
+	$(PYTHON) -m pipeline.trip_replay --db data/mta.sqlite --trips data/trips
 
 corpus: ## The station-stop training corpus: every station stop the phone felt (ultra training mode, else the motion traces) named from the matched train → data/corpus (run make trips first)
 	$(PYTHON) -m pipeline.corpus --db data/mta.sqlite --trips data/trips --out data/corpus

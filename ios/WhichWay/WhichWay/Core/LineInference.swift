@@ -65,6 +65,12 @@ func departureTooSoonAfterChange(departedTs: Double, alightedTs: Double, walkSec
 /// A train the rider could have boarded on one leg of the route: the line it runs, the feed's time at the
 /// boarding stop (the last one published before the train moved on), the station stops it makes to the alighting
 /// stop and the feed's time there.
+/// The first and last poll at which the feed said something of a train (standing at a stop).
+struct PollSpan: Equatable {
+    var from: Double
+    var to: Double
+}
+
 struct BoardingCandidate: Equatable {
     var trainId: String          // LiveTrain.id, "F_N|tripId"
     var key: String              // line key, "F_N"
@@ -80,6 +86,7 @@ struct BoardingCandidate: Equatable {
     var stopTs: [Int: Double] = [:]       // the feed's latest time at each stop past the boarding stop (kept once the train has passed)
     var progressIdx: Int? = nil           // the train's next stop index at the last poll
     var samePlatform: Bool = true         // boards at the leg's own platform (else another platform of the station: the 8 Av L beside the A/C/E)
+    var stoodAt: [Int: PollSpan] = [:]    // past the boarding stop: the first and last poll at which the feed had the train standing at each stop
     var atOrigin: Bool = false            // the boarding stop is the train's first: its time there is the timetable's departure, not an arrival the feed saw
 }
 
@@ -180,6 +187,7 @@ struct DepartureLog: Equatable {
         /// the train left the platform between the two, whatever its last published time there said.
         var listedTs: Double? = nil
         var passedTs: Double? = nil
+        var stoodAt: [Int: PollSpan] = [:]
     }
 
     private(set) var entries: [String: Entry] = [:]
@@ -219,6 +227,11 @@ struct DepartureLog: Equatable {
             // standing at the platform just before the pull-away says which train left; a train laying over at its
             // terminal always stands there, so it says nothing
             if let pos = t.position, pos.status == "STOPPED_AT", pos.stopIdx == boardIdx, !pos.atTerminal, boardIdx > 0 { e.stoppedAtBoardTs = now }
+            // standing at a stop beyond: a train held there keeps republishing its time at the stop as the moment it will
+            // leave, so the time alone loses when it got there (Nov 2 at Jay St: in four minutes before its published time there)
+            if let pos = t.position, pos.status == "STOPPED_AT", let i = pos.stopIdx, i > boardIdx {
+                e.stoodAt[i] = PollSpan(from: e.stoodAt[i]?.from ?? now, to: now)
+            }
             entries[t.id] = e
         }
         entries = entries.filter { now - $0.value.lastSeenTs <= keepSec }
@@ -227,7 +240,8 @@ struct DepartureLog: Equatable {
     private func candidate(_ e: Entry, chosenTrainId: String?) -> BoardingCandidate {
         BoardingCandidate(trainId: e.trainId, key: e.key, route: e.route, boardTs: e.boardTs, alightTs: e.alightTs,
                           stopsToAlight: e.stops, chosen: e.trainId == chosenTrainId, onLeg: e.onLeg, boardIdx: e.boardIdx, alightIdx: e.alightIdx,
-                          stoppedAtBoardTs: e.stoppedAtBoardTs, stopTs: e.stopTs, progressIdx: e.progressIdx, samePlatform: e.samePlatform, atOrigin: e.atOrigin)
+                          stoppedAtBoardTs: e.stoppedAtBoardTs, stopTs: e.stopTs, progressIdx: e.progressIdx, samePlatform: e.samePlatform,
+                          stoodAt: e.stoodAt, atOrigin: e.atOrigin)
     }
 
     /// The trains whose time at the boarding stop fell within `windowSec` of a departure felt at `ts`.
@@ -273,7 +287,7 @@ struct DepartureLog: Equatable {
         }
         entries[c.trainId] = Entry(trainId: c.trainId, key: c.key, route: c.route, boardTs: c.boardTs, alightTs: c.alightTs, stops: c.stopsToAlight, onLeg: c.onLeg,
                                    lastSeenTs: now, boardIdx: c.boardIdx, alightIdx: c.alightIdx, stoppedAtBoardTs: c.stoppedAtBoardTs, stopTs: c.stopTs, progressIdx: c.progressIdx,
-                                   samePlatform: c.samePlatform, atOrigin: c.atOrigin)
+                                   samePlatform: c.samePlatform, atOrigin: c.atOrigin, stoodAt: c.stoodAt)
     }
 
     mutating func reset() { entries = [:]; lastPollTs = 0 }
@@ -477,14 +491,18 @@ struct LineInference {
         c.stopTs[idx].map { $0 - recordedLag(c.route) }
     }
 
-    /// The stop a rider on this train walked off at, at `ts`: the leg's own alighting stop when the line serves it,
-    /// else the train's own stop nearest that moment (an L the rider was never on would have been at 6 Av or Union
-    /// Sq then). So a train off the plan is judged on where it actually was, not spared for serving no stop of the plan.
+    /// The stop a rider on this train walked off at, at `ts`: whichever of its stops past the boarding stop it was at then,
+    /// the leg's own alighting stop when that fits about as well as the best (within `alightSigmaSec`). The same test for
+    /// every train, on the plan or off it: a rider who gets off the plan's train two stops early (Oct 13: off the F at
+    /// Carroll St, not 4 Av-9 St) is judged at Carroll St, as a train off the plan is judged at its own stop then. Judging
+    /// the plan's train at the plan's stop only, and every other train at its best stop, handed such a walk-off to whatever
+    /// train ran beside it (the D, 57%).
     func alightingStop(_ c: BoardingCandidate, at ts: Double) -> Int? {
-        if let a = c.alightIdx { return a }
-        return c.stopTs.keys.filter { $0 > c.boardIdx }.min { a, b in
-            abs((atPlatform(c, a) ?? .infinity) - ts) < abs((atPlatform(c, b) ?? .infinity) - ts)
-        }
+        func off(_ feedTs: Double) -> Double { abs(feedTs - recordedLag(c.route) - ts) }
+        let best = c.stopTs.filter { $0.key > c.boardIdx }.min { off($0.value) < off($1.value) }
+        guard let a = c.alightIdx, let planned = c.stopTs[a] ?? c.alightTs else { return best?.key ?? c.alightIdx }
+        guard let b = best, b.key != a else { return a }
+        return off(planned) <= off(b.value) + alightSigmaSec ? a : b.key
     }
 
     /// The station stops this train made between the departure and the walk-off, by the feed's times, when the
@@ -516,15 +534,17 @@ struct LineInference {
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["stops"])
     }
 
-    /// The belief after the rider walked off at `alightedTs`, against each train's arrival at the alighting stop.
-    /// A train that does not serve that stop is judged against its own stop nearest the walk-off (`alightingStop`);
-    /// one with no stop times known keeps only the floor.
+    /// The belief after the rider walked off at `alightedTs`: each train against the stop it was at then (`alightingStop`),
+    /// in full at the leg's own alighting stop, at `nearestStopFactor` at any other stop (a train is nearly always within a
+    /// minute of one); one with no stop times known keeps only the floor.
     func withAlighting(_ b: LineBelief, candidates cands: [BoardingCandidate], alightedTs: Double) -> LineBelief {
         guard !b.byTrain.isEmpty, cands.contains(where: { $0.alightTs != nil || !$0.stopTs.isEmpty }) else { return b }
         var w: [String: Double] = none(b, informative: true)
         for c in cands {
-            let arrival = c.alightTs ?? alightingStop(c, at: alightedTs).flatMap { c.stopTs[$0] }
-            let own = c.alightIdx == nil && c.alightTs == nil ? nearestStopFactor : 1
+            let stop = alightingStop(c, at: alightedTs)
+            let planned = stop == nil || stop == c.alightIdx
+            let arrival = planned ? (stop.flatMap { c.stopTs[$0] } ?? c.alightTs) : stop.flatMap { c.stopTs[$0] }
+            let own = planned ? 1 : nearestStopFactor
             let like = arrival.map { own * gaussian(alightedTs - ($0 - recordedLag(c.route) + alightLagSec), sigma: alightSigmaSec) } ?? floor
             w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
         }
