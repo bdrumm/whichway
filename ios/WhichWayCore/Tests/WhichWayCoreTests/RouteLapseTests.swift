@@ -64,12 +64,12 @@ final class RouteLapseTests: XCTestCase {
 
     // MARK: at the platform, or between trains at the change
 
-    func testAtThePlatformWithTheSensorsOnATrainGoneWithoutAPullAwayLapses() {
+    func testAtThePlatformATrainLeavingIsNeverALapse() {
+        // the rider was there for it: presumed boarded once the feed shows it leaving (`PresumedBoardingTests`), never a
+        // reason to move to another route, however late it left or however long nothing is felt
         var w = counting(platform)
-        XCTAssertNil(w.check(routeId: "F", leg: 0, first: ("f2", 1400), watch: platform, now: 1060),
-                     "the rider is at the station and may have boarded: the pull-away has its grace")
-        XCTAssertNil(w.check(routeId: "F", leg: 0, first: ("f2", 1400), watch: platform, now: 1000 + Lapse.platformGraceSec - 1))
-        XCTAssertEqual(w.check(routeId: "F", leg: 0, first: ("f2", 1400), watch: platform, now: 1000 + Lapse.platformGraceSec), .departed)
+        XCTAssertNil(w.check(routeId: "F", leg: 0, first: ("f2", 1400), watch: platform, now: 1060))
+        XCTAssertNil(w.check(routeId: "F", leg: 0, first: ("f2", 1400), watch: platform, now: 1600))
     }
 
     func testAtThePlatformAPullAwayFeltHoldsTheRoute() {
@@ -94,16 +94,14 @@ final class RouteLapseTests: XCTestCase {
         XCTAssertNil(v.check(routeId: "F", leg: 0, first: ("f2", 1400), watch: platform, now: 1000 - Lapse.droppedEarlySec + 10))
     }
 
-    func testAtTheChangeAMissedConnectionLapses() {
-        // off the first train at the change, waiting for leg 1's train
+    func testAtTheChangeAConnectionLeavingIsNeverALapse() {
+        // off the first train at the change, the connection leaves: presumed boarded (a step onto a train standing there
+        // with no steps felt, Oct 27), not a reason to move to another way on
         var w = counting(platform, leg: 1)
-        XCTAssertNil(w.check(routeId: "F", leg: 1, first: ("f2", 1400), watch: platform, now: 1100))
-        XCTAssertEqual(w.check(routeId: "F", leg: 1, first: ("f2", 1400), watch: platform, now: 1000 + Lapse.platformGraceSec), .departed)
-        // stepped onto it with no steps at all, or onto one standing there: the pull-away holds the route as before
+        XCTAssertNil(w.check(routeId: "F", leg: 1, first: ("f2", 1400), watch: platform, now: 1300))
+        // gone from the feed well ahead of its time: it never came, the ways on are weighed again
         var v = counting(platform, leg: 1)
-        XCTAssertNil(v.check(routeId: "F", leg: 1, first: ("f2", 1400), watch: BoardingWatch(place: .atPlatform, boarding: true, sensing: true), now: 1030))
-        XCTAssertNil(v.check(routeId: "F", leg: 1, first: ("f2", 1400), watch: platform, now: 1300), "counted afresh, not the train ridden")
-        XCTAssertEqual(v.counted?.trainId, "f2")
+        XCTAssertEqual(v.check(routeId: "F", leg: 1, first: ("f2", 1400), watch: platform, now: 1000 - Lapse.droppedEarlySec - 1), .movedOn)
     }
 
     func testAnotherRouteOrLegIsCountedAfreshNotLapsed() {

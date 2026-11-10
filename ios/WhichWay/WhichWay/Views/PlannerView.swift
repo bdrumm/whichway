@@ -829,7 +829,9 @@ struct PlannerView: View {
         for i in p.legs.indices where i >= leg {
             if i == leg, trip.onTrain { continue }
             let atPlatform = i == leg && (trip.phase == .atStation || (i > 0 && trip.phase == .riding))
-            if atPlatform, let kept = plannedTrains[i], frozenLegs.contains(i) || now >= PlatformTiming.atPlatform(kept.boardTs, route: kept.route) { continue }
+            // a train the rider said they let go (after it was presumed boarded) is not kept: the plan follows the next one
+            if atPlatform, let kept = plannedTrains[i], !trip.declinedTrain(kept.trainId),
+               frozenLegs.contains(i) || now >= PlatformTiming.atPlatform(kept.boardTs, route: kept.route) { continue }
             if let c = plannedCandidate(it, option: p, leg: i) { plannedTrains[i] = c }
         }
         var named: [Int: (key: String, trainId: String)] = [:]

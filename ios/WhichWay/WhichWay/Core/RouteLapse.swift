@@ -9,13 +9,13 @@ import Foundation
 // The class, every way the train counted on stops being the rider's:
 // - its time comes and goes with the rider still on the way (no station proximity, no pull-away felt);
 // - the rider can no longer reach it from where they are (the planner's reach puts them on the platform after it);
-// - it leaves the feed well before its time (cancelled, withdrawn, rerouted);
-// - its time comes and goes with the rider at the platform (or at the change) and the motion sensors on, and no pull-away
-//   is felt within the grace: the train left without them;
+// - it leaves the feed well before its time (cancelled, withdrawn, rerouted): it never came;
 // - all of the above with no route started yet: the countdown on the home reached zero.
 // Never lapsed: the rider is on a train or a pull-away is waiting for the feed (the chosen route is the prior for the
-// ride, `RideContinuity`), and at a platform with the sensors off (the tracker takes the route as planned and assumes
-// the ride from the timetable).
+// ride, `RideContinuity`); and at the platform (the origin's within the station's radius, or the change) when the train
+// merely left: the rider was there for it, so the chosen route is the assumption and the session presumes them on it
+// once the feed shows it leaving, however late (`RideSession.presumeBoarding`; Nov 10 evening, the F boarded unfelt a
+// little after its time and the planner moved on to the next F). With the sensors off the tracker assumes the ride.
 //
 // A lapse re-weighs and re-ranks; it never hides a route. The whole list stays and the rider can take any route again,
 // the lapsed one included.
@@ -54,12 +54,9 @@ enum RouteLapse: String, Equatable {
 }
 
 enum Lapse {
-    /// On the way with no fix near the station: the train may be boarded from a platform the GPS never saw, so the
-    /// pull-away has this long past the boarding time to be felt.
-    static let approachGraceSec = 60.0
-    /// At the platform with the sensors on: this long past the boarding time with no pull-away felt, the train left
-    /// without the rider (the tracker's own wait before it would assume a ride with the sensors off).
-    static let platformGraceSec = 120.0
+    /// On the way with no fix near the station: the train may be late, or boarded from a platform the GPS never saw, so
+    /// the pull-away has this long past the boarding time to be felt before the routes are weighed again.
+    static let approachGraceSec = 120.0
     /// At the platform, a train gone from the route's itinerary more than this ahead of its time was withdrawn, not
     /// taken (`TripTracker.forecastTrainDeparted` reads a drop inside this as the train leaving).
     static let droppedEarlySec = 90.0
@@ -102,10 +99,9 @@ struct RouteLapseWatch: Equatable {
             else if now >= c.boardTs + Lapse.approachGraceSec { lapse = .departed }
             else { lapse = nil }
         case .atPlatform:
-            if !watch.sensing { lapse = nil }
-            else if moved && c.boardTs - now > Lapse.droppedEarlySec { lapse = .movedOn }
-            else if now >= c.boardTs + Lapse.platformGraceSec { lapse = .departed }
-            else { lapse = nil }
+            // the train leaving is presumed boarded (`RideSession.presumeBoarding`), never a lapse; one gone from the
+            // feed well ahead of its time never came
+            lapse = moved && c.boardTs - now > Lapse.droppedEarlySec ? .movedOn : nil
         }
         if lapse != nil { counted = nil }
         return lapse
