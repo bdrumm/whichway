@@ -150,6 +150,30 @@ ffmpeg -i whatitdoes_silent.mp4 -i whatitdoes.wav -c:v libx264 -preset slow -crf
   -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-what-it-does.mp4
 ```
 
+## First Breath
+
+`firstbreath.html` (74 s) is the one about being late to something that happens once. 2:47 AM, a message: "It's
+time." Three weeks early, and he is across the river on the night shift, when the trains run twenty minutes apart.
+The app picks the 7 to the 6; he runs for the 7 in the rain; the 7 is held under the river while his time to spare
+for the 6 drains from 2:40 to 0:40; he makes the 6 with two seconds left, runs the hospital corridor, and the door
+opens on the first cry. A heart monitor is the pulse of the film (`trace`, `pulseLines`): her line and his along the
+bottom of every shot, his doubling when he runs, and a third that starts at 3:21 AM. A beat is 0.6 s, a bar 2.4 s, and
+every cut is on a bar (`SCENES`). The clock in one corner and the count in the other (`CLOCK`, `counts`) tell one
+consistent story, so change them together. What the app says on screen is what the app does: it ranks the ways there
+by when they arrive, shows the time to spare at a change, and says what a hold will do.
+
+The score is the `firstbreath` spec: the monitor is one pure A a beat (`beeps`), alone at the start and loudest in
+the bar of near silence at the door; the first cry is the notification's own rise, slowed and sung twice (`cries`),
+with a third, faster heart on the glass F sharp that ends the logo sound. `pulse_body` gives the heartbeat overtones
+so a phone's speaker can play it.
+
+```bash
+python3 scores.py firstbreath firstbreath.wav
+./render_parts.sh firstbreath.html firstbreath_silent.mp4 4
+ffmpeg -i firstbreath_silent.mp4 -i firstbreath.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
+  -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-first-breath.mp4
+```
+
 ## Sound samples
 
 The logo sound has seven candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,

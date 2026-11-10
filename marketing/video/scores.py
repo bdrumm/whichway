@@ -239,6 +239,41 @@ SPECS['whatitdoes'] = dict(
 LOGOS = ('fork', 'rails', 'chime', 'swell', 'heart', 'clock', 'notify')
 for _style in LOGOS:
     SPECS['logo-' + _style] = dict(dur=6.5, beat=0.625, bar=2.5, hit=0.3, logo=62, logo_style=_style, chords=SPECS['clock']['chords'])
+# First Breath: 2:47 AM, "It's time", and he is across the river. The pulse of the score is a heart monitor: one pure
+# A a beat (`beeps`), alone at first, under everything after, with a heartbeat on the root. B minor at 100 bpm while
+# he runs (kick, bass, the felt piano in sixteenths, the clock as the hi-hat), rail joints for the two trains. Under
+# the river the band stops dead with the train and there is only the clock, the heartbeat and the monitor until the
+# signal clears. It builds through the change and the corridor, and at the door everything stops for a bar but the
+# two hearts. Then an intake of breath (a swell) and the first cry: the notification's own rise, slowed and sung twice
+# (`cries`), as the key turns to D major and a third, faster heart joins on the glass F sharp that ends the logo sound
+SPECS['firstbreath'] = dict(
+    dur=74.2, beat=0.6, bar=2.4, hit=67.2, bells=[], logo=62, logo_style='notify', riser=None,
+    chords=[_BM, _BM, _G, _BM, _G, _A, _BM, _G, _A, _BM, _G, _D, _A, _A, _BM, _G, _G, _A, _BM, _G, _A, _BM, _G, _G,
+            _D, _AC, _G, _A] + [_D] * 3,  # one a bar
+    hit_notes=SPECS['clock']['hit_notes'],
+    pad=[(0, 0.35), (7.2, 0.5), (14.4, 0.7), (21.6, 0.9), (36.0, 0.9), (37.2, 0.25), (40.7, 0.3), (40.8, 0.9), (43.2, 1.1),
+         (50.4, 1.25), (55.1, 1.3), (55.2, 0.0), (57.5, 0.0), (57.6, 1.4), (62.4, 1.0), (67.2, 1.0)],
+    arp=dict(start=14.4, sub=[(0, 2), (21.6, 4), (28.8, 2), (33.6, 4), (36.0, 1), (40.8, 2), (43.2, 4), (57.6, 2), (62.4, 1)],
+             vel=[(14.4, 0.5), (21.5, 0.7), (21.6, 0.9), (28.7, 1.0), (28.8, 0.6), (33.6, 0.8), (35.9, 0.8), (36.0, 0.0),
+                  (40.7, 0.0), (40.8, 0.6), (43.2, 1.0), (50.4, 1.1), (55.1, 1.15), (55.2, 0.0), (57.5, 0.0), (57.6, 0.8),
+                  (62.4, 0.6), (67.2, 0.7)], soft=True),
+    kick=(21.6, 0.85), hats=None, bass=(21.6, 0.9), mute=[(36.0, 40.8), (55.2, 67.2)],
+    ticktock=dict(
+        gain=[(21.5, 0), (21.6, 0.6), (35.9, 0.6), (36.0, 0), (37.1, 0), (37.2, 1.1), (40.7, 1.1), (40.8, 0.6), (43.1, 0.6),
+              (43.2, 1.0), (50.3, 1.1), (50.4, 0.7), (55.1, 0.7), (55.2, 0)],
+        sub=[(21.6, 2), (37.2, 1), (40.8, 2), (48.0, 4), (50.4, 2)]),
+    # the monitor: (from, to, every, note, gain at the start, gain at the end). Hers all the way; the last one is the third heart
+    beeps=[(0, 7.2, 0.6, 81, 1.0, 1.0), (7.2, 21.6, 0.6, 81, 0.5, 0.4), (21.6, 36.0, 0.6, 81, 0.2, 0.2),
+           (36.0, 40.8, 0.6, 81, 0.8, 0.9), (40.8, 50.4, 0.6, 81, 0.2, 0.2), (50.4, 55.2, 0.6, 81, 0.7, 1.8),
+           (55.2, 57.6, 0.6, 81, 1.1, 1.1), (57.6, 67.2, 0.6, 81, 0.5, 0.3), (57.6, 67.2, 0.3, 90, 0.5, 0.3)],
+    pulse=[(2.4, 14.4), (36.0, 40.8), (50.4, 57.6)], pulse_body=0.6,
+    blooms=[(2.4, 0.5), (3.0, 0.5), (7.2, 0.7), (14.4, 0.8), (21.6, 1.0), (28.8, 0.8), (33.6, 0.8), (40.8, 0.9), (43.2, 1.1),
+            (45.6, 0.7), (48.0, 0.7), (50.4, 1.0), (57.6, 1.3), (60.0, 0.6), (62.4, 0.7)],
+    swells=[(20.6, 21.6), (40.0, 40.8), (42.4, 43.2), (49.6, 50.4), (56.9, 57.6), (66.0, 67.2)],
+    bends=[(36.0, 37.2)], rides=[(28.8, 30.4, 32.0), (33.6, 36.0, 37.2), (40.8, 43.0, 43.2)],
+    doors=[32.4, 49.3], notify=[16.4, 38.4], pings=[(14.4, 21.6, 0.3, 1.2), (57.6, 62.4, 0.8, 0.3)],
+    gliss=[(57.6, 0.9, 1.0)], cries=[(57.6, 1.0)],
+)
 # and the score-born effects one at a time (sounds.html names them): python3 scores.py effects out.wav
 SPECS['effects'] = dict(
     dur=42, beat=0.625, bar=2.5, hit=42, chords=SPECS['clock']['chords'],
@@ -570,7 +605,8 @@ class Score:
         root, slowing between b0 and b1), `clock` (a, b, interval, gain: tick and tock on two chord notes), `pulse`
         (a, b: a heartbeat on the root), `pings` (a, b, d0, d1: a shower of glass notes, density per 16th), `reports`
         (t, interval, n: voices answering up the scale), `drops` (a, b, rate: rain as high plucks), `doors` (a
-        two-note chime), `gliss` (t, length, gain: a run up the scale) and `notify` (the app's notification: a quick rise and a glass note).
+        two-note chime), `gliss` (t, length, gain: a run up the scale), `beeps` (a heart monitor), `cries` (a first cry, sung) and `notify`
+        (the app's notification: a quick rise and a glass note).
         `ticktock` (gain and sub envelopes) is the same clock run through a whole film on the beat grid, tick on the
         even steps and tock on the odd ones, so it can be the hi-hat when the band plays."""
         out = np.zeros((self.n, 2))
@@ -641,7 +677,9 @@ class Score:
                 f = hz(self.chord(t0)[0])
                 for dt, g in ((0.0, 1.0), (beat / 2, 0.65)):
                     t = np.arange(int(0.45 * SR)) / SR
-                    thump = np.sin(2 * np.pi * np.cumsum(f * (1 + 0.8 * np.exp(-t * 30))) / SR) * np.exp(-t * 9)
+                    ph = 2 * np.pi * np.cumsum(f * (1 + 0.8 * np.exp(-t * 30))) / SR
+                    # `pulse_body` adds overtones, so a phone's speaker has something of the heartbeat to play
+                    thump = (np.sin(ph) + s.get('pulse_body', 0) * sum(np.sin(h * ph) / h for h in (2, 3, 4, 5))) * np.exp(-t * 9)
                     self.add(out, t0 + dt, thump * 0.17 * g * float(ramp(t0, [(a, 0.6), (b, 1.0)])))
                 t0 += beat * 2
         for a, b, d0, d1 in s.get('pings', []):
@@ -673,6 +711,18 @@ class Score:
             for i, m in enumerate(scale):
                 k = i / (len(scale) - 1)
                 self.add(out, at + length * k ** 0.8, self.pluck(hz(m), 1.6, True) * (0.035 + 0.035 * k) * g, (1.4 - 0.8 * k, 0.6 + 0.8 * k))
+        for a, b, iv, m, g0, g1 in s.get('beeps', []):  # a heart monitor: one short pure note a beat, in key
+            t0 = a
+            while t0 < b - 0.01:
+                t = np.arange(int(0.11 * SR)) / SR
+                e = np.minimum(1, t / 0.006) * np.clip((0.11 - t) / 0.03, 0, 1)
+                note = np.sin(2 * np.pi * hz(m) * t) + 0.12 * np.sin(4 * np.pi * hz(m) * t)
+                self.add(out, t0, note * e * 0.022 * float(np.interp(t0, [a, b], [g0, g1])))
+                t0 += iv
+        for at, g in s.get('cries', []):  # a first cry, as the notification would sing it: its rise, slow, twice, and a glass note
+            for dt, m0, m1, gg in ((0.0, 81, 86, 1.0), (1.2, 81, 90, 0.7)):
+                self.add(out, at + dt, self.glide(hz(m0), hz(m1), 1.8, 0.4, 1.6, 0.3) * 0.05 * g * gg, (0.9, 1.1))
+            self.add(out, at + 0.5, self.bell(hz(93), 2.0, 1.0) * 0.022 * g, (1.1, 0.9))
         for at in s.get('notify', []):
             self.add(out, at, self.glide(hz(74), hz(81), 0.7, 0.14, 4.5) * 0.045, (0.8, 1.2))
             self.add(out, at + 0.22, self.bell(hz(90), 1.3, 1.0) * 0.032, (0.9, 1.1))

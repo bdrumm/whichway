@@ -452,6 +452,27 @@ function stoopRow(t, { ground = 850, lit = 1, dx = 0, x0 = -50, x1 = W + 50 } = 
     for (let k = 0; k < 5; k++) { ctx.fillStyle = k % 2 ? '#1a1320' : '#231a2a'; ctx.fillRect(sx - 14 - k * 9, ground - 40 + k * 8, 76 + k * 18, 8); }
   });
 }
+/** The same row along a street of any length: world coordinates x0..x1, dragged `smear` px by the speed of the camera. */
+function stoopsAlong(t, x0, x1, { ground = 850, smear = 0, lit = 0.3 } = {}) {
+  const n0 = Math.floor((x0 - STOOPS[0].x) / STOOPS_W) - 1, n1 = Math.floor((x1 - STOOPS[0].x) / STOOPS_W);
+  const pass = sm => { for (let n = n0; n <= n1; n++) stoopRow(t, { ground, lit, dx: n * STOOPS_W + sm, x0: x0 - 60, x1: x1 + 60 }); };
+  if (smear < 3) return pass(0);
+  const a0 = ctx.globalAlpha;
+  for (let i = 0; i < 5; i++) { ctx.globalAlpha = a0 / (i + 1); pass(i * smear / 5); }
+  ctx.globalAlpha = a0;
+}
+/** Streaks of light pulled across the frame by speed, a new set every frame: warm for a sunrise, `cool` for a wet night. */
+function speedLines(t, a, { y0 = 140, y1 = 1000, n = 30, dir = -1, cool = false } = {}) {
+  if (a <= 0) return;
+  const r = rng(Math.floor(t * 30) * 7 + 1);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+  for (let i = 0; i < n; i++) {
+    const y = lerp(y0, y1, r()), x = r() * (W + 600) - 300, len = 160 + r() * 640, g = 205 + Math.floor(r() * 40), al = a * (0.05 + 0.2 * r());
+    ctx.strokeStyle = cool ? `rgba(170,${g},255,${al})` : `rgba(255,${g},170,${al})`; ctx.lineWidth = 1 + r() * 3;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dir * len, y); ctx.stroke();
+  }
+  ctx.restore();
+}
 function street(t, { ground = 850, lit = 1 } = {}) {
   nightSky('#050716', '#191c44', 0.35);
   drawBlock(BLOCKS.far, t, { base: 600, fill: '#141845', dx: -260, winA: 0.4, lit: 0.3, sx: 10, sy: 13, ww: 3.5, wh: 5 });

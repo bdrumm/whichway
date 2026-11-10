@@ -52,12 +52,8 @@ function dawnWash(a = 1) {
 }
 /** The row of houses in world coordinates between x0 and x1, dragged `smear` px by the speed of the camera. */
 function row(t, x0, x1, smear = 0, lit = 0.3) {
-  const n0 = Math.floor((x0 - STOOPS[0].x) / STOOPS_W) - 1, n1 = Math.floor((x1 - STOOPS[0].x) / STOOPS_W);
-  const pass = sm => { for (let n = n0; n <= n1; n++) stoopRow(t, { ground: GROUND, lit, dx: n * STOOPS_W + sm, x0: x0 - 60, x1: x1 + 60 }); };
-  if (smear < 3) return pass(0);
-  const a0 = ctx.globalAlpha;
-  for (let i = 0; i < 5; i++) { ctx.globalAlpha = a0 / (i + 1); pass(i * smear / 5); }
-  ctx.globalAlpha = a0;
+  stoopsAlong(t, x0, x1, { ground: GROUND, smear, lit });
+  if (smear < 3) return;
   for (let i = Math.floor(x0 / 700) - 1; i < x1 / 700 + 1; i++) for (let g = 0; g < 4; g++) glowAt(i * 700 + 300 + g * smear * 0.8, GROUND - 330, 190, '255,205,130', 0.14);   // street lamps, still lit
 }
 function pavement(t, x0, x1, smear = 0) {
@@ -88,13 +84,6 @@ function runner(x, y, h, t, { o = {}, ghosts = 3, air = 1 } = {}) {
   ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(x, y + h * 0.02, h * 0.2, h * 0.035, 0, 0, Math.PI * 2); ctx.fill();
   for (let g = ghosts; g > 0; g--) { ctx.save(); ctx.globalAlpha *= 0.15; figure(x - (pose.dir || 1) * g * h * 0.12, y - hop, h, { ...pose, walk: ph - g * 0.5 }); ctx.restore(); }
   figure(x, y - hop, h, pose);
-}
-function speedLines(t, a, { y0 = 140, y1 = 1000, n = 30, dir = -1 } = {}) {
-  if (a <= 0) return;
-  const r = rng(Math.floor(t * 30) * 7 + 1);
-  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
-  for (let i = 0; i < n; i++) { const y = lerp(y0, y1, r()), x = r() * (W + 600) - 300, len = 160 + r() * 640; ctx.strokeStyle = `rgba(255,${205 + Math.floor(r() * 40)},170,${a * (0.05 + 0.2 * r())})`; ctx.lineWidth = 1 + r() * 3; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dir * len, y); ctx.stroke(); }
-  ctx.restore();
 }
 /** The chase: the camera runs with him. `k` is how close, `lead` how much room he has in front, `behind`, `under`
  *  and `front` draw what he passes, in world coordinates. */
