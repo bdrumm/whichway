@@ -80,22 +80,30 @@ signals a day, so two people can find each other") and has no charts or percenta
 will be under the clock. `nyc.js` is the illustration kit (skyline, concourse, subway cars, street, platform in
 perspective, figures, crowds), `cine.js` the shared titles, grain and letterbox (also used by `clock-live.html`).
 The score is the `clock-nyc` spec: every effect is made of notes from the chord under it (`Score.fx2`), no noise.
+The station clock is the beat (`ticktock`): it starts ticking in key when the clock first appears, stays on the
+96 bpm grid through the stopped trains and the waiting, and is the hi-hat whenever the band plays; the film ends on
+the clock striking as the logo lands (`logo_style='clock'`).
 
 ```bash
 python3 scores.py clock-nyc clock-nyc.wav
 ./render_parts.sh clock-nyc.html clock-nyc_silent.mp4 4
 ffmpeg -i clock-nyc_silent.mp4 -i clock-nyc.wav -c:v libx264 -preset slow -crf 23 -maxrate 5M -bufsize 10M \
   -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 256k -shortest whichway-under-the-clock-nyc.mp4
+# a 720p copy of about 15 MB for watching on a phone
+ffmpeg -i clock-nyc_silent.mp4 -i clock-nyc.wav -vf scale=1280:720:flags=lanczos -c:v libx264 -profile:v main -crf 25 \
+  -maxrate 1800k -bufsize 3600k -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 160k -shortest \
+  whichway-under-the-clock-nyc-phone.mp4
 ```
 
 ## Sound samples
 
-The logo sound has five candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,
-`swell`, `heart`), each timed to the icon drawing its stem, fork, dot and name. `sounds.html` plays them one after
+The logo sound has six candidates (`Score.logo`, chosen per spec with `logo_style`: `fork`, `rails`, `chime`,
+`swell`, `heart`, `clock`), each timed to the icon drawing its stem, fork, dot and name. `clock` is the one in use:
+the film's own tick and tock on the beat, then the hour striking where the dot lands. `sounds.html` plays them one after
 another over the end card with a letter on screen, and with `?effects` names each score-born effect as it plays.
 
 ```bash
-for s in fork rails chime swell heart; do python3 scores.py logo-$s logo-$s.wav; done   # then join in A to E order
+for s in fork rails chime swell heart clock; do python3 scores.py logo-$s logo-$s.wav; done   # then join in A to F order
 FILM=sounds.html node render.mjs logo-sounds_silent.mp4 30
 python3 scores.py effects effects.wav
 FILM='sounds.html?effects' node render.mjs sound-effects_silent.mp4 30
