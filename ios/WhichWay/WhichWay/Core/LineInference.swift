@@ -279,6 +279,18 @@ struct DepartureLog: Equatable {
             .sorted { $0.from < $1.from }
     }
 
+    /// The moments each such train could have pulled away from the platform, wide enough for the feed's error: from a
+    /// short dwell after its moment there (the feed's time less its usual lag, which can be off by tens of seconds) to the
+    /// first poll that had it gone, or a long dwell when no poll has. A push inside one may be that train leaving.
+    func departureWindows(onLegOnly: Bool = true, minDwellSec: Double = 15, lagErrorSec: Double = 20, longDwellSec: Double = 100) -> [PollSpan] {
+        entries.values.filter { (!onLegOnly || ($0.onLeg && $0.samePlatform)) && ($0.progressIdx ?? $0.boardIdx) > $0.boardIdx }
+            .map { e in
+                let at = PlatformTiming.atPlatform(e.boardTs, route: e.route)
+                return PollSpan(from: at + minDwellSec - lagErrorSec, to: max(at + longDwellSec, (e.passedTs ?? -.infinity) + 15))
+            }
+            .sorted { $0.from < $1.from }
+    }
+
     /// When train `trainId` left the boarding platform, by the feed: seen gone past it (after the last poll that still
     /// listed the stop, by the first that did not, and not before its time there), or gone from the feed altogether once
     /// its time at the platform is `goneAfterSec` past (the feed drops a train as it leaves). Nil while the feed still

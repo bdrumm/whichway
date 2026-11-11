@@ -56,6 +56,12 @@ struct TripObservation: Codable, Identifiable {
     var changedEarlyTaps: [Double]? = nil
     /// Each faster route offered on the way, as the banner put it.
     var rerouteNotes: [RerouteNote]? = nil
+    /// The route the trip started on, kept once the route first changes (`routeLabel` and `legs` follow the route ridden),
+    /// and each change after it: so a replay starts where the rider did.
+    var startRouteLabel: String? = nil
+    var startLegs: [Leg]? = nil
+    struct RouteChange: Codable { var ts: Double; var label: String; var legs: [Leg] }
+    var routeChanges: [RouteChange]? = nil
     /// The rider's notes on how the app behaved, each at its moment, with what the phone had in hand then.
     var devNotes: [DevNote]? = nil
     var uploaded: Bool?
@@ -178,6 +184,10 @@ final class Telemetry {
     /// are actually riding, so its legs and change are the ones the trip measured.
     func updateRoute(label: String, legs: [TripObservation.Leg], transferStation: String?, transferWalkSec: Int?) {
         guard var o = current else { return }
+        if o.startLegs == nil { o.startRouteLabel = o.routeLabel; o.startLegs = o.legs }
+        if o.routeLabel != label || o.legs.map(\.from) + o.legs.map(\.to) != legs.map(\.from) + legs.map(\.to) {
+            o.routeChanges = Array(((o.routeChanges ?? []) + [TripObservation.RouteChange(ts: Date().timeIntervalSince1970, label: label, legs: legs)]).suffix(20))
+        }
         o.routeLabel = label; o.legs = legs; o.transferStation = transferStation; o.transferWalkSec = transferWalkSec
         current = o
     }

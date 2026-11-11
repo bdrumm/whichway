@@ -323,7 +323,9 @@ struct RideSession {
         let left = hasNext ? transferLog.pullAwaySpans() : []
         // when it left the stop, by the feed: after the last poll that had it standing there, else its moment there and a dwell
         let leaves = c.stoodAt[past].map { $0.to + pollGapSec } ?? atStop + PlatformTiming.dwellSec
-        switch continuity.pastStop(atStopTs: atStop, laterStopTs: later, pushTimes: t.pushRuns, connectionPullAways: connections, connectionLeft: left,
+        // the rider's own moving about on the platform pushes the phone too: only pushes clear of steps are a train's
+        switch continuity.pastStop(atStopTs: atStop, laterStopTs: later, pushTimes: t.pushRunsClear, connectionPullAways: connections, connectionLeft: left,
+                                   connectionWindows: hasNext ? transferLog.departureWindows() : [], trainWindow: leaveWindow(c, past: past, atStop: atStop),
                                    trainLeavesTs: leaves, now: now) {
         case .waiting:
             return
@@ -341,6 +343,13 @@ struct RideSession {
             tracker?.beginRiding(now: now, departedTs: pullAwayTs)
             handleEvents()
         }
+    }
+
+    /// When the train in hand could have pulled away from the stop the route leaves it at: not before a short stand there,
+    /// and by a poll after the last that had it standing there (else a long dwell past its moment there).
+    private func leaveWindow(_ c: BoardingCandidate, past: Int, atStop: Double) -> PollSpan {
+        let last = c.stoodAt[past].map { $0.to + pollGapSec } ?? -.infinity
+        return PollSpan(from: atStop + continuity.afterArrivalSec, to: max(last + 15, atStop + PlatformTiming.dwellSec + 60))
     }
 
     /// The train in hand stands at the stop the route leaves it at, by the feed (held there: Nov 2 and Nov 10 at Jay St),
@@ -389,7 +398,7 @@ struct RideSession {
         // since could be either train's (the F running on to York St, the A to High St, side by side). The ride's own pushes
         // back nothing here, and a ride claimed only after pushes no connection explains came from the train in hand
         // running on (the detector, stood down, takes its shaking for a pull-away, and an A may be at Jay St just then).
-        let firstPush = t.pushRuns.first { $0 >= u.atStopTs + continuity.afterArrivalSec }
+        let firstPush = t.pushRunsClear.first { $0 >= u.atStopTs + continuity.afterArrivalSec }
         if t.onTrain, let dep = t.ride(next)?.departedTs, firstPush.map({ dep <= $0 + continuity.connectionWindowSec }) ?? true,
            movedBack[next] != nil || platformLog(next)?.judgePullAway(at: dep, now: now) == .backed {
             offByTiming = nil; return
@@ -398,8 +407,9 @@ struct RideSession {
         let lag = PlatformTiming.recordedLag(route: c.route)
         let later = c.stopTs.filter { $0.key > u.pastIdx }.sorted { $0.key < $1.key }.map { $0.value - lag }
         let conn = platformLog(next)
-        let vv = continuity.pastStop(atStopTs: u.atStopTs, laterStopTs: later, pushTimes: t.pushRuns, connectionPullAways: conn?.pullAways() ?? [],
-                                   connectionLeft: conn?.pullAwaySpans() ?? [], now: now)
+        let vv = continuity.pastStop(atStopTs: u.atStopTs, laterStopTs: later, pushTimes: t.pushRunsClear, connectionPullAways: conn?.pullAways() ?? [],
+                                   connectionLeft: conn?.pullAwaySpans() ?? [], connectionWindows: conn?.departureWindows() ?? [],
+                                   trainWindow: leaveWindow(c, past: u.pastIdx, atStop: u.atStopTs), now: now)
         switch vv {
         case .waiting:
             return

@@ -25,6 +25,8 @@ struct ReplayFixture: Decodable {
         var routeLabel: String?
         var transferStation: String?
         var legs: [Leg]
+        var startRouteLabel: String?
+        var startLegs: [Leg]?           // the route the trip started on, when it changed on the way (`legs` is the last)
         var events: [Event]?
         var notOnTrainTaps: [Double]?
         var changedEarlyTaps: [Double]?
@@ -167,13 +169,18 @@ final class TripReplayTests: XCTestCase {
     // MARK: - one trip
 
     private func replay(_ fx: ReplayFixture, feed: ReplayFeed, sched: ClientSchedule, index: StationIndex, taps: Bool) -> ReplayOutcome? {
-        let trip = fx.trip
+        var trip = fx.trip
+        // start where the rider did: the record's own start route, when the route changed on the way
+        if let st = trip.startLegs, !st.isEmpty { trip.legs = st; trip.routeLabel = trip.startRouteLabel ?? trip.routeLabel }
         guard let first = trip.legs.first, let last = trip.legs.last, let from = first.from, let to = last.to else { return nil }
         let originId = index.stationOf(from), destId = index.stationOf(to)
         var options = enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 400)
         // the route the trip started on: the option over the same stops
         let sig = trip.legs.map { "\($0.from ?? "")>\($0.to ?? "")" }.joined(separator: "|")
-        guard var sel = options.first(where: { $0.id == sig })
+        // WHICHWAY_REPLAY_START="F → A/C/E at Jay St": the route the trip started on, when the record kept only the last one
+        let startLabel = ProcessInfo.processInfo.environment["WHICHWAY_REPLAY_START"]
+        guard var sel = startLabel.flatMap({ l in options.filter { $0.label.hasPrefix(l) }.min { $0.schedSec < $1.schedSec } })
+                ?? options.first(where: { $0.id == sig })
                 ?? options.first(where: { $0.legs.count == trip.legs.count && zip($0.legs, trip.legs).allSatisfy { index.stationOf($0.from) == index.stationOf($1.from ?? "") && index.stationOf($0.to) == index.stationOf($1.to ?? "") } })
         else { return nil }
         options = options.filter { $0.id != sel.id }
@@ -187,7 +194,7 @@ final class TripReplayTests: XCTestCase {
         }
         // the line the trip's record has for each leg: the plan's own pick (the planner's live itinerary named it)
         var preferred: [Int: String] = [:]
-        for (i, l) in trip.legs.enumerated() { if let k = l.line { preferred[i] = k } }
+        for (i, l) in trip.legs.enumerated() where startLabel == nil || i == 0 { if let k = l.line { preferred[i] = k } }
         func plans(_ p: PathOption, chosen: [Int: (key: String, trainId: String)] = [:]) -> [LegPlan] {
             makeLegPlans(p, schedule: sched, index: index, originId: originId, destId: destId, chosen: chosen, preferred: p.id == firstId ? preferred : [:])
         }
@@ -215,7 +222,10 @@ final class TripReplayTests: XCTestCase {
         var lastSwitch = -Double.infinity
         let cols = fx.trace.columns ?? ["ts", "stepEnergy", "pushG", "shakeG"]
         let ix = Dictionary(uniqueKeysWithValues: cols.enumerated().map { ($1, $0) })
-        var nextPoll = trip.createdTs, nextTick = trip.createdTs
+        // WHICHWAY_REPLAY_POLL="interval,offset": the phone's poll cadence (30 s on the minute grid by default)
+        let pollCfg = (ProcessInfo.processInfo.environment["WHICHWAY_REPLAY_POLL"] ?? "30,0").split(separator: ",").compactMap { Double($0) }
+        let pollEvery = pollCfg.first ?? 30
+        var nextPoll = trip.createdTs + (pollCfg.count > 1 ? pollCfg[1] : 0), nextTick = trip.createdTs
         let verbose = ProcessInfo.processInfo.environment["WHICHWAY_REPLAY_VERBOSE"] != nil
         func note(_ ts: Double) {
             guard let t = session.tracker else { return }
@@ -283,7 +293,7 @@ final class TripReplayTests: XCTestCase {
                 session.observeBoards(boards, now: nextPoll)
                 note(nextPoll)
                 follow(nextPoll)
-                nextPoll += 30
+                nextPoll += pollEvery
             }
             while nextTick <= ts { session.tick(now: nextTick); nextTick += 5 }
             while let tap = tapsLeft.first, tap.0 <= ts {

@@ -33,7 +33,8 @@ log = logging.getLogger("trip_replay")
 MARGIN_SEC = 1800.0
 TRIP_FIELDS = ["id", "createdTs", "startTs", "endedTs", "endedBy", "startedBy", "startDistanceM", "routeLabel", "transferStation",
                "transferWalkSec", "legs", "events", "withdrawnDepartures", "notOnTrainTaps", "changedEarlyTaps", "boarded",
-               "beliefLog", "rideStops", "stopSpans", "appBuild", "predictedBoardTs", "predictedArriveTs", "rideAssumed", "devNotes"]
+               "beliefLog", "rideStops", "stopSpans", "appBuild", "predictedBoardTs", "predictedArriveTs", "rideAssumed", "devNotes",
+               "startRouteLabel", "startLegs", "routeChanges"]
 
 
 def route_stations(schedule: dict, legs: list[dict]) -> set[str]:
@@ -104,7 +105,7 @@ def export(store: Store | None, trips_dir: Path, schedule: dict, out_dir: Path) 
         if trace is None or not o.get("legs"):
             continue
         t0, t1 = start - MARGIN_SEC, float(o.get("endedTs") or start + 7200) + MARGIN_SEC
-        routes = routes_at(schedule, route_stations(schedule, o["legs"]))
+        routes = routes_at(schedule, route_stations(schedule, o["legs"] + (o.get("startLegs") or [])))
         arr, dw = trains_around(store, routes, t0, t1) if store is not None else ([], [])
         fx = {"trip": {k: o.get(k) for k in TRIP_FIELDS if k in o},
               "trace": {"columns": trace.get("columns"), "seconds": trace.get("seconds"), "startTs": trace.get("startTs")},
