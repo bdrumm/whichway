@@ -83,6 +83,24 @@ struct RideContinuity {
             || left.contains { $0.to - $0.from <= maxLeftSpanSec && p >= $0.from - connectionWindowSec / 2 && p <= $0.to + connectionWindowSec / 2 }
     }
 
+    /// A connection's pull-away explains a push even when the train in hand might have pulled away then too, unless the
+    /// train in hand fits the push this much better: the route is the prior at its change (Nov 11 at Jay St: the C left
+    /// a minute after the F, both inside the feed's error, and the phone kept the rider on the F).
+    var planBiasSec = 30.0
+    /// And no connection explains a push this far outside every window it could have left in.
+    var maxConnectionMissSec = 45.0
+
+    /// The first push after the stop is better put to a connection leaving the change platform (`connectionWindows`, from
+    /// `DepartureLog.departureWindows`) than to the train in hand pulling away (`trainWindow`: from when it could first
+    /// leave to when the feed last could have had it there), the plan winning a tie. Lag-tolerant both ways, so it does
+    /// not hang on which poll happened to catch which train (Nov 11: the same trip read as the C or as the F by a poll
+    /// 15 s later or sooner).
+    func connectionExplains(_ p: Double, connectionWindows: [PollSpan], trainWindow: PollSpan?) -> Bool {
+        func miss(_ w: PollSpan) -> Double { p < w.from ? w.from - p : p > w.to ? p - w.to : 0 }
+        guard let dC = connectionWindows.map(miss).min(), dC <= maxConnectionMissSec else { return false }
+        return dC <= trainWindow.map(miss).map { $0 + planBiasSec } ?? .infinity
+    }
+
     /// `atStopTs`: the moment the train in hand reached the stop the route leaves it at (at the platform, not the
     /// feed's time). `laterStopTs`: its moments at the stops beyond, in order, as far as the feed has told.
     /// `pushTimes`: when each sustained push the phone felt began (`TripTracker.pushRuns`). `connectionPullAways`:
@@ -90,11 +108,14 @@ struct RideContinuity {
     /// poll spans in which each left. `trainLeavesTs`: when the train in hand left the stop, by the feed (nil: wait for
     /// the stop beyond, as before the timing rule).
     func pastStop(atStopTs: Double, laterStopTs: [Double], pushTimes: [Double], connectionPullAways: [Double] = [], connectionLeft: [PollSpan] = [],
-                  trainLeavesTs: Double? = nil, now: Double) -> PastStopVerdict {
+                  connectionWindows: [PollSpan] = [], trainWindow: PollSpan? = nil, trainLeavesTs: Double? = nil, now: Double) -> PastStopVerdict {
         let from = atStopTs + afterArrivalSec
         let since = pushTimes.filter { $0 >= from && $0 <= now }
-        // the route's own connection leaving as the pushes begin: the plan explains them, so the plan stands
-        if let p = since.first, isConnection(p, pullAways: connectionPullAways, left: connectionLeft) {
+        // the route's own connection leaving as the pushes begin: the plan explains them, so the plan stands. Staying on
+        // needs the first push to be the train in hand's, not merely a push: a rider on the connection feels the same
+        // runs between stations as one on the train in hand.
+        if let p = since.first, isConnection(p, pullAways: connectionPullAways, left: connectionLeft)
+            || connectionExplains(p, connectionWindows: connectionWindows, trainWindow: trainWindow) {
             return .tookConnection(offAt: atStopTs, pullAwayTs: p)
         }
         let reached = laterStopTs.sorted().filter { $0 > atStopTs && $0 + settleSec <= now }

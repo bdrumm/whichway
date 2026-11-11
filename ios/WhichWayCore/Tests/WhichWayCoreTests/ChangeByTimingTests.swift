@@ -75,12 +75,13 @@ final class ChangeByTimingTests: XCTestCase {
     private struct Second { var push = false; var steps = false; var shake = 0.005 }
 
     /// Drives the session second by second to `until`, the feed polled every 30 s and the clock ticked every 5.
-    private func drive(_ s: inout RideSession, from: Double, until: Double, feed: (Double) -> [String: LineBoard], motion: (Double) -> Second) {
+    /// `pollOffset`: seconds past the 30 s grid the polls land on (the phone polls when it can, not on the minute).
+    private func drive(_ s: inout RideSession, from: Double, until: Double, pollOffset: Int = 0, feed: (Double) -> [String: LineBoard], motion: (Double) -> Second) {
         var ts = from
         while ts < until {
             let m = motion(ts)
             s.motion(MotionSecond(ts: ts, stepEnergy: m.steps ? 0.05 : 0.002, pushG: m.push ? 0.08 : 0.005, shakeG: m.push ? max(m.shake, 0.03) : m.shake))
-            if Int(ts) % 30 == 0 { s.observeBoards(feed(ts), now: ts) }
+            if (Int(ts) - pollOffset) % 30 == 0 { s.observeBoards(feed(ts), now: ts) }
             if Int(ts) % 5 == 0 { s.tick(now: ts) }
             ts += 1
         }
@@ -291,5 +292,85 @@ final class ChangeByTimingTests: XCTestCase {
         drive(&s, from: t0, until: jay + 300, feed: fd) { ts in self.onTheF(ts) ?? Second(shake: 0.01) }
         XCTAssertEqual(s.currentLeg, 0)
         XCTAssertTrue(s.onTrain)
+    }
+
+    // MARK: - the connection right behind the F (Nov 11: the C left Jay St a minute after the F, and the phone kept the rider on the F)
+
+    /// The F stands at Jay St a minute and a half; the A pulls in across 50 s behind it, the rider steps on, and it leaves
+    /// later than the feed shows (gone by the feed half a minute or more before it pulls away, as the C was on Nov 11): the
+    /// A's pull-away felt, then its runs to High St and on. The F leaves just before the A and reaches York St in that time
+    /// with the rider's pushes felt, so pushes alone cannot tell the two apart, and no poll catches the F standing after
+    /// the push. Whenever the phone happens to poll, the plan stands: the rider is on the A.
+    func testTheConnectionRightBehindTheFIsTheRideWhateverThePollTiming() {
+        for offset in stride(from: 0, to: 30, by: 3) {
+            var s = session()
+            let fd = feed(aArrivals: [jay + 50, jay + 400], fHeldTo: jay + 100)
+            drive(&s, from: t0, until: jay + 380, pollOffset: offset, feed: fd) { ts in
+                if let f = self.onTheF(ts) { return f }
+                return Second(push: self.inRun(ts, [self.jay + 125, self.jay + 219, self.jay + 265, self.jay + 339]), steps: ts >= self.jay + 60 && ts < self.jay + 62,
+                              shake: ts >= self.jay + 125 ? 0.04 : 0.01)
+            }
+            XCTAssertNil(s.stayedOn, "poll offset \(offset): the pushes fit the A leaving as well as the F, so the plan's change stands")
+            XCTAssertEqual(s.currentLeg, 1, "poll offset \(offset)")
+            XCTAssertTrue(s.onTrain, "poll offset \(offset)")
+            XCTAssertEqual(s.belief(leg: 1)?.bestTrain, "A_N|a1", "poll offset \(offset)")
+        }
+    }
+
+    /// The same A behind the F, the walk across the platform stopping and starting and pushing the phone as it goes (the
+    /// rider's own moving about reads as pushes): those are not the F running on.
+    func testWalkingAboutOnThePlatformIsNotTheFRunningOn() {
+        for offset in stride(from: 0, to: 30, by: 5) {
+            var s = session()
+            let fd = feed(aArrivals: [jay + 70, jay + 400])
+            let bursts: [(Double, Double)] = [(10, 12), (16, 17), (24, 26), (40, 41), (52, 54)]
+            drive(&s, from: t0, until: jay + 330, pollOffset: offset, feed: fd) { ts in
+                if let f = self.onTheF(ts) { return f }
+                let r = ts - self.jay
+                let walking = bursts.contains { r >= $0.0 && r < $0.1 }
+                let jostled = bursts.contains { r >= $0.1 && r < $0.1 + 3 }
+                return Second(push: jostled || self.inRun(ts, [self.jay + 100, self.jay + 194, self.jay + 240, self.jay + 314]), steps: walking,
+                              shake: ts >= self.jay + 100 ? 0.04 : 0.02)
+            }
+            XCTAssertNil(s.stayedOn, "poll offset \(offset)")
+            XCTAssertEqual(s.currentLeg, 1, "poll offset \(offset)")
+            XCTAssertTrue(s.onTrain, "poll offset \(offset)")
+            XCTAssertEqual(s.belief(leg: 1)?.bestTrain, "A_N|a1", "poll offset \(offset)")
+        }
+    }
+
+    /// Staying on the F, its pull-away felt, with an A pulling in 100 s behind it: the push came before that A could have
+    /// left, so it is the F's, and the stay-on is told by York St whenever the phone polls.
+    func testStayingOnIsStillAStayOnWhateverThePollTiming() {
+        for offset in stride(from: 0, to: 30, by: 3) {
+            var s = session()
+            let fd = feed(aArrivals: [jay + 100, jay + 400])
+            drive(&s, from: t0, until: jay + 260, pollOffset: offset, feed: fd) { ts in
+                self.onTheF(ts) ?? Second(push: self.inRun(ts, [self.jay + 40, self.jay + 144, self.jay + 190]), shake: ts >= self.jay + 40 ? 0.04 : 0.005)
+            }
+            XCTAssertEqual(s.stayedOn?.key, "F_N", "poll offset \(offset)")
+            XCTAssertEqual(s.currentLeg, 0, "poll offset \(offset)")
+            XCTAssertTrue(s.onTrain, "poll offset \(offset)")
+        }
+    }
+
+    /// Whatever the phone decided at the change, "Not on the train" and naming a train from "On a train?" still put the
+    /// rider where they say (the A named after a stay-on was called, and the F named after the A was).
+    func testTheRiderCanOverrideEitherWayAfterTheConnectionRightBehind() {
+        var s = session()
+        let fd = feed(aArrivals: [jay + 50, jay + 400])
+        drive(&s, from: t0, until: jay + 330, feed: fd) { ts in
+            if let f = self.onTheF(ts) { return f }
+            return Second(push: self.inRun(ts, [self.jay + 80, self.jay + 174, self.jay + 220, self.jay + 294]), shake: ts >= self.jay + 80 ? 0.04 : 0.01)
+        }
+        XCTAssertEqual(s.belief(leg: 1)?.bestTrain, "A_N|a1")
+        let lag = PlatformTiming.recordedLag(route: "F")
+        let f = BoardingCandidate(trainId: "F_N|f1", key: "F_N", route: "F", boardTs: jay + lag, alightTs: nil, stopsToAlight: nil, chosen: false, onLeg: false,
+                                  boardIdx: 6, alightIdx: nil)
+        s.setOnTrain(f, now: jay + 330)
+        XCTAssertTrue(s.onTrain)
+        XCTAssertEqual(s.belief(leg: 1)?.bestKey, "F_N")
+        XCTAssertTrue(s.belief(leg: 1)?.byHand ?? false)
+        XCTAssertEqual(s.lineToFollow(routeKeys: ["A_N"], now: jay + 330, lastSwitchTs: 0), "F_N", "the route follows the F on the rider's word")
     }
 }

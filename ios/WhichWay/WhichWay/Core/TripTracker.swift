@@ -239,18 +239,17 @@ struct TripTracker {
     private var looseWalkSecs = 0
     private var looseWalkGap = 0
 
-    /// Riding and stepping in bursts: when the bursts began and how many seconds of steps they hold, pauses of up to
-    /// `brokenWalkGapSec` between them allowed. Off a crowded train the walk is stop-and-go (Nov 10 at Jay St: short bursts
-    /// of steps with pauses between, off the F held there and onto the A; never eight in a row).
-    /// Read only against the stop the route leaves the train at (`RideSession.checkQuickChange`).
+    /// Riding and stepping in bursts: the seconds with steps in the last `brokenWalkWindowSec`, and when the first of them
+    /// was. Off a crowded train the walk stops and starts: Nov 10 and 11 at Jay St, short bursts of steps off the F, with
+    /// pauses, and seconds between where the phone was jostled hard enough to read as a push and not a step. Never eight
+    /// in a row, but more than eight in twenty seconds. Read only against the stop the route leaves the train at
+    /// (`RideSession.checkQuickChange`).
     var brokenWalk: (startTs: Double, seconds: Int)? {
-        guard phase == .riding, let s = brokenWalkStart, brokenWalkSecs > 0 else { return nil }
-        return (s, brokenWalkSecs)
+        guard phase == .riding, let last = recentSteps.last, let first = recentSteps.first(where: { $0 > last - brokenWalkWindowSec }) else { return nil }
+        return (first, recentSteps.filter { $0 >= first }.count)
     }
-    var brokenWalkGapSec = 3
-    private var brokenWalkStart: Double?
-    private var brokenWalkSecs = 0
-    private var brokenWalkGap = 0
+    var brokenWalkWindowSec = 20.0
+    private var recentSteps: [Double] = []
     /// The last second with steps: a push that begins within `pushAfterStepsSec` of it is the rider moving (boarding,
     /// finding a seat), not a train (`pushRunsClear`).
     private var lastStepTs: Double?
@@ -360,14 +359,14 @@ struct TripTracker {
             walkRun += 1; stillRun = 0
             if looseWalkStart == nil { looseWalkStart = m.ts; looseWalkSecs = 0 }
             looseWalkSecs += 1; looseWalkGap = 0
-            if brokenWalkStart == nil { brokenWalkStart = m.ts; brokenWalkSecs = 0 }
-            brokenWalkSecs += 1; brokenWalkGap = 0
+            recentSteps.append(m.ts)
+            recentSteps.removeAll { $0 <= m.ts - brokenWalkWindowSec }
             lastStepTs = m.ts
         } else {
             stillRun += 1; walkRun = 0; walkStartTs = nil
             looseWalkGap += 1
             if looseWalkGap > 1 { looseWalkStart = nil; looseWalkSecs = 0 }
-            if brokenWalkStart != nil { brokenWalkGap += 1; if brokenWalkGap > brokenWalkGapSec { brokenWalkStart = nil; brokenWalkSecs = 0 } }
+            recentSteps.removeAll { $0 <= m.ts - brokenWalkWindowSec }
         }
         if afterAlight, walking { timeline.walkingSecondsBetweenTrains += 1 }
         if phase == .riding, !walking, m.pushG >= detector.pushThreshold || m.shakeG >= detector.shakeThreshold { lastMovingTs = m.ts }
