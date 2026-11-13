@@ -177,13 +177,15 @@ final class BoardingGateTests: XCTestCase {
         XCTAssertTrue(r.t.onTrainShown)
     }
 
-    /// No signal on the platform: nothing to check the pull-away against, so it stands as felt (the rider can still say
-    /// "Not on the train").
-    func testAPullAwayWithNoFeedAtThePlatformStandsAsFelt() {
+    /// No signal on the platform, or no poll yet: nothing to check the pull-away against, so it is still a claim and
+    /// waits as boarding (Nov 13 at 4 Av-9 St: taken as a ride before the first poll, the rider shown on the F three
+    /// minutes before it came). The ride's own motion or the rider's word backs it (`BoardingBeforeFeedTests`).
+    func testAPullAwayWithNoFeedAtThePlatformWaitsAsBoarding() {
         var r = Rider(t: TripTracker(start(), distanceToOriginM: 20), ts: 1000)
         r.stand(40); r.pullAway()
         XCTAssertFalse(r.t.applyPullAwayVerdict(DepartureLog().judgePullAway(at: r.feltTs, now: r.ts)))
-        XCTAssertTrue(r.t.onTrainShown)
+        XCTAssertTrue(r.t.onTrain, "the sensors keep watching the ride")
+        XCTAssertFalse(r.t.onTrainShown, "but the rider is shown boarding")
     }
 
     // MARK: - the rider's word settles it

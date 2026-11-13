@@ -14,8 +14,10 @@ enum PullAwayVerdict: Equatable {
     case noTrain
     /// Not yet known: a train was about due and has not been seen leave yet, or another line's train left.
     case pending
-    /// Nothing to check it against: no feed at the platform (no signal there, or none polled yet). The sensors stand
-    /// alone, as before the gate, and the rider's "Not on the train" is the override.
+    /// Nothing to check it against: no feed at the platform (no signal there, or none polled yet). Not a ride either: a
+    /// felt pull-away alone is a claim, so it waits as boarding until the feed is read or the ride's own motion backs it
+    /// (Nov 13 at 4 Av-9 St: the platform shaking 8 s after the route started, before the first poll, was taken as the
+    /// rider on the F three minutes before the F, then on a G the feed showed leaving).
     case unchecked
 }
 
