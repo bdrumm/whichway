@@ -119,10 +119,9 @@ struct RideSession {
     /// The latest moment the session has been told of (a tick, a poll): "now" for the rider's taps.
     private(set) var lastNow: Double?
 
-    init(stopCoordinate: ((String, Int) -> (lat: Double, lon: Double)?)? = nil, changesOnTheWay: (() -> [EarlyChange])? = nil,
+    init(stopCoordinate: ((String, Int) -> (lat: Double, lon: Double)?)? = nil,
          linePrior: ((_ plan: LegPlan, _ leg: Int, _ chosenKey: String, _ timeline: TripTimeline, _ ts: Double) -> Double?)? = nil) {
         self.stopCoordinate = stopCoordinate
-        self.changesOnTheWay = changesOnTheWay
         self.linePrior = linePrior
     }
     /// A felt pull-away is checked against the feed this long after: time for a train that left then to show as gone.
@@ -145,11 +144,15 @@ struct RideSession {
     var lateOffDepartureSec = 45.0
     /// The least time from stepping off to a connection pulling away with the rider on it (a step onto a train standing there).
     var stepOnSec = 5.0
+    // The closures below are the only ways the session reaches outside itself, and it calls them in the middle of its
+    // own updates, while the app holds the session for writing. So each is a lookup that gets everything it needs in
+    // its arguments and never reads the app's session (the TripRecorder, the planner's trip state) back: a closure
+    // that did crashed the app on every "Not on train" tap during a ride (Nov 12-13, builds 202611092323 on, the
+    // planner's `changesOnTheWay` read `trip.currentLeg` from inside `notOnTrain`; Swift traps on the overlapping
+    // access). What the session needs from the planner comes in as a value with the call (`notOnTrain(changes:)`).
+    // `SessionReentryTests` lists these closures and fails when a new one is added.
     /// Position of a stop on a line (line key, stop index), from the published geometry; set by the planner.
     var stopCoordinate: ((String, Int) -> (lat: Double, lon: Double)?)?
-    /// The changes the rider could have made off the train in hand toward the destination (the planner's
-    /// `changesOnTheWay`), for reading "not on the train" from the Live Activity as well as the app.
-    var changesOnTheWay: (() -> [EarlyChange])?
     /// The rider's own share for the plan's line on a leg (what they rode on this trip before, else the line they usually
     /// board at that platform at that hour): the phone's history, handed in by the caller. Nil: no history.
     var linePrior: ((_ plan: LegPlan, _ leg: Int, _ chosenKey: String, _ timeline: TripTimeline, _ ts: Double) -> Double?)?
@@ -960,7 +963,10 @@ struct RideSession {
     /// off there unfelt: the ride closes at that stop and the route goes on from the change, with its arrival from the
     /// connection, rather than starting over at the platform they boarded at. Said once it has reached a station where
     /// another route changes toward the destination, they changed there (`readNotOnTrain`).
-    mutating func notOnTrain(now: Double? = nil) {
+    ///
+    /// `changes`: every change the rider could have made off the train in hand toward the destination (the planner's
+    /// `changesOnTheWay`), worked out by the caller before the call.
+    mutating func notOnTrain(now: Double? = nil, changes: [EarlyChange] = []) {
         let now = now ?? lastNow ?? Date().timeIntervalSince1970
         tracker?.noteNotOnTrain(at: now)
         // a ride the session presumed from the plan's train leaving, with no train felt since: the rider let it go and is
@@ -979,7 +985,7 @@ struct RideSession {
         }
         if let t = tracker, t.phase == .riding, t.timeline.events.last?.kind == .departed {
             let dep = departedTs[currentLeg] ?? t.ride(currentLeg)?.departedTs
-            switch readNotOnTrain(train: trainInHand, departedTs: dep, changes: changesOnTheWay?() ?? [], now: now) {
+            switch readNotOnTrain(train: trainInHand, departedTs: dep, changes: changes, now: now) {
             case let .alighted(at):
                 tracker?.alightStanding(at: at)
                 handleEvents()
@@ -1147,7 +1153,7 @@ struct RideSession {
     mutating func end(by: String, now: Double) -> TripTimeline? {
         guard var t = tracker else { return nil }
         let tl = t.end(now: now, by: by)
-        self = RideSession(stopCoordinate: stopCoordinate, changesOnTheWay: changesOnTheWay, linePrior: linePrior)
+        self = RideSession(stopCoordinate: stopCoordinate, linePrior: linePrior)
         return tl
     }
 }
