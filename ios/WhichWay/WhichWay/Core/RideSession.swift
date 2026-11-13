@@ -234,6 +234,8 @@ struct RideSession {
         checkQuickChange()
         handleEvents()
         if let k = tracker?.takeAmendedRide() { departureMoved(ride: k) }
+        // a pull-away waiting on the feed is judged by the ride's own motion too, with no poll needed (no signal below)
+        judgePendingBoarding(now: m.ts)
     }
 
     /// The departure of ride `k` moved to the train's own pull-away: the trains are read again against it (the rider's
@@ -625,6 +627,18 @@ struct RideSession {
         if let b = LineBelief.fromPlan(leg: leg, chosenKey: legs[leg].chosenKey, chosenTrainId: id, evidence: "plan") { store(b) }
     }
 
+    /// The plan's train for leg `leg` could be the one pulling away at `ts`: not one the forecast the rider acted on still
+    /// had minutes from the platform (Nov 13 at 4 Av-9 St: a pull-away felt before any poll was put on the plan's F three
+    /// minutes before it came). Otherwise the plan's line is the guess, not its train (Oct 8 at W 4 St: an A earlier than
+    /// the plan's, boarded before any poll). Only the first leg has a forecast of its own; later legs keep the plan's train.
+    private func planTrainCouldLeave(leg: Int, at ts: Double) -> Bool {
+        guard leg == 0, let b = tracker?.timeline.forecastBoardTs else { return true }
+        return ts >= b - planArriveMarginSec
+    }
+    /// How early, before the forecast's boarding time, a pull-away may still be the plan's train (the feed's arrival times
+    /// run late as often as early, and the forecast is a little behind the feed).
+    var planArriveMarginSec = 120.0
+
     /// The rider says they are on the train while a felt pull-away waits on the feed ("On it" on the Live Activity or in
     /// the app): the ride is shown, and the feed's departure check no longer takes it back.
     mutating func confirmBoarding() {
@@ -713,7 +727,8 @@ struct RideSession {
         guard !b.byTrain.isEmpty else {
             departureBeliefs[l] = nil
             beliefs.removeAll { $0.leg == l }
-            if let f = LineBelief.fromPlan(leg: l, chosenKey: plan.chosenKey, chosenTrainId: plan.chosenTrainId, evidence: "plan") { store(f) }
+            let id = planTrainCouldLeave(leg: l, at: r.departedTs) ? plan.chosenTrainId : nil
+            if let f = LineBelief.fromPlan(leg: l, chosenKey: plan.chosenKey, chosenTrainId: id, evidence: "plan") { store(f) }
             return
         }
         departureBeliefs[l] = b
@@ -862,9 +877,11 @@ struct RideSession {
                 // (after the line just ridden, at a change) at about this hour
                 let share = plan.chosenKey.flatMap { k in linePrior?(plan, leg, k, t.timeline, depTs) }
                 let b = inference.fromDeparture(cands, departedTs: depTs, leg: leg, chosenKey: plan.chosenKey, learnedShare: share, lineFit: plan.lineFit)
-                // a departure felt with no train in the feed to match it: the plan stands, as a guess
-                if b.byTrain.isEmpty, let fallback = LineBelief.fromPlan(leg: leg, chosenKey: plan.chosenKey, chosenTrainId: plan.chosenTrainId, evidence: "plan") {
-                    store(fallback)
+                // a departure felt with no train in the feed to match it: the plan's line stands, as a guess, and its train
+                // only when that train could be the one leaving (one still minutes from the platform is not named)
+                if b.byTrain.isEmpty {
+                    let id = planTrainCouldLeave(leg: leg, at: depTs) ? plan.chosenTrainId : nil
+                    if let fallback = LineBelief.fromPlan(leg: leg, chosenKey: plan.chosenKey, chosenTrainId: id, evidence: "plan") { store(fallback) }
                 } else {
                     departureBeliefs[leg] = b
                     store(b)
@@ -919,7 +936,17 @@ struct RideSession {
         let leg = currentLeg
         guard leg < legs.count else { return }
         handSet.insert(leg)
+        riderBacksBoarding(leg)
         store(LineBelief.byHand(leg: leg, key: key, chosenKey: legs[leg].chosenKey, candidates: candidates[leg] ?? [], departedTs: departedTs[leg]))
+    }
+
+    /// The rider's word on the train in hand backs a pull-away still waiting as boarding: shown riding at once, and no
+    /// longer the feed's or the motion's to take back (the Live Activity's train picker while "Boarding?").
+    private mutating func riderBacksBoarding(_ leg: Int) {
+        guard let t = tracker, t.onTrain, t.timeline.legsRidden == leg else { return }
+        tracker?.backBoarding()
+        departureChecked.insert(leg)
+        motionUnconfirmed.remove(leg)
     }
 
     /// The rider confirms one particular train (from the prompt's candidates).
@@ -927,6 +954,7 @@ struct RideSession {
         let leg = currentLeg
         guard leg < legs.count, let c = (candidates[leg] ?? []).first(where: { $0.trainId == trainId }) else { return }
         handSet.insert(leg)
+        riderBacksBoarding(leg)
         store(LineBelief(leg: leg, byTrain: [c.trainId: 1.0], byLine: [c.key: 1.0], chosenKey: legs[leg].chosenKey, evidence: ["hand"]))
     }
 
@@ -954,6 +982,7 @@ struct RideSession {
         candidates[leg] = cands.sorted { $0.boardTs != $1.boardTs ? $0.boardTs < $1.boardTs : $0.trainId < $1.trainId }
         departedTs[leg] = PlatformTiming.pullsAway(c.boardTs, route: c.route)
         handSet.insert(leg); dismissed.remove(leg)
+        riderBacksBoarding(leg)
         store(LineBelief(leg: leg, byTrain: [c.trainId: 1.0], byLine: [c.key: 1.0], chosenKey: legs[leg].chosenKey, evidence: ["hand"]))
     }
 
@@ -1128,6 +1157,7 @@ struct RideSession {
     mutating func tick(now: Double) {
         lastNow = now
         tracker?.tick(now: now)
+        judgePendingBoarding(now: now)
         checkAssumed()
     }
 

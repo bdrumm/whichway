@@ -215,13 +215,14 @@ struct TripTracker {
 
     /// What the feed says of the pull-away in hand (`DepartureLog.judgePullAway`), at the moment it is felt and at every
     /// poll after: backed, it shows as a ride; no train's, it is withdrawn there and then (the rider is back on the
-    /// platform, or between trains at the change); not yet known, it waits as boarding. True when withdrawn.
+    /// platform, or between trains at the change); not yet known, or nothing to check it against yet, it waits as
+    /// boarding. True when withdrawn.
     @discardableResult
     mutating func applyPullAwayVerdict(_ v: PullAwayVerdict) -> Bool {
         guard phase == .riding, timeline.events.last?.kind == .departed else { return false }
         switch v {
-        case .backed, .unchecked: backBoarding(); return false
-        case .pending: holdBoarding(); return false
+        case .backed: backBoarding(); return false
+        case .pending, .unchecked: holdBoarding(); return false
         case .noTrain: withdrawDeparture(); return true
         }
     }
