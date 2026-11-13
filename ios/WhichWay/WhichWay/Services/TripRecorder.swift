@@ -40,11 +40,10 @@ final class TripRecorder {
         set { session.stopCoordinate = newValue }
     }
     /// The changes the rider could have made off the train in hand toward the destination (the planner's
-    /// `changesOnTheWay`), for reading "not on the train" from the Live Activity as well as the app.
-    var changesOnTheWay: (() -> [EarlyChange])? {
-        get { session.changesOnTheWay }
-        set { session.changesOnTheWay = newValue }
-    }
+    /// `changesOnTheWay`), for reading "not on the train" from the Live Activity as well as the app. It reads this
+    /// recorder back, so it is called before the session is touched and its answer handed in, never from inside the
+    /// session (Nov 12-13: called from inside `RideSession.notOnTrain`, it crashed the app on every tap during a ride).
+    @ObservationIgnored var changesOnTheWay: (() -> [EarlyChange])?
 
     init() {
         // what this rider has ridden on this very trip, else the line they usually board at this platform (after the
@@ -131,7 +130,11 @@ final class TripRecorder {
     func confirm(trainId: String) { session.confirm(trainId: trainId); publish() }
     func dismissPrompt() { session.dismissPrompt(); publish() }
     func setOnTrain(_ c: BoardingCandidate, now: Double) { session.setOnTrain(c, now: now); publish() }
-    func notOnTrain() { session.notOnTrain(now: Date().timeIntervalSince1970); publish() }
+    func notOnTrain() {
+        let changes = changesOnTheWay?() ?? []
+        session.notOnTrain(now: Date().timeIntervalSince1970, changes: changes)
+        publish()
+    }
     func replan(legs newLegs: [LegPlan], transferStation: String? = nil, transferStops: String? = nil) {
         session.replan(legs: newLegs, transferStation: transferStation, transferStops: transferStops)
         publish()

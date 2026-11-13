@@ -199,7 +199,7 @@ final class TripReplayTests: XCTestCase {
             makeLegPlans(p, schedule: sched, index: index, originId: originId, destId: destId, chosen: chosen, preferred: p.id == firstId ? preferred : [:])
         }
         var session = RideSession()
-        session.changesOnTheWay = { [sel] in
+        let plannerChanges = { [sel] () -> [EarlyChange] in
             // the planner's list for the first leg: every change off each of its lines toward the destination
             var outCh: [EarlyChange] = [], seen = Set<String>()
             for k in sel.legs[0].keys {
@@ -299,7 +299,7 @@ final class TripReplayTests: XCTestCase {
             while let tap = tapsLeft.first, tap.0 <= ts {
                 tapsLeft.removeFirst()
                 out.lines.append("\(hm(tap.0)) the rider taps \"\(tap.1)\"")
-                if tap.1 == "not on the train" { session.notOnTrain(now: tap.0) } else if let ec = session.earlyChange { session.takeChange(ec.change, alightTs: ec.alightTs, now: tap.0) }
+                if tap.1 == "not on the train" { let ch = plannerChanges(); session.notOnTrain(now: tap.0, changes: ch) } else if let ec = session.earlyChange { session.takeChange(ec.change, alightTs: ec.alightTs, now: tap.0) }
                 note(tap.0); follow(tap.0)
             }
             let m = MotionSecond(ts: ts, stepEnergy: row[safe: ix["stepEnergy"] ?? 1] ?? 0, pushG: row[safe: ix["pushG"] ?? 2] ?? 0, shakeG: row[safe: ix["shakeG"] ?? 3] ?? 0)
