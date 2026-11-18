@@ -1,136 +1,5 @@
 [
 {
-"ts": 1791956139.8227196,
-"iso": "2026-10-14T01:35:39.332158-04:00",
-"kind": "backfill",
-"fetched": [],
-"failed": {
-"2026-10-13": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-13_csv.tar.xz",
-"2026-10-12": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-12_csv.tar.xz"
-}
-},
-{
-"ts": 1791956160.1032157,
-"iso": "2026-10-14T01:36:00.103217-04:00",
-"kind": "context",
-"ok": [
-"trains_delayed:5950",
-"delay_incidents:7805",
-"major_incidents:1196",
-"customer_journey:1200",
-"stations:496",
-"ridership_hourly:5520",
-"weather_hourly:1614",
-"weather_daily",
-"alerts_archive:47307(+168)",
-"nws_alerts:55",
-"elevator_outages:139",
-"nyc_events:5000",
-"news:3",
-"events:8291"
-],
-"failed": {},
-"complex_ids": {
-"grand-central-n": "610",
-"times-sq-s": "611",
-"jay-st-n": "636",
-"4av-9st-fg-n": "608",
-"4av-9st-fg-s": "608",
-"4av-9st-r-n": "608",
-"4av-9st-r-s": "608",
-"14st-8av-ace-n": "618",
-"14st-8av-ace-s": "618",
-"8av-l-n": "618",
-"8av-l-s": "618"
-},
-"skipped": [
-"ticketmaster"
-]
-},
-{
-"ts": 1791975351.8062763,
-"iso": "2026-10-14T06:55:51.806279-04:00",
-"kind": "collect",
-"feeds": [
-"1234567S",
-"ace",
-"bdfm",
-"g",
-"jz",
-"l",
-"nqrw",
-"si"
-],
-"polls": 101,
-"errors": 0,
-"arrivals": 1455,
-"flushed": 463,
-"alerts": 978,
-"forecast_eval": 468,
-"duration_sec": 3003,
-"written": {
-"2026-10-14": 2019
-},
-"per_feed": [
-{
-"feed": "1234567S",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 2909
-},
-{
-"feed": "ace",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 1076
-},
-{
-"feed": "bdfm",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 1487
-},
-{
-"feed": "g",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 276
-},
-{
-"feed": "jz",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 243
-},
-{
-"feed": "l",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 376
-},
-{
-"feed": "nqrw",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 1067
-},
-{
-"feed": "si",
-"polls": 101,
-"first_ts": 1791972349.0325737,
-"last_ts": 1791975349.0635853,
-"arrivals": 123
-}
-]
-},
-{
 "ts": 1791975353.0907254,
 "iso": "2026-10-14T06:55:52.527161-04:00",
 "kind": "backfill",
@@ -21555,6 +21424,137 @@
 "nyc_events:5000",
 "news:5",
 "events:18919"
+],
+"failed": {},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636",
+"4av-9st-fg-n": "608",
+"4av-9st-fg-s": "608",
+"4av-9st-r-n": "608",
+"4av-9st-r-s": "608",
+"14st-8av-ace-n": "618",
+"14st-8av-ace-s": "618",
+"8av-l-n": "618",
+"8av-l-s": "618"
+},
+"skipped": [
+"ticketmaster"
+]
+},
+{
+"ts": 1794978139.207013,
+"iso": "2026-11-18T00:02:19.207017-05:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace",
+"bdfm",
+"g",
+"jz",
+"l",
+"nqrw",
+"si"
+],
+"polls": 101,
+"errors": 0,
+"arrivals": 876,
+"flushed": 181,
+"alerts": 848,
+"forecast_eval": 361,
+"duration_sec": 3002,
+"written": {
+"2026-11-17": 5404,
+"2026-11-18": 53
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 1960
+},
+{
+"feed": "ace",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 820
+},
+{
+"feed": "bdfm",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 913
+},
+{
+"feed": "g",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 143
+},
+{
+"feed": "jz",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 235
+},
+{
+"feed": "l",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 271
+},
+{
+"feed": "nqrw",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 818
+},
+{
+"feed": "si",
+"polls": 101,
+"first_ts": 1794975136.8023033,
+"last_ts": 1794978136.8153677,
+"arrivals": 67
+}
+]
+},
+{
+"ts": 1794978139.7341862,
+"iso": "2026-11-18T00:02:19.701795-05:00",
+"kind": "backfill",
+"fetched": [],
+"failed": {
+"2026-11-17": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-11-17_csv.tar.xz"
+}
+},
+{
+"ts": 1794978157.5797765,
+"iso": "2026-11-18T00:02:37.579780-05:00",
+"kind": "context",
+"ok": [
+"trains_delayed:6179",
+"delay_incidents:8113",
+"major_incidents:1254",
+"customer_journey:1248",
+"stations:496",
+"ridership_hourly:5640",
+"weather_hourly:2454",
+"weather_daily",
+"alerts_archive:43690(+168)",
+"nws_alerts:58",
+"elevator_outages:176",
+"nyc_events:5000",
+"news:6",
+"events:18920"
 ],
 "failed": {},
 "complex_ids": {
