@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Whichway Atlas</title>
+<meta name="description" content="Every NYC subway train live on a map, with line insights, a live insights feed, a trip planner and the reliability research behind Whichway.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="map.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%2315181c'/%3E%3Ctext x='16' y='22' font-size='17' font-family='system-ui' font-weight='700' fill='white' text-anchor='middle'%3EW%3C/text%3E%3C/svg%3E">
+<script>try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+</head>
+<body class="atlas">
+<header class="atlas-head">
+  <a class="atlas-brand" href="./">Whichway <span>Atlas</span></a>
+  <div id="mode" class="mode" role="status"><span class="dot"></span><span class="txt">Loading…</span></div>
+  <div id="kpis" class="kpis" aria-label="The network now"></div>
+  <div class="head-right">
+    <div class="combo search"><input id="search" class="combo-input" type="search" placeholder="Find a station or line" autocomplete="off" aria-label="Find a station or line"><ul id="search-list" class="combo-list" hidden></ul></div>
+    <span id="clock" class="clock mono"></span>
+    <a class="icon-btn hide-sm" href="../" title="The classic report pages">Reports</a>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+  </div>
+</header>
+
+<div class="atlas-body">
+  <aside id="left" class="dock left" aria-label="Line insights">
+    <div class="dock-head">
+      <button id="left-back" class="link-btn" type="button" hidden>‹ All lines</button>
+      <div id="left-title" class="dock-title">Lines</div>
+      <button class="icon-btn dock-close" data-dock="left" type="button" aria-label="Hide line panel" title="Hide panel">«</button>
+    </div>
+    <div id="left-body" class="dock-body" data-chart-width="364"></div>
+  </aside>
+
+  <main class="stage">
+    <div id="map" aria-label="Map of the subway with every live train"></div>
+    <button class="dock-open left" data-dock="left" type="button" title="Show line insights">Lines »</button>
+    <button class="dock-open right" data-dock="right" type="button" title="Show insights">« Insights</button>
+    <div id="layers" class="map-card layers-card">
+      <div class="kicker">Map</div>
+      <label><input type="checkbox" data-layer="trains" checked> Trains</label>
+      <label><input type="checkbox" data-layer="stations" checked> Stations</label>
+      <label><input type="checkbox" data-layer="labels" checked> Train labels</label>
+      <label><input type="checkbox" data-layer="hotspots"> Hold &amp; dwell hotspots</label>
+      <label><input type="checkbox" data-layer="incidents" checked> Live incidents</label>
+      <div class="kicker">Colour trains by</div>
+      <div class="seg" role="radiogroup" aria-label="Colour trains by">
+        <button data-color="route" class="on" type="button" role="radio" aria-checked="true">Line</button>
+        <button data-color="late" type="button" role="radio" aria-checked="false">Lateness</button>
+      </div>
+      <div id="legend" class="legend-late" hidden>
+        <span><i class="k-good"></i>&lt; 2 min</span><span><i class="k-warn"></i>2–5</span><span><i class="k-crit"></i>5+</span><span><i class="k-na"></i>no schedule</span>
+      </div>
+    </div>
+    <div id="inspector" class="map-card inspector" hidden></div>
+    <div id="timeline" class="timeline"></div>
+  </main>
+
+  <aside id="right" class="dock right" aria-label="Insights">
+    <div class="dock-head">
+      <nav class="tabs" role="tablist" aria-label="Insights">
+        <button role="tab" data-tab="feed" aria-selected="true">Feed</button>
+        <button role="tab" data-tab="route">Route</button>
+        <button role="tab" data-tab="stations">Stations</button>
+        <button role="tab" data-tab="system">System</button>
+      </nav>
+      <button class="icon-btn dock-close" data-dock="right" type="button" aria-label="Hide insights panel" title="Hide panel">»</button>
+    </div>
+    <div id="right-body" class="dock-body" data-chart-width="364"></div>
+  </aside>
+</div>
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
